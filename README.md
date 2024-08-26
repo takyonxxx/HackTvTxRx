@@ -1,4 +1,3 @@
-# HackTvWindows
 # HackTvWindows QT 6.6 Project
 
 This project is a clone of https://github.com/fsphil/hacktv with modifications for building on Windows.
@@ -10,6 +9,8 @@ This project is a clone of https://github.com/fsphil/hacktv with modifications f
  pacman -Syu
  
  pacman -S cmake
+ 
+ pacman -S mingw-w64-clang-x86_64-toolchain
  
  git clone https://github.com/mossmann/hackrf.git
  
@@ -25,7 +26,7 @@ This project is a clone of https://github.com/fsphil/hacktv with modifications f
  
  make install
  
- pacman -S mingw-w64-clang-x86_64-toolchain
+ pacman -S mingw-w64-x86_64-ffmpeg
  
  pacman -S mingw-w64-ucrt-x86_64-libusb
  

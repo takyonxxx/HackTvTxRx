@@ -15,7 +15,6 @@ PATH_LIB = $$system(echo %USERPROFILE%\\Desktop)
 
 INCLUDEPATH += $$MSYS2_PATH/include
 INCLUDEPATH += $$MSYS2_PATH_MINGW/include
-INCLUDEPATH += $$PATH_LIB\lib\ffmpeg\include
 
 LIBS += -L$$MSYS2_PATH/lib
 LIBS += -L$$MSYS2_PATH/bin
@@ -24,7 +23,7 @@ LIBS += -L$$MSYS2_PATH_MINGW/bin
 
 LIBS += -lusb-1.0 -lhackrf -lfftw3f -losmo-fl2k -lSoapySDR -lfdk-aac -lopus
 LIBS += -lfltk -lfltk_forms -lfltk_gl -lfltk_images
-LIBS += -L$$PATH_LIB\lib\ffmpeg\lib -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
+LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
 
 win32:LIBS += -lwinmm -lcomctl32 -lole32 -luuid -lws2_32 -lgdi32 -lshell32 -ladvapi32 -lcomdlg32
 
@@ -100,6 +99,7 @@ HEADERS += \
 
 # pacman -Syu
 # pacman -S cmake
+# pacman -S mingw-w64-clang-x86_64-toolchain
 
 # git clone https://github.com/mossmann/hackrf.git
 # git clone https://gitea.osmocom.org/sdr/osmo-fl2k.git
@@ -110,7 +110,7 @@ HEADERS += \
 # make
 # make install
 
-# pacman -S mingw-w64-clang-x86_64-toolchain
+# pacman -S mingw-w64-x86_64-ffmpeg
 # pacman -S mingw-w64-ucrt-x86_64-libusb
 # pacman -S mingw-w64-x86_64-libusb
 # pacman -S mingw-w64-x86_64-soapysdr
