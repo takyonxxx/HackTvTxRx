@@ -10,7 +10,7 @@ win32:DEFINES += _WIN32
 
 MSYS2_PATH = C:/msys64/ucrt64
 MSYS2_PATH_MINGW = C:/msys64/mingw64
-PATH_LIB = $$system(echo %USERPROFILE%\\Desktop)
+# PATH_LIB = $$system(echo %USERPROFILE%\\Desktop)
 
 
 INCLUDEPATH += $$MSYS2_PATH/include
