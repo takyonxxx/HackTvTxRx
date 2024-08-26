@@ -64,6 +64,7 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
 
 DISTFILES += \
+    README.md \
     demo.tti
 
 HEADERS += \
@@ -94,3 +95,27 @@ HEADERS += \
     vitc.h \
     vits.h \
     wss.h
+
+# INSTALL MSYS: https://www.msys2.org/
+
+# pacman -Syu
+# pacman -S cmake
+
+# git clone https://github.com/mossmann/hackrf.git
+# git clone https://gitea.osmocom.org/sdr/osmo-fl2k.git
+
+# mkdir build
+# cd build
+# cmake -G "MSYS Makefiles" -DCMAKE_INSTALL_PREFIX=/ucrt64 ..
+# make
+# make install
+
+# pacman -S mingw-w64-clang-x86_64-toolchain
+# pacman -S mingw-w64-ucrt-x86_64-libusb
+# pacman -S mingw-w64-x86_64-libusb
+# pacman -S mingw-w64-x86_64-soapysdr
+# pacman -S mingw-w64-x86_64-fltk
+# pacman -S mingw-w64-x86_64-opus
+# pacman -S mingw-w64-x86_64-fdk-aac
+
+
