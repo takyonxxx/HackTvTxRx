@@ -19,6 +19,7 @@
 #define _VIDEO_H
 
 #include <stdint.h>
+#include <stdlib.h>
 #include "av.h"
 #include "nicam728.h"
 #include "dance.h"
