@@ -8,18 +8,16 @@ DEFINES += HAVE_HACKRF
 
 win32:DEFINES += _WIN32
 
-MSYS2_PATH = C:/msys64/ucrt64
-MSYS2_PATH_MINGW = C:/msys64/mingw64
-# PATH_LIB = $$system(echo %USERPROFILE%\\Desktop)
+TOOLCHAIN_PATH = C:/msys64/ucrt64
+MINGW_PATH = C:/msys64/mingw64
 
+INCLUDEPATH += $$TOOLCHAIN_PATH/include
+INCLUDEPATH += $$MINGW_PATH/include
 
-INCLUDEPATH += $$MSYS2_PATH/include
-INCLUDEPATH += $$MSYS2_PATH_MINGW/include
-
-LIBS += -L$$MSYS2_PATH/lib
-LIBS += -L$$MSYS2_PATH/bin
-LIBS += -L$$MSYS2_PATH_MINGW/lib
-LIBS += -L$$MSYS2_PATH_MINGW/bin
+LIBS += -L$$TOOLCHAIN_PATH/lib
+LIBS += -L$$TOOLCHAIN_PATH/bin
+LIBS += -L$$MINGW_PATH/lib
+LIBS += -L$$MINGW_PATH/bin
 
 LIBS += -lusb-1.0 -lhackrf -lfftw3f -losmo-fl2k -lSoapySDR -lfdk-aac -lopus
 LIBS += -lfltk -lfltk_forms -lfltk_gl -lfltk_images
