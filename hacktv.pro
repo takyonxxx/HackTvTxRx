@@ -98,21 +98,39 @@ HEADERS += \
 # INSTALL MSYS: https://www.msys2.org/
 
 # pacman -Syu
-# pacman -S cmake
+# pacman -S git
+# pacman -S mingw-w64-ucrt-x86_64-gcc
+# pacman -S mingw-w64-ucrt-x86_64-cmake
+# pacman -S mingw-w64-ucrt-x86_64-make
+# pacman -S mingw-w64-ucrt-x86_64-libusb
+# pacman -S mingw-w64-ucrt-x86_64-fftw
 # pacman -S mingw-w64-clang-x86_64-toolchain
+# pacman -S mingw-w64-ucrt-x86_64-git
+# export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:$PKG_CONFIG_PATH
 
 # git clone https://github.com/mossmann/hackrf.git
-# git clone https://gitea.osmocom.org/sdr/osmo-fl2k.git
-
+# cd hackrf/host
 # mkdir build
 # cd build
-# cmake -G "MSYS Makefiles" -DCMAKE_INSTALL_PREFIX=/ucrt64 ..
-# make
-# make install
+# cmake -G "MinGW Makefiles" -DCMAKE_INSTALL_PREFIX=/mingw64 ..
+# if error do this
+# cmake -G "MinGW Makefiles" -DCMAKE_INSTALL_PREFIX=/mingw64 \
+# -DLIBUSB_INCLUDE_DIR=/ucrt64/include/libusb-1.0 \
+# -DLIBUSB_LIBRARIES=/ucrt64/lib/libusb-1.0.dll.a \
+# -DFFTW_INCLUDES=/ucrt64/include \
+# -DFFTW_LIBRARIES=/ucrt64/lib/libfftw3.dll.a \
+# ..
+# goto C:\msys64\osmo-fl2k\src\fl2k_fm.c:455  comment between 455 and 484 while loop
+# mingw32-make
+# mingw32-make install
+
+# git clone https://gitea.osmocom.org/sdr/osmo-fl2k.git
+# cd osmo-fl2k
+# mkdir build
+# cd build
+# cmake -G "MinGW Makefiles" -DCMAKE_INSTALL_PREFIX=/mingw64 ..
 
 # pacman -S mingw-w64-x86_64-ffmpeg
-# pacman -S mingw-w64-ucrt-x86_64-libusb
-# pacman -S mingw-w64-x86_64-libusb
 # pacman -S mingw-w64-x86_64-soapysdr
 # pacman -S mingw-w64-x86_64-fltk
 # pacman -S mingw-w64-x86_64-opus
