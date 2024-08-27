@@ -134,4 +134,5 @@ HEADERS += \
 # pacman -S mingw-w64-x86_64-opus
 # pacman -S mingw-w64-x86_64-fdk-aac
 
+# hacktv.exe -o hackrf -f 471250000 -s 16e6 -m pal 1280x720.flv
 
