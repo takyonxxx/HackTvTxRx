@@ -1,18 +1,19 @@
-QT       += core gui
+QT       += core gui widgets
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
 CONFIG += c++17
+#PATH_DESKTOP = $$system(echo %USERPROFILE%\\Desktop)
+PARENT_DIR = $$absolute_path($$PWD/../)
 
-# You can make your code fail to compile if it uses deprecated APIs.
-# In order to do so, uncomment the following line.
-#DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
+INCLUDEPATH += $$PARENT_DIR/include
+LIBS += -L$$PARENT_DIR/lib -lHackTvLib
 
-SOURCES += \
+SOURCES += \   
     main.cpp \
     mainwindow.cpp
 
-HEADERS += \
+HEADERS += \    
     mainwindow.h
 
 FORMS += \

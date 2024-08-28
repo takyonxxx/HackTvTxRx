@@ -408,7 +408,7 @@ enum {
 	_OPT_VERSION,
 };
 
-int main(int argc, char *argv[])
+int start_hacktv(int argc, char *argv[])
 {
 	int c;
 	int option_index;

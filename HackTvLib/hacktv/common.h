@@ -39,13 +39,21 @@ typedef struct {
 	int32_t q;
 } cint32_t;
 
-extern int64_t gcd(int64_t a, int64_t b);
-extern rational_t rational_mul(rational_t a, rational_t b);
-extern rational_t rational_div(rational_t a, rational_t b);
-extern int rational_cmp(rational_t a, rational_t b);
-extern rational_t rational_nearest(rational_t ref, rational_t a, rational_t b);
-extern cint16_t *sin_cint16(unsigned int length, unsigned int cycles, double level);
-extern double rc_window(double t, double left, double width, double rise);
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int64_t gcd(int64_t a, int64_t b);
+rational_t rational_mul(rational_t a, rational_t b);
+rational_t rational_div(rational_t a, rational_t b);
+int rational_cmp(rational_t a, rational_t b);
+rational_t rational_nearest(rational_t ref, rational_t a, rational_t b);
+cint16_t *sin_cint16(unsigned int length, unsigned int cycles, double level);
+double rc_window(double t, double left, double width, double rise);
+
+#ifdef __cplusplus
+}
+#endif
 
 static inline void cint16_mul(cint16_t *r, const cint16_t *a, const cint16_t *b)
 {

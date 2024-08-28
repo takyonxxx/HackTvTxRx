@@ -15,10 +15,21 @@
 /* You should have received a copy of the GNU General Public License     */
 /* along with this program.  If not, see <http://www.gnu.org/licenses/>. */
 
-#ifndef _TEST_H
-#define _TEST_H
+#ifndef _FFMPEG_H
+#define _FFMPEG_H
 
-extern int av_test_open(av_t *av);
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int av_ffmpeg_open(av_t *av, char *input_url, char *format, char *options);
+void av_ffmpeg_init(void);
+void av_ffmpeg_deinit(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 

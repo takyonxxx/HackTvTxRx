@@ -2,11 +2,14 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
-#include <QProcess>
+#include <QTextBrowser>
+#include <QTimer>
+#include "hacktvlib.h"
 
 class QLineEdit;
 class QComboBox;
 class QPushButton;
+class QFileDialog;
 
 class MainWindow : public QMainWindow
 {
@@ -21,16 +24,23 @@ private:
     QLineEdit *sampleRateEdit;
     QComboBox *modeCombo;
     QLineEdit *inputFileEdit;
+    QPushButton *chooseFileButton;
     QPushButton *executeButton;
-    QProcess *process;
+    QFileDialog *fileDialog;
+    std::unique_ptr<HackTvLib> m_hackTvLib;
+
+    QTextBrowser *logBrowser;
+    QTimer *logTimer;
+    QStringList pendingLogs;
 
     void setupUi();
-    QString buildCommand();
+    QStringList buildCommand();
+    void handleLog(const std::string& logMessage);
 
 private slots:
     void executeCommand();
-    void handleError(QProcess::ProcessError error);
-    void handleFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void chooseFile();
+    void updateLogDisplay();
 };
 
 #endif // MAINWINDOW_H
