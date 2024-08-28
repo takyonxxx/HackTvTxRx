@@ -240,11 +240,10 @@ HackTvLib::HackTvLib()
 
 HackTvLib::~HackTvLib() {
     stop();
+    log("HackTvLib exiting.");
 }
 
 void HackTvLib::start(int argc, char *argv[]) {
-
-    log("HackTvLib starting...");
 
     int option_index;
     static struct option long_options[] = {
@@ -953,8 +952,8 @@ void HackTvLib::start(int argc, char *argv[]) {
     vid_conf.secam_field_id = s.secam_field_id;
 
     log("Output Type: %s", s.output_type);
-    log("Frequency: %llu", s.frequency);
-    log("Sample Rate: %d", s.samplerate);
+    log("Frequency: %.2f MHz", s.frequency / 1000000.0);
+    log("Sample Rate: %.0f MHz", s.samplerate / 1000000.0);
     log("Mode: %s", s.mode ? s.mode : "None");
 
     /* Setup video encoder */
@@ -973,7 +972,7 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(rf_hackrf_open(&s.rf, s.output, s.vid.sample_rate, s.frequency, s.gain, s.amp) != RF_OK)
         {
             vid_free(&s.vid);
-            log("HackTvLib stoped");
+            log("HackRF not found");
             return;
         }
 #else
@@ -988,6 +987,7 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(rf_soapysdr_open(&s.rf, s.output, s.vid.sample_rate, s.frequency, s.gain, s.antenna) != RF_OK)
         {
             vid_free(&s.vid);
+            log("SoapySDR not found");
             return;;
         }
 #else
@@ -1002,6 +1002,7 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(rf_fl2k_open(&s.rf, s.output, s.vid.sample_rate) != RF_OK)
         {
             vid_free(&s.vid);
+            log("FL2K not found");
             return;;
         }
 #else

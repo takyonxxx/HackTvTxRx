@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include <QTextBrowser>
+#include <QCheckBox>
 #include <QTimer>
 #include "hacktvlib.h"
 
@@ -27,6 +28,10 @@ private:
     QPushButton *chooseFileButton;
     QPushButton *executeButton;
     QFileDialog *fileDialog;
+    QComboBox *inputTypeCombo;
+    QLineEdit *ffmpegOptionsEdit;
+    QCheckBox *ampEnabledCheckBox;
+    QLineEdit *gainEdit;
     std::unique_ptr<HackTvLib> m_hackTvLib;
 
     QTextBrowser *logBrowser;
@@ -41,6 +46,7 @@ private slots:
     void executeCommand();
     void chooseFile();
     void updateLogDisplay();
+    void onInputTypeChanged(int index);
 };
 
 #endif // MAINWINDOW_H
