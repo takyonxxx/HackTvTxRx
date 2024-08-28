@@ -10,13 +10,13 @@
 #include <QLabel>
 
 MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent)
+    : QMainWindow(parent),
+    m_hackTvLib(std::make_unique<HackTvLib>())
 {
     setupUi();
     resize(400, 600);
 
-    try {
-        m_hackTvLib = std::make_unique<HackTvLib>();
+    try {        
         m_hackTvLib->setLogCallback([this](const std::string& msg) {
             handleLog(msg);
         });
@@ -150,39 +150,51 @@ void MainWindow::executeCommand()
 {
     if (executeButton->text() == "Start")
     {
-        // Start the command
-        QStringList args = buildCommand();
-        int argc = args.size() + 1;
-        std::vector<char*> argv(argc);
-        argv[0] = strdup("HackTv");
+        QStringList args;
+        args << "-o" << outputEdit->text()
+             << "-f" << frequencyEdit->text()
+             << "-s" << sampleRateEdit->text()
+             << "-m" << "b";
 
-        executeButton->setText("Stop");
+        if (ampEnabledCheckBox->isChecked()) {
+            args << "-a";
+        }
 
-        // Convert QStrings to C-style strings
-        for(int i = 0; i < args.size(); ++i) {
-            argv[i + 1] = strdup(args[i].toLocal8Bit().constData());
+        if (!gainEdit->text().isEmpty()) {
+            args << "-g" << gainEdit->text();
+        }
+
+        // Add input file or other options
+        if (!inputFileEdit->text().isEmpty()) {
+            args << inputFileEdit->text();
+        }
+
+        // Convert QStringList to std::vector<std::string>
+        std::vector<std::string> stdArgs;
+        stdArgs.reserve(args.size());
+        for (const QString& arg : args) {
+            stdArgs.push_back(arg.toStdString());
         }
 
         try
         {
-            m_hackTvLib->start(argc, argv.data());            
+            m_hackTvLib->setArguments(stdArgs);
+            if(m_hackTvLib->start()) {
+                executeButton->setText("Stop");
+            } else {
+                QMessageBox::warning(this, "Warning", "Failed to start HackTvLib. Check if input is specified.");
+            }
         }
         catch (const std::exception& e) {
             QMessageBox::critical(this, "Error", QString("HackTvLib error: %1").arg(e.what()));
         }
-
-        // Clean up allocated memory
-        for(char* arg : argv) {
-            free(arg);
-        }
     }
     else if (executeButton->text() == "Stop")
     {
-        // Stop the command
         try
         {
-            m_hackTvLib->stop();  // Assuming stop is the method to stop the command in HackTvLib
-            executeButton->setText("Start");  // Change button text to "Start"
+            if(m_hackTvLib->stop())
+                executeButton->setText("Start");
         }
         catch (const std::exception& e) {
             QMessageBox::critical(this, "Error", QString("HackTvLib error: %1").arg(e.what()));
@@ -206,8 +218,7 @@ QStringList MainWindow::buildCommand()
 
     args << "-f" << frequencyEdit->text()
          << "-s" << sampleRateEdit->text()
-         << "-m" << "i";
-         //<< "-m" << modeCombo->currentText();
+         << "-m" << "b";
 
     // Add the input type and file
     switch(inputTypeCombo->currentIndex())
@@ -224,7 +235,7 @@ QStringList MainWindow::buildCommand()
         args << ffmpegArg;
     }
     break;
-    default: // File
+    default: // File        
         args << inputFileEdit->text();
         break;
     }
@@ -238,6 +249,7 @@ void MainWindow::chooseFile()
         QStringList selectedFiles = fileDialog->selectedFiles();
         if (!selectedFiles.isEmpty()) {
             inputFileEdit->setText(selectedFiles.first());
+            qDebug() << inputFileEdit->text();
         }
     }
 }

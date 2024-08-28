@@ -1,22 +1,39 @@
 #include "hacktvlib.h"
-#include <stdint.h>
-#include <cstring>
-#include <cstdlib>
-#include <iostream>
 #include <getopt.h>
-#include <signal.h>
 #include <cstdarg>
 #include <cstdio>
-
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <cstring>  // for strdup
+#include <cstdlib>  // for f
 #include "hacktv/av.h"
+#include "hacktv/rf.h"
 
 #define VERSION "1.0"
 
-const char* getCurrentTimestamp() {
-    static char buffer[26];
-    time_t now = time(0);
-    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", localtime(&now));
-    return buffer;
+static volatile sig_atomic_t _abort = 0;
+static volatile sig_atomic_t _signal = 0;
+static hacktv_t s;
+const vid_configs_t *vid_confs;
+vid_config_t vid_conf;
+char *pre, *sub;
+int l;
+int r;
+
+char* strdup(const char* str) {
+    if (str == nullptr) {
+        return nullptr;
+    }
+    size_t len = strlen(str) + 1;  // strlen without the std:: prefix
+    char* copy = static_cast<char*>(std::malloc(len));
+    if (copy) {
+        std::strcpy(copy, str);
+    }
+    return copy;
 }
 
 static int _parse_ratio(rational_t *r, const char *s)
@@ -37,6 +54,21 @@ static int _parse_ratio(rational_t *r, const char *s)
     return(HACKTV_OK);
 }
 
+static void print_version(void)
+{
+    printf("hacktv %s\n", VERSION);
+}
+
+static void print_usage(void)
+{
+    printf(
+        "\n"
+        "Usage: hacktv [options] input [input...]\n"
+        "\n"
+        );
+}
+
+/* fputs() a string with JSON-style escape sequences */
 static int _fputs_json(const char *str, FILE *stream)
 {
     int c;
@@ -99,19 +131,6 @@ static void _list_modes(int json)
     if(json) printf("]\n");
 }
 
-// Custom strdup implementation (if needed)
-char* strdup(const char* str) {
-    if (str == nullptr) {
-        return nullptr;
-    }
-    size_t len = strlen(str) + 1;  // strlen without the std:: prefix
-    char* copy = static_cast<char*>(std::malloc(len));
-    if (copy) {
-        std::strcpy(copy, str);
-    }
-    return copy;
-}
-
 enum {
     _OPT_TELETEXT = 1000,
     _OPT_WSS,
@@ -164,8 +183,73 @@ enum {
     _OPT_VERSION,
 };
 
-static volatile sig_atomic_t _abort = 0;
-static volatile sig_atomic_t _isRunning = 0;
+static struct option long_options[] = {
+    { "output",         required_argument, 0, 'o' },
+    { "mode",           required_argument, 0, 'm' },
+    { "list-modes",     no_argument,       0, _OPT_LIST_MODES },
+    { "samplerate",     required_argument, 0, 's' },
+    { "pixelrate",      required_argument, 0, _OPT_PIXELRATE },
+    { "level",          required_argument, 0, 'l' },
+    { "deviation",      required_argument, 0, 'D' },
+    { "gamma",          required_argument, 0, 'G' },
+    { "interlace",      no_argument,       0, 'i' },
+    { "fit",            required_argument, 0, _OPT_FIT },
+    { "min-aspect",     required_argument, 0, _OPT_MIN_ASPECT },
+    { "max-aspect",     required_argument, 0, _OPT_MAX_ASPECT },
+    { "letterbox",      no_argument,       0, _OPT_LETTERBOX },
+    { "pillarbox",      no_argument,       0, _OPT_PILLARBOX },
+    { "repeat",         no_argument,       0, 'r' },
+    { "shuffle",        no_argument,       0, _OPT_SHUFFLE },
+    { "verbose",        no_argument,       0, 'v' },
+    { "teletext",       required_argument, 0, _OPT_TELETEXT },
+    { "wss",            required_argument, 0, _OPT_WSS },
+    { "videocrypt",     required_argument, 0, _OPT_VIDEOCRYPT },
+    { "videocrypt2",    required_argument, 0, _OPT_VIDEOCRYPT2 },
+    { "videocrypts",    required_argument, 0, _OPT_VIDEOCRYPTS },
+    { "syster",         no_argument,       0, _OPT_SYSTER },
+    { "systeraudio",    no_argument,       0, _OPT_SYSTERAUDIO },
+    { "acp",            no_argument,       0, _OPT_ACP },
+    { "vits",           no_argument,       0, _OPT_VITS },
+    { "vitc",           no_argument,       0, _OPT_VITC },
+    { "filter",         no_argument,       0, _OPT_FILTER },
+    { "nocolour",       no_argument,       0, _OPT_NOCOLOUR },
+    { "nocolor",        no_argument,       0, _OPT_NOCOLOUR },
+    { "noaudio",        no_argument,       0, _OPT_NOAUDIO },
+    { "nonicam",        no_argument,       0, _OPT_NONICAM },
+    { "a2stereo",       no_argument,       0, _OPT_A2STEREO },
+    { "single-cut",     no_argument,       0, _OPT_SINGLE_CUT },
+    { "double-cut",     no_argument,       0, _OPT_DOUBLE_CUT },
+    { "eurocrypt",      required_argument, 0, _OPT_EUROCRYPT },
+    { "scramble-audio", no_argument,       0, _OPT_SCRAMBLE_AUDIO },
+    { "chid",           required_argument, 0, _OPT_CHID },
+    { "mac-audio-stereo", no_argument,     0, _OPT_MAC_AUDIO_STEREO },
+    { "mac-audio-mono", no_argument,       0, _OPT_MAC_AUDIO_MONO },
+    { "mac-audio-high-quality", no_argument, 0, _OPT_MAC_AUDIO_HIGH_QUALITY },
+    { "mac-audio-medium-quality", no_argument, 0, _OPT_MAC_AUDIO_MEDIUM_QUALITY },
+    { "mac-audio-companded", no_argument,  0, _OPT_MAC_AUDIO_COMPANDED },
+    { "mac-audio-linear", no_argument,     0, _OPT_MAC_AUDIO_LINEAR },
+    { "mac-audio-l1-protection", no_argument, 0, _OPT_MAC_AUDIO_L1_PROTECTION },
+    { "mac-audio-l2-protection", no_argument, 0, _OPT_MAC_AUDIO_L2_PROTECTION },
+    { "sis",            required_argument, 0, _OPT_SIS },
+    { "swap-iq",        no_argument,       0, _OPT_SWAP_IQ },
+    { "offset",         required_argument, 0, _OPT_OFFSET },
+    { "passthru",       required_argument, 0, _OPT_PASSTHRU },
+    { "invert-video",   no_argument,       0, _OPT_INVERT_VIDEO },
+    { "raw-bb-file",    required_argument, 0, _OPT_RAW_BB_FILE },
+    { "raw-bb-blanking", required_argument, 0, _OPT_RAW_BB_BLANKING },
+    { "raw-bb-white",   required_argument, 0, _OPT_RAW_BB_WHITE },
+    { "secam-field-id", no_argument,       0, _OPT_SECAM_FIELD_ID },
+    { "json",           no_argument,       0, _OPT_JSON },
+    { "ffmt",           required_argument, 0, _OPT_FFMT },
+    { "fopts",          required_argument, 0, _OPT_FOPTS },
+    { "frequency",      required_argument, 0, 'f' },
+    { "amp",            no_argument,       0, 'a' },
+    { "gain",           required_argument, 0, 'g' },
+    { "antenna",        required_argument, 0, 'A' },
+    { "type",           required_argument, 0, 't' },
+    { "version",        no_argument,       0, _OPT_VERSION },
+    { 0,                0,                 0,  0  }
+};
 
 void HackTvLib::setLogCallback(LogCallback callback) {
     m_logCallback = std::move(callback);
@@ -183,28 +267,31 @@ void HackTvLib::log(const char* format, ...) {
 }
 
 HackTvLib::HackTvLib()
+    : m_abort(false), m_signal(0)
 {
-    log("HackTvLib members initialized");
+    log("HackTvLib initialized.");
+    memset(&s, 0, sizeof(hacktv_t));
 }
 
-HackTvLib::~HackTvLib() {
+HackTvLib::~HackTvLib()
+{
     stop();
-    log("HackTvLib exiting.");
 }
 
-void HackTvLib::start(int argc, char *argv[]) {
+bool HackTvLib::start()
+{
+    log("HackTvLib started.");
 
+/* Disable console output buffer in Windows */
 #ifdef WIN32
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 #endif
 
-    memset(&s, 0, sizeof(hacktv_t));
-
     /* Default configuration */
     s.output_type = "hackrf";
     s.output = NULL;
-    s.mode = "i";
+    s.mode = "b";
     s.samplerate = 16000000;
     s.pixelrate = 0;
     s.level = 1.0;
@@ -238,87 +325,17 @@ void HackTvLib::start(int argc, char *argv[]) {
     s.mac_audio_companded = MAC_COMPANDED;
     s.mac_audio_protection = MAC_FIRST_LEVEL_PROTECTION;
     s.frequency = 855250000;
-    s.amp = 1;
-    s.gain = 47;
+    s.amp = 0;
+    s.gain = 0;
     s.antenna = NULL;
     s.file_type = RF_INT16;
     s.raw_bb_blanking_level = 0;
     s.raw_bb_white_level = INT16_MAX;
 
-    int option_index;
-    static struct option long_options[] = {
-        { "output",         required_argument, 0, 'o' },
-        { "mode",           required_argument, 0, 'm' },
-        { "list-modes",     no_argument,       0, _OPT_LIST_MODES },
-        { "samplerate",     required_argument, 0, 's' },
-        { "pixelrate",      required_argument, 0, _OPT_PIXELRATE },
-        { "level",          required_argument, 0, 'l' },
-        { "deviation",      required_argument, 0, 'D' },
-        { "gamma",          required_argument, 0, 'G' },
-        { "interlace",      no_argument,       0, 'i' },
-        { "fit",            required_argument, 0, _OPT_FIT },
-        { "min-aspect",     required_argument, 0, _OPT_MIN_ASPECT },
-        { "max-aspect",     required_argument, 0, _OPT_MAX_ASPECT },
-        { "letterbox",      no_argument,       0, _OPT_LETTERBOX },
-        { "pillarbox",      no_argument,       0, _OPT_PILLARBOX },
-        { "repeat",         no_argument,       0, 'r' },
-        { "shuffle",        no_argument,       0, _OPT_SHUFFLE },
-        { "verbose",        no_argument,       0, 'v' },
-        { "teletext",       required_argument, 0, _OPT_TELETEXT },
-        { "wss",            required_argument, 0, _OPT_WSS },
-        { "videocrypt",     required_argument, 0, _OPT_VIDEOCRYPT },
-        { "videocrypt2",    required_argument, 0, _OPT_VIDEOCRYPT2 },
-        { "videocrypts",    required_argument, 0, _OPT_VIDEOCRYPTS },
-        { "syster",         no_argument,       0, _OPT_SYSTER },
-        { "systeraudio",    no_argument,       0, _OPT_SYSTERAUDIO },
-        { "acp",            no_argument,       0, _OPT_ACP },
-        { "vits",           no_argument,       0, _OPT_VITS },
-        { "vitc",           no_argument,       0, _OPT_VITC },
-        { "filter",         no_argument,       0, _OPT_FILTER },
-        { "nocolour",       no_argument,       0, _OPT_NOCOLOUR },
-        { "nocolor",        no_argument,       0, _OPT_NOCOLOUR },
-        { "noaudio",        no_argument,       0, _OPT_NOAUDIO },
-        { "nonicam",        no_argument,       0, _OPT_NONICAM },
-        { "a2stereo",       no_argument,       0, _OPT_A2STEREO },
-        { "single-cut",     no_argument,       0, _OPT_SINGLE_CUT },
-        { "double-cut",     no_argument,       0, _OPT_DOUBLE_CUT },
-        { "eurocrypt",      required_argument, 0, _OPT_EUROCRYPT },
-        { "scramble-audio", no_argument,       0, _OPT_SCRAMBLE_AUDIO },
-        { "chid",           required_argument, 0, _OPT_CHID },
-        { "mac-audio-stereo", no_argument,     0, _OPT_MAC_AUDIO_STEREO },
-        { "mac-audio-mono", no_argument,       0, _OPT_MAC_AUDIO_MONO },
-        { "mac-audio-high-quality", no_argument, 0, _OPT_MAC_AUDIO_HIGH_QUALITY },
-        { "mac-audio-medium-quality", no_argument, 0, _OPT_MAC_AUDIO_MEDIUM_QUALITY },
-        { "mac-audio-companded", no_argument,  0, _OPT_MAC_AUDIO_COMPANDED },
-        { "mac-audio-linear", no_argument,     0, _OPT_MAC_AUDIO_LINEAR },
-        { "mac-audio-l1-protection", no_argument, 0, _OPT_MAC_AUDIO_L1_PROTECTION },
-        { "mac-audio-l2-protection", no_argument, 0, _OPT_MAC_AUDIO_L2_PROTECTION },
-        { "sis",            required_argument, 0, _OPT_SIS },
-        { "swap-iq",        no_argument,       0, _OPT_SWAP_IQ },
-        { "offset",         required_argument, 0, _OPT_OFFSET },
-        { "passthru",       required_argument, 0, _OPT_PASSTHRU },
-        { "invert-video",   no_argument,       0, _OPT_INVERT_VIDEO },
-        { "raw-bb-file",    required_argument, 0, _OPT_RAW_BB_FILE },
-        { "raw-bb-blanking", required_argument, 0, _OPT_RAW_BB_BLANKING },
-        { "raw-bb-white",   required_argument, 0, _OPT_RAW_BB_WHITE },
-        { "secam-field-id", no_argument,       0, _OPT_SECAM_FIELD_ID },
-        { "json",           no_argument,       0, _OPT_JSON },
-        { "ffmt",           required_argument, 0, _OPT_FFMT },
-        { "fopts",          required_argument, 0, _OPT_FOPTS },
-        { "frequency",      required_argument, 0, 'f' },
-        { "amp",            no_argument,       0, 'a' },
-        { "gain",           required_argument, 0, 'g' },
-        { "antenna",        required_argument, 0, 'A' },
-        { "type",           required_argument, 0, 't' },
-        { "version",        no_argument,       0, _OPT_VERSION },
-        { 0,                0,                 0,  0  }
-    };
-
     int c;
-    _abort = 0;
-
+    int option_index;
     opterr = 0;
-    while((c = getopt_long(argc, argv, "o:m:s:D:G:irvf:al:g:A:t:", long_options, &option_index)) != -1)
+    while ((c = getopt_long(m_argv.size(), m_argv.data(), "o:m:s:D:G:irvf:al:g:A:t:", long_options, &option_index)) != -1)
     {
         switch(c)
         {
@@ -381,7 +398,7 @@ void HackTvLib::start(int argc, char *argv[]) {
             break;
 
         case 's': /* -s, --samplerate <value> */
-            s.samplerate = atoi(optarg) * 1000000; // Multiply by 1 MHz
+            s.samplerate = atoi(optarg);
             break;
 
         case _OPT_PIXELRATE: /* --pixelrate <value> */
@@ -413,7 +430,7 @@ void HackTvLib::start(int argc, char *argv[]) {
             else
             {
                 fprintf(stderr, "Unrecognised fit mode '%s'.\n", optarg);
-                return;
+                return false;
             }
 
             break;
@@ -423,7 +440,7 @@ void HackTvLib::start(int argc, char *argv[]) {
             if(_parse_ratio(&s.min_aspect, optarg) != HACKTV_OK)
             {
                 fprintf(stderr, "Invalid minimum aspect\n");
-                return;
+                return false;
             }
 
             break;
@@ -433,7 +450,7 @@ void HackTvLib::start(int argc, char *argv[]) {
             if(_parse_ratio(&s.max_aspect, optarg) != HACKTV_OK)
             {
                 fprintf(stderr, "Invalid maximum aspect\n");
-                return;
+                return false;
             }
 
             break;
@@ -669,32 +686,39 @@ void HackTvLib::start(int argc, char *argv[]) {
             else
             {
                 fprintf(stderr, "Unrecognised file data type.\n");
-                return;
+                return false;
             }
 
             break;
 
         case _OPT_VERSION: /* --version */
-
-            return;
+            print_version();
+            return true;
 
         case '?':
-            return;
+            print_usage();
+            return true;
         }
     }
+
+    s.amp = 1;
+    s.gain = 47;
+
+    log("f : %s g : %s a : %s", std::to_string(s.frequency).c_str(), std::to_string(s.gain).c_str(), std::to_string(s.amp).c_str());
 
     if(s.list_modes)
     {
         _list_modes(s.json);
-        return;
-    }
+        return false;
+    }    
 
-    if(optind >= argc)
+    if(optind >= m_argv.size())
     {
-        fprintf(stderr, "No input specified.\n");
-        return;
+        log("No input specified.");
+        return false;
     }
 
+    /* Load the mode configuration */
     for(vid_confs = vid_configs; vid_confs->id != NULL; vid_confs++)
     {
         if(strcmp(s.mode, vid_confs->id) == 0) break;
@@ -703,8 +727,8 @@ void HackTvLib::start(int argc, char *argv[]) {
     if(vid_confs->id == NULL)
     {
         fprintf(stderr, "Unrecognised TV mode.\n");
-        return;
-    }
+        return false;
+    }   
 
     memcpy(&vid_conf, vid_confs->conf, sizeof(vid_config_t));
 
@@ -774,7 +798,7 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(vid_conf.lines != 625)
         {
             fprintf(stderr, "Teletext is only available with 625 line modes.\n");
-            return;
+            return false;
         }
 
         vid_conf.teletext = s.teletext;
@@ -785,7 +809,7 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(vid_conf.type != VID_RASTER_625)
         {
             fprintf(stderr, "WSS is only supported for 625 line raster modes.\n");
-            return;
+            return false;
         }
 
         vid_conf.wss = s.wss;
@@ -796,7 +820,7 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(vid_conf.lines != 625 && vid_conf.colour_mode != VID_PAL)
         {
             fprintf(stderr, "Videocrypt I is only compatible with 625 line PAL modes.\n");
-            return;
+            return false;
         }
 
         vid_conf.videocrypt = s.videocrypt;
@@ -807,14 +831,14 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(vid_conf.lines != 625 && vid_conf.colour_mode != VID_PAL)
         {
             fprintf(stderr, "Videocrypt II is only compatible with 625 line PAL modes.\n");
-            return;
+            return false;
         }
 
         /* Only allow both VC1 and VC2 if both are in free-access mode */
         if(s.videocrypt && !(strcmp(s.videocrypt, "free") == 0 && strcmp(s.videocrypt2, "free") == 0))
         {
             fprintf(stderr, "Videocrypt I and II cannot be used together except in free-access mode.\n");
-            return;
+            return false;
         }
 
         vid_conf.videocrypt2 = s.videocrypt2;
@@ -825,13 +849,13 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(vid_conf.lines != 625 && vid_conf.colour_mode != VID_PAL)
         {
             fprintf(stderr, "Videocrypt S is only compatible with 625 line PAL modes.\n");
-            return;
+            return false;
         }
 
         if(s.videocrypt || s.videocrypt2)
         {
             fprintf(stderr, "Using multiple scrambling modes is not supported.\n");
-            return;
+            return false;
         }
 
         vid_conf.videocrypts = s.videocrypts;
@@ -842,13 +866,13 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(vid_conf.lines != 625 && vid_conf.colour_mode != VID_PAL)
         {
             fprintf(stderr, "Nagravision Syster is only compatible with 625 line PAL modes.\n");
-            return;
+            return false;
         }
 
         if(vid_conf.videocrypt || vid_conf.videocrypt2 || vid_conf.videocrypts)
         {
             fprintf(stderr, "Using multiple scrambling modes is not supported.\n");
-            return;
+            return false;
         }
 
         vid_conf.syster = 1;
@@ -860,7 +884,7 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(vid_conf.type != VID_MAC)
         {
             fprintf(stderr, "Eurocrypt is only compatible with D/D2-MAC modes.\n");
-            return;
+            return false;
         }
 
         if(vid_conf.scramble_video == 0)
@@ -877,13 +901,13 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(vid_conf.lines != 625 && vid_conf.lines != 525)
         {
             fprintf(stderr, "Analogue Copy Protection is only compatible with 525 and 625 line modes.\n");
-            return;
+            return false;
         }
 
         if(vid_conf.videocrypt || vid_conf.videocrypt2 || vid_conf.videocrypts || vid_conf.syster)
         {
             fprintf(stderr, "Analogue Copy Protection cannot be used with video scrambling enabled.\n");
-            return;
+            return false;
         }
 
         vid_conf.acp = 1;
@@ -895,7 +919,7 @@ void HackTvLib::start(int argc, char *argv[]) {
             vid_conf.type != VID_RASTER_525)
         {
             fprintf(stderr, "VITS is only currently supported for 625 and 525 line raster modes.\n");
-            return;
+            return false;
         }
 
         vid_conf.vits = 1;
@@ -907,7 +931,7 @@ void HackTvLib::start(int argc, char *argv[]) {
             vid_conf.type != VID_RASTER_525)
         {
             fprintf(stderr, "VITC is only currently supported for 625 and 525 line raster modes.\n");
-            return;
+            return false;
         }
 
         vid_conf.vitc = 1;
@@ -936,7 +960,7 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(vid_conf.lines != 625)
         {
             fprintf(stderr, "SiS is only available with 625 line modes.\n");
-            return;
+            return false;
         }
 
         vid_conf.sis = s.sis;
@@ -951,34 +975,28 @@ void HackTvLib::start(int argc, char *argv[]) {
     vid_conf.raw_bb_white_level = s.raw_bb_white_level;
     vid_conf.secam_field_id = s.secam_field_id;
 
-    log("Output Type: %s", s.output_type);
-    log("Frequency: %.2f MHz", s.frequency / 1000000.0);
-    log("Sample Rate: %.0f MHz", s.samplerate / 1000000.0);
-    log("Mode: %s", s.mode ? s.mode : "None");
-
     /* Setup video encoder */
     r = vid_init(&s.vid, s.samplerate, s.pixelrate, &vid_conf);
     if(r != VID_OK)
     {
         fprintf(stderr, "Unable to initialise video encoder.\n");
-        return;
+        return false;
     }
 
     vid_info(&s.vid);
 
     if(strcmp(s.output_type, "hackrf") == 0)
     {
-#ifdef HAVE_HACKRF
+#ifdef HAVE_HACKRF        
         if(rf_hackrf_open(&s.rf, s.output, s.vid.sample_rate, s.frequency, s.gain, s.amp) != RF_OK)
         {
             vid_free(&s.vid);
-            log("HackRF not found");
-            return;
+            return false;
         }
 #else
         fprintf(stderr, "HackRF support is not available in this build of hacktv.\n");
         vid_free(&s.vid);
-        return;;
+        return false;
 #endif
     }
     else if(strcmp(s.output_type, "soapysdr") == 0)
@@ -987,13 +1005,12 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(rf_soapysdr_open(&s.rf, s.output, s.vid.sample_rate, s.frequency, s.gain, s.antenna) != RF_OK)
         {
             vid_free(&s.vid);
-            log("SoapySDR not found");
-            return;;
+            return false;
         }
 #else
         fprintf(stderr, "SoapySDR support is not available in this build of hacktv.\n");
         vid_free(&s.vid);
-        return;;
+        return false;
 #endif
     }
     else if(strcmp(s.output_type, "fl2k") == 0)
@@ -1002,13 +1019,12 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(rf_fl2k_open(&s.rf, s.output, s.vid.sample_rate) != RF_OK)
         {
             vid_free(&s.vid);
-            log("FL2K not found");
-            return;;
+            return false;
         }
 #else
         fprintf(stderr, "FL2K support is not available in this build of hacktv.\n");
         vid_free(&s.vid);
-        return;;
+        return false;
 #endif
     }
     else if(strcmp(s.output_type, "file") == 0)
@@ -1016,12 +1032,13 @@ void HackTvLib::start(int argc, char *argv[]) {
         if(rf_file_open(&s.rf, s.output, s.file_type, s.vid.conf.output_type == RF_INT16_COMPLEX) != RF_OK)
         {
             vid_free(&s.vid);
-            return;;
+            return false;
         }
     }
 
     av_ffmpeg_init();
 
+    /* Configure AV source settings */
     s.vid.av = (av_t) {
         .width = s.vid.active_width,
         .height = s.vid.conf.active_lines,
@@ -1056,34 +1073,38 @@ void HackTvLib::start(int argc, char *argv[]) {
         /* Flip dimensions if the lines are scanned vertically */
         s.vid.av.width = s.vid.conf.active_lines;
         s.vid.av.height = s.vid.active_width;
+    }    
+
+    if (m_thread.joinable()) {
+        return false;  // Thread is already running
     }
 
+    m_abort = false;
+    m_signal = 0;
+    m_thread = std::thread(&HackTvLib::rfLoop, this);
+    return true;
+}
+
+void HackTvLib::rfLoop()
+{
     do
     {
-        if(!_isRunning)
-            _isRunning = 1;
-
-        if(s.shuffle)
+        if (s.shuffle)
         {
-            /* Shuffle the input source list */
-            /* Avoids moving the last entry to the start
-             * to prevent it repeating immediately */
-            for(c = optind; c < argc - 1; c++)
+            // Shuffle the input source list
+            for (int c = optind; c < m_argv.size() - 1; c++)
             {
-                l = c + (rand() % (argc - c - (c == optind ? 1 : 0)));
-                pre = argv[c];
-                argv[c] = argv[l];
-                argv[l] = pre;
+                int l = c + (rand() % (m_argv.size() - c - (c == optind ? 1 : 0)));
+                std::swap(m_argv[c], m_argv[l]);
             }
         }
 
-        for(c = optind; c < argc && !_abort; c++)
+        for (size_t c = optind; c < m_argv.size() && !m_abort; c++)
         {
-            /* Get a pointer to the output prefix and target */
-            pre = argv[c];
-            sub = strchr(pre, ':');
-
-            if(sub != NULL)
+            char* pre = m_argv[c];
+            char* sub = strchr(pre, ':');
+            size_t l;
+            if (sub != NULL)
             {
                 l = sub - pre;
                 sub++;
@@ -1093,11 +1114,12 @@ void HackTvLib::start(int argc, char *argv[]) {
                 l = strlen(pre);
             }
 
-            if(strncmp(pre, "test", l) == 0)
+            int r;
+            if (strncmp(pre, "test", l) == 0)
             {
                 r = av_test_open(&s.vid.av);
             }
-            else if(strncmp(pre, "ffmpeg", l) == 0)
+            else if (strncmp(pre, "ffmpeg", l) == 0)
             {
                 r = av_ffmpeg_open(&s.vid.av, sub, s.ffmt, s.fopts);
             }
@@ -1106,43 +1128,63 @@ void HackTvLib::start(int argc, char *argv[]) {
                 r = av_ffmpeg_open(&s.vid.av, pre, s.ffmt, s.fopts);
             }
 
-            if(r != HACKTV_OK)
+            if (r != HACKTV_OK)
             {
-                /* Error opening this source. Move to the next */
+                // Error opening this source. Move to the next
                 continue;
             }
 
-            while(!_abort)
+            while (!m_abort)
             {
                 size_t samples;
-                int16_t *data = vid_next_line(&s.vid, &samples);
+                int16_t* data = vid_next_line(&s.vid, &samples);
+                if (data == NULL) break;
+                if (rf_write(&s.rf, data, samples) != RF_OK) break;
+            }
 
-                if(data == NULL) break;
-
-                if(rf_write(&s.rf, data, samples) != RF_OK) break;
+            if (m_signal.load() != 0)
+            {
+                log("Caught signal %d", m_signal.load());
+                m_signal.store(0);
             }
 
             av_close(&s.vid.av);
         }
+    } while (s.repeat && !m_abort);
+}
+
+void HackTvLib::cleanupArgv()
+{
+    for (char* arg : m_argv) {
+        free(arg);
     }
-    while(s.repeat && !_abort);
+    m_argv.clear();
+}
+
+bool HackTvLib::setArguments(const std::vector<std::string>& args)
+{
+    log("Setting arguments");
+    cleanupArgv();
+    m_argv.resize(args.size() + 1);
+    m_argv[0] = strdup("HackTv");
+    for (size_t i = 0; i < args.size(); ++i) {
+        m_argv[i + 1] = strdup(args[i].c_str());
+    }
+    return true;
+}
+
+bool HackTvLib::stop()
+{
+    if (!m_thread.joinable()) {
+        return false;
+    }
+    m_abort = true;
+    m_thread.join();
 
     rf_close(&s.rf);
     vid_free(&s.vid);
-
     av_ffmpeg_deinit();
-
     fprintf(stderr, "\n");
-    log("HackTvLib stoped");
-}
-
-void HackTvLib::stop()
-{
-    if(_isRunning)
-    {
-        log("HackTvLib stopping");
-        _abort = 1;
-    }
-    else
-        log("HackTvLib already stopped.");
+    log("HackTvLib stopped.");
+    return true;
 }

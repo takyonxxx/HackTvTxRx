@@ -1,11 +1,15 @@
 #ifndef HACKTVLIB_H
 #define HACKTVLIB_H
+#include <QStringList>
+#include <functional>
+#include <string>
+#include <thread>
+#include <atomic>
 #include <stdint.h>
 #include "hacktv/video.h"
 #include "hacktv/rf.h"
-#include <functional>
-#include <string>
 
+/* Return codes */
 #define HACKTV_OK             0
 #define HACKTV_ERROR         -1
 #define HACKTV_OUT_OF_MEMORY -2
@@ -82,26 +86,26 @@ typedef struct {
 
 } hacktv_t;
 
-static hacktv_t s;
-const vid_configs_t *vid_confs;
-vid_config_t vid_conf;
-char *pre, *sub;
-int l;
-int r;
-
-class HackTvLib {
+class HackTvLib{
 public:
     using LogCallback = std::function<void(const std::string&)>;
 
-    HackTvLib();
+     HackTvLib();
     ~HackTvLib();
-    void start(int argc, char *argv[]);
-    void stop();
+    bool start();
+    bool stop();
     void setLogCallback(LogCallback callback);
+    bool setArguments(const std::vector<std::string>& args);
 
 private:
-    LogCallback m_logCallback;
+    LogCallback m_logCallback;    
+    std::thread m_thread;
+    std::atomic<bool> m_abort;
+    std::atomic<int> m_signal;
+    std::vector<char*> m_argv;
     void log(const char* format, ...);
+    void cleanupArgv();
+    void rfLoop();
 };
 
 #endif // HACKTVLIB_H
