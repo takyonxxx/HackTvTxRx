@@ -66,7 +66,7 @@ void MainWindow::setupUi()
 
     QLabel *freqLabel = new QLabel("Frequency (Hz):", this);
     frequencyEdit = new QLineEdit(this);
-    frequencyEdit->setText("471250000");
+    frequencyEdit->setText("855250000");
     frequencyEdit->setFixedWidth(120);
 
     outputLayout->addWidget(gainLabel, 1, 0);
@@ -156,6 +156,8 @@ void MainWindow::executeCommand()
         std::vector<char*> argv(argc);
         argv[0] = strdup("HackTv");
 
+        executeButton->setText("Stop");
+
         // Convert QStrings to C-style strings
         for(int i = 0; i < args.size(); ++i) {
             argv[i + 1] = strdup(args[i].toLocal8Bit().constData());
@@ -163,8 +165,7 @@ void MainWindow::executeCommand()
 
         try
         {
-            m_hackTvLib->start(argc, argv.data());
-            executeButton->setText("Stop");
+            m_hackTvLib->start(argc, argv.data());            
         }
         catch (const std::exception& e) {
             QMessageBox::critical(this, "Error", QString("HackTvLib error: %1").arg(e.what()));
@@ -196,7 +197,7 @@ QStringList MainWindow::buildCommand()
     args << "-o" << outputEdit->text();
 
     if (ampEnabledCheckBox->isChecked()) {
-        args << "-a";
+        args << "-a" ;
     }
 
     if (!gainEdit->text().isEmpty()) {
@@ -205,7 +206,8 @@ QStringList MainWindow::buildCommand()
 
     args << "-f" << frequencyEdit->text()
          << "-s" << sampleRateEdit->text()
-         << "-m" << modeCombo->currentText();
+         << "-m" << "i";
+         //<< "-m" << modeCombo->currentText();
 
     // Add the input type and file
     switch(inputTypeCombo->currentIndex())

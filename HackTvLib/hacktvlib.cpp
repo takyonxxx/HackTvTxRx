@@ -185,6 +185,14 @@ void HackTvLib::log(const char* format, ...) {
 HackTvLib::HackTvLib()
 {
     log("HackTvLib members initialized");
+}
+
+HackTvLib::~HackTvLib() {
+    stop();
+    log("HackTvLib exiting.");
+}
+
+void HackTvLib::start(int argc, char *argv[]) {
 
 #ifdef WIN32
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -229,21 +237,13 @@ HackTvLib::HackTvLib()
     s.mac_audio_quality = MAC_HIGH_QUALITY;
     s.mac_audio_companded = MAC_COMPANDED;
     s.mac_audio_protection = MAC_FIRST_LEVEL_PROTECTION;
-    s.frequency = 0;
-    s.amp = 0;
-    s.gain = 0;
+    s.frequency = 855250000;
+    s.amp = 1;
+    s.gain = 47;
     s.antenna = NULL;
     s.file_type = RF_INT16;
     s.raw_bb_blanking_level = 0;
     s.raw_bb_white_level = INT16_MAX;
-}
-
-HackTvLib::~HackTvLib() {
-    stop();
-    log("HackTvLib exiting.");
-}
-
-void HackTvLib::start(int argc, char *argv[]) {
 
     int option_index;
     static struct option long_options[] = {
@@ -1022,20 +1022,6 @@ void HackTvLib::start(int argc, char *argv[]) {
 
     av_ffmpeg_init();
 
-    av_frame_t frame = (av_frame_t) {
-        .width = s.vid.active_width,
-        .height = s.vid.conf.active_lines,
-        .framebuffer = NULL, // Set this to the actual framebuffer if available
-        .pixel_stride = 0,  // Initialize with appropriate value if needed
-        .line_stride = 0,   // Initialize with appropriate value if needed
-        .pixel_aspect_ratio = (rational_t) {
-            .num = 1, // Set appropriate numerator
-            .den = 1, // Set appropriate denominator
-        },
-        .interlaced = s.vid.conf.interlace ? 1 : 0, // Set based on interlace flag
-    };
-
-    /* Configure AV source settings */
     s.vid.av = (av_t) {
         .width = s.vid.active_width,
         .height = s.vid.conf.active_lines,
@@ -1050,18 +1036,18 @@ void HackTvLib::start(int argc, char *argv[]) {
         .fit_mode = s.fit_mode,
         .min_display_aspect_ratio = s.min_aspect,
         .max_display_aspect_ratio = s.max_aspect,
-        .default_frame = frame,
-        .frames = 0, // Initialize with a default value if needed
+        .default_frame = {0}, // Assuming you want to initialize this to zero
+        .frames = 0, // Assuming you want to initialize this to zero
         .sample_rate = (rational_t) {
             .num = (s.vid.audio ? HACKTV_AUDIO_SAMPLE_RATE : 0),
             .den = 1,
         },
-        .samples = 0, // Initialize with a default value if needed
-        .av_source_ctx = NULL, // Set this to the actual context if available
-        .read_video = NULL, // Set these to actual callback functions if available
+        .samples = 0, // Assuming you want to initialize this to zero
+        .av_source_ctx = NULL, // Assuming you want to initialize this to NULL
+        .read_video = NULL, // Assuming you want to initialize these function pointers to NULL
         .read_audio = NULL,
         .eof = NULL,
-        .close = NULL,
+        .close = NULL
     };
 
     if((s.vid.conf.frame_orientation & 3) == VID_ROTATE_90 ||
@@ -1141,6 +1127,12 @@ void HackTvLib::start(int argc, char *argv[]) {
     }
     while(s.repeat && !_abort);
 
+    rf_close(&s.rf);
+    vid_free(&s.vid);
+
+    av_ffmpeg_deinit();
+
+    fprintf(stderr, "\n");
     log("HackTvLib stoped");
 }
 
@@ -1148,7 +1140,7 @@ void HackTvLib::stop()
 {
     if(_isRunning)
     {
-         log("HackTvLib stopping");
+        log("HackTvLib stopping");
         _abort = 1;
     }
     else
