@@ -19,10 +19,10 @@ class MainWindow : public QMainWindow
 public:
     MainWindow(QWidget *parent = nullptr);
 
-private:
-    QLineEdit *outputEdit;
+private:    
     QLineEdit *frequencyEdit;
     QLineEdit *sampleRateEdit;
+    QComboBox *outputCombo;
     QComboBox *modeCombo;
     QComboBox *channelCombo;
     QLineEdit *inputFileEdit;
@@ -33,6 +33,10 @@ private:
     QComboBox *inputTypeCombo;
     QLineEdit *ffmpegOptionsEdit;
     QCheckBox *ampEnabledCheckBox;
+    QCheckBox *a2Stereo;
+    QCheckBox *repeat;
+    QCheckBox *acp;
+    QCheckBox *filter;
     QLineEdit *gainEdit;
     std::unique_ptr<HackTvLib> m_hackTvLib;
 

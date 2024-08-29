@@ -45,41 +45,60 @@ void MainWindow::setupUi()
     outputLayout->setVerticalSpacing(10);
     outputLayout->setHorizontalSpacing(15);
 
-    // Row 1: Output device and Amp
+    QVector<QPair<QString, QString>> devices = {
+        {"HackRF", "hackrf"},
+        {"SoapySDR", "soapysdr"},
+        {"FL2000", "fl2k"},
+        {"File", "file"}
+    };
+
     QLabel *outputLabel = new QLabel("Device:", this);
-    outputEdit = new QLineEdit(this);
-    outputEdit->setText("hackrf");
-    outputEdit->setFixedWidth(120);
+    outputCombo = new QComboBox(this);
+    for (const auto &device : devices) {
+        outputCombo->addItem(device.first, device.second);
+    }
     ampEnabledCheckBox = new QCheckBox("Amp", this);
+    ampEnabledCheckBox->setChecked(true);
+    a2Stereo = new QCheckBox("A2 Stereo", this);
+    a2Stereo->setChecked(true);
+    repeat = new QCheckBox("Repeat", this);
+    repeat->setChecked(true);
+    acp = new QCheckBox("Acp", this);
+    acp->setChecked(true);
+    filter = new QCheckBox("Filter", this);
+    filter->setChecked(true);
+
     outputLayout->addWidget(outputLabel, 0, 0);
-    outputLayout->addWidget(outputEdit, 0, 1);
+    outputLayout->addWidget(outputCombo, 0, 1);
     outputLayout->addWidget(ampEnabledCheckBox, 0, 2);
+    outputLayout->addWidget(a2Stereo, 0, 3);
+    outputLayout->addWidget(repeat, 0, 4);
+    outputLayout->addWidget(acp, 0, 5);
+    outputLayout->addWidget(filter, 0, 6);
 
     // Row 2: Gain and Frequency
     QLabel *gainLabel = new QLabel("Gain:", this);
     gainEdit = new QLineEdit(this);
     gainEdit->setText("47");
-    gainEdit->setFixedWidth(60);
+    gainEdit->setFixedWidth(35);
     QLabel *freqLabel = new QLabel("Frequency (Hz):", this);
-    frequencyEdit = new QLineEdit(this);
-    frequencyEdit->setText("855250000");
-    frequencyEdit->setFixedWidth(120);
+    frequencyEdit = new QLineEdit(this);    
+    frequencyEdit->setFixedWidth(75);
     QLabel *channelLabel = new QLabel("Channel:", this);
-    channelCombo = new QComboBox(this);
+    channelCombo = new QComboBox(this);    
+    QLabel *sampleRateLabel = new QLabel("Sample Rate (MHz):", this);
+    sampleRateEdit = new QLineEdit(this);
+    sampleRateEdit->setText("16");
+    sampleRateEdit->setFixedWidth(35);
+
     outputLayout->addWidget(gainLabel, 1, 0);
     outputLayout->addWidget(gainEdit, 1, 1);
     outputLayout->addWidget(channelLabel, 1, 2);
     outputLayout->addWidget(channelCombo, 1, 3);
     outputLayout->addWidget(freqLabel, 1, 4);
     outputLayout->addWidget(frequencyEdit, 1, 5);
-
-    // Row 3: Sample Rate
-    QLabel *sampleRateLabel = new QLabel("Sample Rate (MHz):", this);
-    sampleRateEdit = new QLineEdit(this);
-    sampleRateEdit->setText("16");
-    sampleRateEdit->setFixedWidth(60);
-    outputLayout->addWidget(sampleRateLabel, 2, 0, 1, 2);
-    outputLayout->addWidget(sampleRateEdit, 2, 2);
+    outputLayout->addWidget(sampleRateLabel, 1, 6);
+    outputLayout->addWidget(sampleRateEdit, 1, 7);
 
     mainLayout->addWidget(outputGroup);
     populateChannelCombo();
@@ -167,9 +186,7 @@ void MainWindow::setupUi()
     connect(executeButton, &QPushButton::clicked, this, &MainWindow::executeCommand);
     connect(chooseFileButton, &QPushButton::clicked, this, &MainWindow::chooseFile);
     connect(inputTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onInputTypeChanged);
-    connect(channelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onChannelChanged);
+            this, &MainWindow::onInputTypeChanged);    
 }
 
 void MainWindow::executeCommand()
@@ -217,23 +234,40 @@ QStringList MainWindow::buildCommand()
 {
     QStringList args;
 
-    args << "-o" << outputEdit->text();
+    auto output = outputCombo->currentData().toString();
+
+    args << "-o" << output;
+
+    if (!gainEdit->text().isEmpty()) {
+        args << "-g" << gainEdit->text();
+    }
 
     if (ampEnabledCheckBox->isChecked()) {
         args << "-a" ;
     }
 
-    if (!gainEdit->text().isEmpty()) {
-        args << "-g" << gainEdit->text();
+    if (repeat->isChecked()) {
+         args << "--repeat";
+    }
+
+    if (a2Stereo->isChecked()) {
+        args << "--a2stereo";
+    }
+
+    if (filter->isChecked()) {
+        args << "--filter";
+    }
+
+    if (acp->isChecked()) {
+         args << "--acp";
     }
 
     auto sample_rate = QString::number(sampleRateEdit->text().toInt() * 1000000);
 
     args << "-f" << frequencyEdit->text()
          << "-s" << sample_rate
+         << "--fit" << "fit"
          << "-m" << modeCombo->currentData().toString();
-
-    args << "--repeat";
 
     switch(inputTypeCombo->currentIndex())
     {
@@ -306,75 +340,80 @@ void MainWindow::populateChannelCombo()
     };
 
     QVector<Channel> channels = {
-        {"VHF 2", 48250000},
-        {"VHF 3", 55250000},
-        {"VHF 4", 62250000},
-        {"VHF 5", 175250000},
-        {"VHF 6", 182250000},
-        {"VHF 7", 189250000},
-        {"VHF 8", 196250000},
-        {"VHF 9", 203250000},
-        {"VHF 10", 210250000},
-        {"VHF 11", 217250000},
-        {"VHF 12", 224250000},
-        {"UHF 21", 471250000},
-        {"UHF 22", 479250000},
-        {"UHF 23", 487250000},
-        {"UHF 24", 495250000},
-        {"UHF 25", 503250000},
-        {"UHF 26", 511250000},
-        {"UHF 27", 519250000},
-        {"UHF 28", 527250000},
-        {"UHF 29", 535250000},
-        {"UHF 30", 543250000},
-        {"UHF 31", 551250000},
-        {"UHF 32", 559250000},
-        {"UHF 33", 567250000},
-        {"UHF 34", 575250000},
-        {"UHF 35", 583250000},
-        {"UHF 36", 591250000},
-        {"UHF 37", 599250000},
-        {"UHF 38", 607250000},
-        {"UHF 39", 615250000},
-        {"UHF 40", 623250000},
-        {"UHF 41", 631250000},
-        {"UHF 42", 639250000},
-        {"UHF 43", 647250000},
-        {"UHF 44", 655250000},
-        {"UHF 45", 663250000},
-        {"UHF 46", 671250000},
-        {"UHF 47", 679250000},
-        {"UHF 48", 687250000},
-        {"UHF 49", 695250000},
-        {"UHF 50", 703250000},
-        {"UHF 51", 711250000},
-        {"UHF 52", 719250000},
-        {"UHF 53", 727250000},
-        {"UHF 54", 735250000},
-        {"UHF 55", 743250000},
-        {"UHF 56", 751250000},
-        {"UHF 57", 759250000},
-        {"UHF 58", 767250000},
-        {"UHF 59", 775250000},
-        {"UHF 60", 783250000},
-        {"UHF 61", 791250000},
-        {"UHF 62", 799250000},
-        {"UHF 63", 807250000},
-        {"UHF 64", 815250000},
-        {"UHF 65", 823250000},
-        {"UHF 66", 831250000},
-        {"UHF 67", 839250000},
-        {"UHF 68", 847250000},
-        {"UHF 69", 855250000}
+        {"E2", 48250000},
+        {"E3", 55250000},
+        {"E4", 62250000},
+        {"E5", 175250000},
+        {"E6", 182250000},
+        {"E7", 189250000},
+        {"E8", 196250000},
+        {"E9", 203250000},
+        {"E10", 210250000},
+        {"E11", 217250000},
+        {"E12", 224250000},
+        {"E21", 471250000},
+        {"E22", 479250000},
+        {"E21", 471250000},
+        {"E22", 479250000},
+        {"E23", 487250000},
+        {"E24", 495250000},
+        {"E25", 503250000},
+        {"E26", 511250000},
+        {"E27", 519250000},
+        {"E28", 527250000},
+        {"E29", 535250000},
+        {"E30", 543250000},
+        {"E31", 551250000},
+        {"E32", 559250000},
+        {"E33", 567250000},
+        {"E34", 575250000},
+        {"E35", 583250000},
+        {"E36", 591250000},
+        {"E37", 599250000},
+        {"E38", 607250000},
+        {"E39", 615250000},
+        {"E40", 623250000},
+        {"E41", 631250000},
+        {"E42", 639250000},
+        {"E43", 647250000},
+        {"E44", 655250000},
+        {"E45", 663250000},
+        {"E46", 671250000},
+        {"E47", 679250000},
+        {"E48", 687250000},
+        {"E49", 695250000},
+        {"E50", 703250000},
+        {"E51", 711250000},
+        {"E52", 719250000},
+        {"E53", 727250000},
+        {"E54", 735250000},
+        {"E55", 743250000},
+        {"E56", 751250000},
+        {"E57", 759250000},
+        {"E58", 767250000},
+        {"E59", 775250000},
+        {"E60", 783250000},
+        {"E61", 791250000},
+        {"E62", 799250000},
+        {"E63", 807250000},
+        {"E64", 815250000},
+        {"E65", 823250000},
+        {"E66", 831250000},
+        {"E67", 839250000},
+        {"E68", 847250000},
+        {"E69", 855250000},
     };
 
-    channelCombo->addItem("Custom");
+    connect(channelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onChannelChanged);
+
+    channelCombo->addItem("Custom", "");
 
     for (const auto &channel : channels) {
         channelCombo->addItem(channel.name, channel.frequency);
     }
 
-    int defaultIndex = channelCombo->findText("UHF 69");
+    int defaultIndex = channelCombo->findText("E12");
     if (defaultIndex != -1) {
         channelCombo->setCurrentIndex(defaultIndex);
     }
