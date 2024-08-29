@@ -134,7 +134,7 @@ void MainWindow::setupUi()
 
     // FFmpeg options
     ffmpegOptionsEdit = new QLineEdit(this);
-    ffmpegOptionsEdit->setText("rtsp://example.com/stream");
+    ffmpegOptionsEdit->setText("rtsp://localhost:8554/live");
     ffmpegOptionsEdit->setVisible(false);  // Initially hidden
     inputTypeLayout->addWidget(ffmpegOptionsEdit);
 
