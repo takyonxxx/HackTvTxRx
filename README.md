@@ -1,5 +1,3 @@
-Here's the converted README file in Markdown format:
-
 # HackTvWindows QT 6.6 Library Project
 
 This project is a clone of https://github.com/fsphil/hacktv with modifications for building on Windows.
@@ -8,6 +6,8 @@ This project is a clone of https://github.com/fsphil/hacktv with modifications f
 
 HackTvLib creates library (HackTvLib.dll)
 HackTvGui shows how you will use library
+
+![HackTvGui Screenshot](hacktvgui_screen.png)
 
 ## Installation Instructions
 

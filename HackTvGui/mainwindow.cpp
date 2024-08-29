@@ -76,7 +76,7 @@ void MainWindow::setupUi()
     // Row 3: Sample Rate
     QLabel *sampleRateLabel = new QLabel("Sample Rate (MHz):", this);
     sampleRateEdit = new QLineEdit(this);
-    sampleRateEdit->setText("16000000");
+    sampleRateEdit->setText("16");
     sampleRateEdit->setFixedWidth(60);
     outputLayout->addWidget(sampleRateLabel, 2, 0, 1, 2);
     outputLayout->addWidget(sampleRateEdit, 2, 2);
@@ -227,8 +227,10 @@ QStringList MainWindow::buildCommand()
         args << "-g" << gainEdit->text();
     }
 
+    auto sample_rate = QString::number(sampleRateEdit->text().toInt() * 1000000);
+
     args << "-f" << frequencyEdit->text()
-         << "-s" << sampleRateEdit->text()
+         << "-s" << sample_rate
          << "-m" << modeCombo->currentData().toString();
 
     switch(inputTypeCombo->currentIndex())
