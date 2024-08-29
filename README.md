@@ -4,6 +4,8 @@ Here's the converted README file in Markdown format:
 
 This project is a clone of https://github.com/fsphil/hacktv with modifications for building on Windows.
 
+<b>Please compile with Desktop Qt 6.6x MinGW 64-bit</b>
+
 HackTvLib creates library (HackTvLib.dll)
 HackTvGui shows how you will use library
 
