@@ -24,9 +24,11 @@ private:
     QLineEdit *frequencyEdit;
     QLineEdit *sampleRateEdit;
     QComboBox *modeCombo;
+    QComboBox *channelCombo;
     QLineEdit *inputFileEdit;
     QPushButton *chooseFileButton;
     QPushButton *executeButton;
+    QPushButton *exitButton;
     QFileDialog *fileDialog;
     QComboBox *inputTypeCombo;
     QLineEdit *ffmpegOptionsEdit;
@@ -47,6 +49,8 @@ private slots:
     void chooseFile();
     void updateLogDisplay();
     void onInputTypeChanged(int index);
+    void populateChannelCombo();
+    void onChannelChanged(int index);
 };
 
 #endif // MAINWINDOW_H
