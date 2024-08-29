@@ -103,6 +103,10 @@ private:
     std::atomic<bool> m_abort;
     std::atomic<int> m_signal;
     std::vector<char*> m_argv;
+    bool openDevice();
+    bool setVideo();
+    bool initAv();
+    bool parseArguments();
     void log(const char* format, ...);
     void cleanupArgv();
     void rfLoop();
