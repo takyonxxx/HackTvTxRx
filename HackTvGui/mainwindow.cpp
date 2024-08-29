@@ -176,24 +176,7 @@ void MainWindow::executeCommand()
 {
     if (executeButton->text() == "Start")
     {
-        QStringList args;
-        args << "-o" << outputEdit->text()
-             << "-f" << frequencyEdit->text()
-             << "-s" << sampleRateEdit->text()
-             << "-m" << modeCombo->currentData().toString();
-
-        if (ampEnabledCheckBox->isChecked()) {
-            args << "-a";
-        }
-
-        if (!gainEdit->text().isEmpty()) {
-            args << "-g" << gainEdit->text();
-        }
-
-        // Add input file or other options
-        if (!inputFileEdit->text().isEmpty()) {
-            args << inputFileEdit->text();
-        }
+        QStringList args = buildCommand();
 
         // Convert QStringList to std::vector<std::string>
         std::vector<std::string> stdArgs;
@@ -246,13 +229,12 @@ QStringList MainWindow::buildCommand()
 
     args << "-f" << frequencyEdit->text()
          << "-s" << sampleRateEdit->text()
-         << "-m" << "b";
+         << "-m" << modeCombo->currentData().toString();
 
-    // Add the input type and file
     switch(inputTypeCombo->currentIndex())
     {
     case 1: // Test
-        args << "test";
+        args << "test";        
         break;
     case 2: // FFmpeg
     {
@@ -263,8 +245,10 @@ QStringList MainWindow::buildCommand()
         args << ffmpegArg;
     }
     break;
-    default: // File        
-        args << inputFileEdit->text();
+    default: // File
+        if (!inputFileEdit->text().isEmpty()) {
+            args << inputFileEdit->text();
+        }
         break;
     }
 
@@ -304,7 +288,7 @@ void MainWindow::onInputTypeChanged(int index)
 
     inputFileEdit->setVisible(isFile);
     chooseFileButton->setVisible(isFile);
-    ffmpegOptionsEdit->setVisible(isFFmpeg);
+    ffmpegOptionsEdit->setVisible(isFFmpeg);    
 }
 
 void MainWindow::populateChannelCombo()
@@ -388,7 +372,6 @@ void MainWindow::populateChannelCombo()
         channelCombo->setCurrentIndex(defaultIndex);
     }
 }
-
 
 void MainWindow::onChannelChanged(int index)
 {
