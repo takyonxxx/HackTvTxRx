@@ -32,11 +32,12 @@ private:
     QFileDialog *fileDialog;
     QComboBox *inputTypeCombo;
     QLineEdit *ffmpegOptionsEdit;
-    QCheckBox *ampEnabledCheckBox;
+    QCheckBox *ampEnabled;
     QCheckBox *a2Stereo;
     QCheckBox *repeat;
     QCheckBox *acp;
     QCheckBox *filter;
+    QCheckBox *colorDisabled;
     QLineEdit *gainEdit;
     std::unique_ptr<HackTvLib> m_hackTvLib;
 

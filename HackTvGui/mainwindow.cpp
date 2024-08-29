@@ -42,7 +42,7 @@ void MainWindow::setupUi()
     // Output device group
     QGroupBox *outputGroup = new QGroupBox("Output Device", this);
     QGridLayout *outputLayout = new QGridLayout(outputGroup);
-    outputLayout->setVerticalSpacing(10);
+    outputLayout->setVerticalSpacing(15);
     outputLayout->setHorizontalSpacing(15);
 
     QVector<QPair<QString, QString>> devices = {
@@ -57,8 +57,10 @@ void MainWindow::setupUi()
     for (const auto &device : devices) {
         outputCombo->addItem(device.first, device.second);
     }
-    ampEnabledCheckBox = new QCheckBox("Amp", this);
-    ampEnabledCheckBox->setChecked(true);
+    ampEnabled = new QCheckBox("Amp", this);
+    ampEnabled->setChecked(true);
+    colorDisabled = new QCheckBox("Disable colour", this);
+    colorDisabled->setChecked(false);
     a2Stereo = new QCheckBox("A2 Stereo", this);
     a2Stereo->setChecked(true);
     repeat = new QCheckBox("Repeat", this);
@@ -67,38 +69,39 @@ void MainWindow::setupUi()
     acp->setChecked(true);
     filter = new QCheckBox("Filter", this);
     filter->setChecked(true);
-
-    outputLayout->addWidget(outputLabel, 0, 0);
-    outputLayout->addWidget(outputCombo, 0, 1);
-    outputLayout->addWidget(ampEnabledCheckBox, 0, 2);
-    outputLayout->addWidget(a2Stereo, 0, 3);
-    outputLayout->addWidget(repeat, 0, 4);
-    outputLayout->addWidget(acp, 0, 5);
-    outputLayout->addWidget(filter, 0, 6);
-
-    // Row 2: Gain and Frequency
     QLabel *gainLabel = new QLabel("Gain:", this);
     gainEdit = new QLineEdit(this);
     gainEdit->setText("47");
     gainEdit->setFixedWidth(35);
     QLabel *freqLabel = new QLabel("Frequency (Hz):", this);
-    frequencyEdit = new QLineEdit(this);    
+    frequencyEdit = new QLineEdit(this);
     frequencyEdit->setFixedWidth(75);
     QLabel *channelLabel = new QLabel("Channel:", this);
-    channelCombo = new QComboBox(this);    
+    channelCombo = new QComboBox(this);
     QLabel *sampleRateLabel = new QLabel("Sample Rate (MHz):", this);
     sampleRateEdit = new QLineEdit(this);
     sampleRateEdit->setText("16");
     sampleRateEdit->setFixedWidth(35);
 
-    outputLayout->addWidget(gainLabel, 1, 0);
-    outputLayout->addWidget(gainEdit, 1, 1);
-    outputLayout->addWidget(channelLabel, 1, 2);
-    outputLayout->addWidget(channelCombo, 1, 3);
-    outputLayout->addWidget(freqLabel, 1, 4);
-    outputLayout->addWidget(frequencyEdit, 1, 5);
-    outputLayout->addWidget(sampleRateLabel, 1, 6);
-    outputLayout->addWidget(sampleRateEdit, 1, 7);
+    outputLayout->addWidget(outputLabel, 0, 0);
+    outputLayout->addWidget(outputCombo, 0, 1);
+
+    outputLayout->addWidget(ampEnabled, 1, 0);
+    outputLayout->addWidget(a2Stereo, 1, 1);
+    outputLayout->addWidget(repeat, 1, 2);
+    outputLayout->addWidget(acp, 1, 3);
+    outputLayout->addWidget(filter, 1, 4);
+
+    outputLayout->addWidget(freqLabel, 2, 0);
+    outputLayout->addWidget(frequencyEdit, 2, 1);
+    outputLayout->addWidget(sampleRateLabel, 2, 2);
+    outputLayout->addWidget(sampleRateEdit, 2, 3);
+    outputLayout->addWidget(gainLabel, 2, 4);
+    outputLayout->addWidget(gainEdit, 2, 5);
+
+    outputLayout->addWidget(channelLabel, 3, 0);
+    outputLayout->addWidget(channelCombo, 3, 1);
+    outputLayout->addWidget(colorDisabled, 3, 2);
 
     mainLayout->addWidget(outputGroup);
     populateChannelCombo();
@@ -244,8 +247,12 @@ QStringList MainWindow::buildCommand()
         args << "-g" << gainEdit->text();
     }
 
-    if (ampEnabledCheckBox->isChecked()) {
+    if (ampEnabled->isChecked()) {
         args << "-a" ;
+    }
+
+    if (colorDisabled->isChecked()) {
+        args << "--nocolour" ;
     }
 
     if (repeat->isChecked()) {

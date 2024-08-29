@@ -1226,6 +1226,7 @@ bool HackTvLib::stop()
     vid_free(&s.vid);
     av_ffmpeg_deinit();
     fprintf(stderr, "\n");
+
     log("HackTvLib stopped.");
     return true;
 }
