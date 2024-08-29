@@ -233,6 +233,8 @@ QStringList MainWindow::buildCommand()
          << "-s" << sample_rate
          << "-m" << modeCombo->currentData().toString();
 
+    args << "--repeat";
+
     switch(inputTypeCombo->currentIndex())
     {
     case 1: // Test
@@ -253,6 +255,9 @@ QStringList MainWindow::buildCommand()
         }
         break;
     }
+
+    QString argsString = args.join(' ');
+    logBrowser->append(argsString);
 
     return args;
 }
