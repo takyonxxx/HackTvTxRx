@@ -49,7 +49,7 @@ void MainWindow::setupUi()
         {"HackRF", "hackrf"},
         {"SoapySDR", "soapysdr"},
         {"FL2000", "fl2k"},
-        {"File", "file"}
+        //{"File", "C:\\test.mp4"}
     };
 
     QLabel *outputLabel = new QLabel("Device:", this);
@@ -207,6 +207,8 @@ void MainWindow::executeCommand()
             m_hackTvLib->setArguments(stdArgs);
             if(m_hackTvLib->start()) {
                 executeButton->setText("Stop");
+                QString argsString = args.join(' ');
+                logBrowser->append(argsString);
             } else {               
                 logBrowser->append("Failed to start HackTvLib.");
             }
@@ -289,10 +291,6 @@ QStringList MainWindow::buildCommand()
         }
         break;
     }
-
-    QString argsString = args.join(' ');
-    logBrowser->append(argsString);
-
     return args;
 }
 
