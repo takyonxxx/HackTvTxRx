@@ -8,6 +8,7 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QLabel>
+#include "filters.h"
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
@@ -22,6 +23,7 @@ MainWindow::MainWindow(QWidget *parent)
         m_hackTvLib->setReceivedDataCallback([this](const int16_t* data, size_t samples) {
             handleReceivedData(data, samples);
         });
+        audioOutput = new AudioOutput(this, DEFAULT_AUDIO_SAMPLE_RATE);
     }
     catch (const std::exception& e) {
         qDebug() << "Exception in createHackTvLib:" << e.what();
@@ -35,6 +37,11 @@ MainWindow::MainWindow(QWidget *parent)
     logTimer = new QTimer(this);
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
     logTimer->start(100);
+}
+
+MainWindow::~MainWindow()
+{
+    delete audioOutput;
 }
 
 void MainWindow::setupUi()
@@ -205,21 +212,94 @@ void MainWindow::setupUi()
 
 void MainWindow::processReceivedData(const QVector<int16_t>& data)
 {
-    qDebug() << "Received" << data.size() << "samples.";
+    const float input_sample_rate = _MHZ(2);  // 2 MHz
+    const float output_sample_rate = _KHZ(48);
+    const float max_freq_deviation = _KHZ(75);
 
-    std::vector<std::complex<float>> iq_samples;
-    iq_samples.reserve(data.size() / 2);
-    for (qsizetype i = 0; i < data.size(); i += 2) {
-        float I = data[i] / 32768.0f;
-        float Q = data[i + 1] / 32768.0f;
-        iq_samples.emplace_back(I, Q);
+    try {
+        std::vector<std::complex<float>> iq_samples;
+        iq_samples.reserve(data.size() / 2);
+        AGC agc(0.5f, 0.001f, 0.0001f);
+        for (qsizetype i = 0; i < data.size() - 1; i += 2) {
+            float I = agc.process(data[i] / 32768.0f);
+            float Q = agc.process(data[i + 1] / 32768.0f);
+            iq_samples.emplace_back(I, Q);
+        }
+
+        FMDemodulator demodulator(max_freq_deviation, input_sample_rate);
+        std::vector<float> demodulated = demodulator.demodulate(iq_samples);
+
+        //Apply pre-emphasis
+        float pre_emphasis_alpha = 1.0f - std::exp(-1.0f / (input_sample_rate * 50e-6f));
+        float pre_emphasis_y = 0.0f;
+        for (float& sample : demodulated) {
+            float x = sample;
+            sample = sample + pre_emphasis_alpha * (sample - pre_emphasis_y);
+            pre_emphasis_y = x;
+        }
+
+        //Design and apply lowpass filter
+        std::vector<float> lpf_coeffs = design_lowpass_filter(15000.0f, input_sample_rate, 101);
+        FIRFilter lpf(lpf_coeffs);
+        std::vector<float> filtered;
+        filtered.reserve(demodulated.size());
+        for (float sample : demodulated) {
+            filtered.push_back(lpf.process(sample));
+        }
+
+        // Rational resampling
+        const int upsample_factor = 1;
+        const int downsample_factor = 48;
+
+        std::vector<float> resampled;
+        resampled.reserve(filtered.size() * upsample_factor / downsample_factor);
+        RationalResampler resampler(upsample_factor, downsample_factor);
+
+        for (float sample : filtered) {
+            std::vector<float> resampled_samples = resampler.process(sample);
+            resampled.insert(resampled.end(), resampled_samples.begin(), resampled_samples.end());
+        }
+
+        // De-emphasis filter
+        float de_emphasis_alpha = 1.0f - std::exp(-1.0f / (output_sample_rate * 75e-6f));
+        float de_emphasis_y = 0.0f;
+        for (float& sample : resampled) {
+            de_emphasis_y += de_emphasis_alpha * (sample - de_emphasis_y);
+            sample = de_emphasis_y;
+        }
+
+        // Normalize and apply soft clipping
+        float max_amplitude = *std::max_element(resampled.begin(), resampled.end(),
+                                                [](float a, float b) { return std::abs(a) < std::abs(b); });
+        float scale_factor = (max_amplitude > 0.01f) ? 0.95f / max_amplitude : 1.0f;
+
+        auto soft_clip = [](float x) {
+            return std::tanh(x);
+        };
+
+        QByteArray audioData;
+        audioData.reserve(resampled.size() * sizeof(float));
+
+        for (float sample : resampled) {
+            sample *= scale_factor;
+            sample = soft_clip(sample);
+            audioData.append(reinterpret_cast<const char*>(&sample), sizeof(float));
+        }
+
+        audioOutput->writeBuffer(audioData);
+
+        qDebug() << "Audio" << audioData.size() / sizeof(float) << "samples. Max amplitude:" << max_amplitude;
+        // qDebug() << "First 10 audio samples:";
+        // for (qsizetype i = 0; i < std::min<qsizetype>(10, audioData.size() / sizeof(float)); ++i) {
+        //     float sample = *reinterpret_cast<const float*>(audioData.constData() + i * sizeof(float));
+        //     qDebug() << sample;
+        // }
     }
-
-    std::vector<float> demodulated = m_demodulator.demodulate(iq_samples);
-
-    qDebug() << "Demodulated" << demodulated.size() << "samples. First 10 samples:";
-    for (qsizetype i = 0; i < qMin(qsizetype(10), qsizetype(demodulated.size())); ++i) {
-        qDebug() << demodulated[i];
+    catch (const std::exception& e) {
+        qDebug() << "Exception caught in processReceivedData:" << e.what();
+    }
+    catch (...) {
+        qDebug() << "Unknown exception caught in processReceivedData";
     }
 }
 
@@ -478,5 +558,5 @@ void MainWindow::onChannelChanged(int index)
     }
 
     long long frequency = channelCombo->itemData(index).toLongLong();
-    frequencyEdit->setText(QString::number(frequency));
+    frequencyEdit->setText(QString::number(DEFAULT_FREQUENCY));
 }

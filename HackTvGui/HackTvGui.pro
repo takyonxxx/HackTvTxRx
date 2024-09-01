@@ -1,4 +1,4 @@
-QT       += core gui widgets
+QT       += core gui multimedia
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
@@ -9,11 +9,14 @@ PARENT_DIR = $$absolute_path($$PWD/../)
 INCLUDEPATH += $$PARENT_DIR/include
 LIBS += -L$$PARENT_DIR/lib -lHackTvLib
 
-SOURCES += \   
+SOURCES += \
+    audiooutput.cpp \
     main.cpp \
     mainwindow.cpp
 
-HEADERS += \    
+HEADERS += \
+    audiooutput.h \
+    filters.h \
     mainwindow.h
 
 FORMS += \

@@ -357,11 +357,20 @@ static int _rf_close(void *private)
     return(RF_OK);
 }
 
-int rf_hackrf_open(rxtx_mode mode, rf_t *s, const char *serial, uint32_t sample_rate, uint64_t frequency_hz, unsigned int txvga_gain, unsigned char amp_enable)
+int rf_hackrf_open(
+    rxtx_mode mode, rf_t *s,
+    const char *serial,
+    uint32_t sample_rate,
+    uint64_t frequency_hz,
+    unsigned int rf_gain,
+    unsigned char amp_enable)
 {
     hackrf_t *rf;
     int r;
     uint8_t rev;
+
+    if(rf_gain > 47)
+        rf_gain = 47;
 
     rf = calloc(1, sizeof(hackrf_t));
     if(!rf)
@@ -424,7 +433,7 @@ int rf_hackrf_open(rxtx_mode mode, rf_t *s, const char *serial, uint32_t sample_
         return(RF_ERROR);
     }
 
-    r = hackrf_set_txvga_gain(rf->d, txvga_gain);
+    r = hackrf_set_txvga_gain(rf->d, rf_gain);
     if(r != HACKRF_SUCCESS)
     {
         fprintf(stderr, "hackrf_set_txvga_gain() failed: %s (%d)\n", hackrf_error_name(r), r);
@@ -447,6 +456,43 @@ int rf_hackrf_open(rxtx_mode mode, rf_t *s, const char *serial, uint32_t sample_
 
     if(rf->mode == RX_MODE)
     {
+        if(rf_gain > 40)
+        {
+            rf_gain = 40;
+        }
+
+        r =  hackrf_set_lna_gain(rf->d, rf_gain);
+        if(r != HACKRF_SUCCESS)
+        {
+            fprintf(stderr, "hackrf_set_lna_gain() failed: %s (%d)\n", hackrf_error_name(r), r);
+            free(rf);
+            return(RF_ERROR);
+        }
+
+        r =   hackrf_set_vga_gain(rf->d, rf_gain);
+        if(r != HACKRF_SUCCESS)
+        {
+            fprintf(stderr, " hackrf_set_vga_gain() failed: %s (%d)\n", hackrf_error_name(r), r);
+            free(rf);
+            return(RF_ERROR);
+        }
+
+        r = hackrf_set_amp_enable(rf->d, 0);
+        if(r != HACKRF_SUCCESS)
+        {
+            fprintf(stderr, "hackrf_set_amp_enable() failed: %s (%d)\n", hackrf_error_name(r), r);
+            free(rf);
+            return(RF_ERROR);
+        }
+
+        r = hackrf_set_antenna_enable(rf->d, true);
+        if(r != HACKRF_SUCCESS)
+        {
+            fprintf(stderr, "hackrf_set_antenna_enable() failed: %s (%d)\n", hackrf_error_name(r), r);
+            free(rf);
+            return(RF_ERROR);
+        }
+
         r = hackrf_start_rx(rf->d, _rx_callback, rf);
         if(r != HACKRF_SUCCESS)
         {
@@ -456,7 +502,7 @@ int rf_hackrf_open(rxtx_mode mode, rf_t *s, const char *serial, uint32_t sample_
         }
         printf("hackrf_start_rx() ok\n");
     }
-    else
+    else if(rf->mode == TX_MODE)
     {
         /* Begin transmitting */
         r = hackrf_start_tx(rf->d, _tx_callback, rf);
