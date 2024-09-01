@@ -1188,30 +1188,31 @@ void HackTvLib::rfTxLoop()
 
 void HackTvLib::rfRxLoop()
 {
-    const size_t buffer_size = 262144; // Adjust this based on your needs
-    int16_t* buffer = new int16_t[buffer_size];    
+    const size_t SAMPLES_PER_READ = 131072;  // 262144 / 2, her örnek I/Q çifti olduğu için
+    const size_t BUFFER_SIZE = SAMPLES_PER_READ * 2;
+    std::vector<int16_t> buffer(BUFFER_SIZE);  // vector kullanarak otomatik bellek yönetimi
 
     int retry_count = 0;
-    const int max_retries = 10;
-    const int retry_delay_ms = 100;
+    const int MAX_RETRIES = 10;
+    const std::chrono::milliseconds RETRY_DELAY(100);
 
-    while (!m_abort)
+    while (!m_abort.load(std::memory_order_relaxed))
     {
-        size_t samples_read = rf_read(&s.rf, buffer, buffer_size / 2); // Divide by 2 because each sample is I/Q pair
+        size_t samples_read = rf_read(&s.rf, buffer.data(), SAMPLES_PER_READ);
 
         if (samples_read == 0)
         {
-            if (retry_count < max_retries)
+            if (retry_count < MAX_RETRIES)
             {
-                std::this_thread::sleep_for(std::chrono::milliseconds(retry_delay_ms));
+                std::this_thread::sleep_for(RETRY_DELAY);
                 retry_count++;
                 continue;
             }
             else
             {
+                log("Max retries reached, exiting read loop");
                 break;
             }
-
         }
         else if (samples_read < 0)
         {
@@ -1219,20 +1220,18 @@ void HackTvLib::rfRxLoop()
             break;
         }
 
-        retry_count = 0;        
-        processReceivedData(buffer, samples_read);
+        retry_count = 0;
+        processReceivedData(buffer.data(), samples_read);
 
-        if (m_signal.load() != 0)
+        if (m_signal.load(std::memory_order_relaxed) != 0)
         {
-            log("Caught signal %d", m_signal.load());
-            m_signal.store(0);
+            log("Caught signal %d", m_signal.load(std::memory_order_relaxed));
+            m_signal.store(0, std::memory_order_relaxed);
             break;
         }
     }
 
-    delete[] buffer;
-
-    if (m_abort)
+    if (m_abort.load(std::memory_order_relaxed))
     {
         log("Reception aborted");
     }
@@ -1250,13 +1249,24 @@ void HackTvLib::processReceivedData(int16_t* data, size_t samples)
     }
     static FMDemodulator demodulator;
     std::vector<float> demodulated = demodulator.demodulate(iq_samples);
+    std::cout << iq_samples.size() << std::endl;
 }
 
 bool HackTvLib::stop()
-{   
+{
+    log("HackTvLib trying to stop.");
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_thread.joinable()) {
+            return false;
+        }
+        m_abort.store(true, std::memory_order_relaxed);
+    }
+
     if (!m_thread.joinable()) {
         return false;
     }
+
     m_abort = true;
     m_thread.join();
 

@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <complex>
 #include <vector>
+#include <mutex>
 #include "hacktv/video.h"
 #include "hacktv/rf.h"
 
@@ -128,6 +129,7 @@ public:
 private:
     LogCallback m_logCallback;    
     std::thread m_thread;
+    std::mutex m_mutex;
     std::atomic<bool> m_abort;
     std::atomic<int> m_signal;
     std::vector<char*> m_argv;
