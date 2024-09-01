@@ -1221,7 +1221,8 @@ void HackTvLib::rfRxLoop()
         }
 
         retry_count = 0;
-        processReceivedData(buffer.data(), samples_read);
+
+        emitReceivedData(buffer.data(), samples_read);
 
         if (m_signal.load(std::memory_order_relaxed) != 0)
         {
@@ -1241,15 +1242,14 @@ void HackTvLib::rfRxLoop()
     }
 }
 
-void HackTvLib::processReceivedData(int16_t* data, size_t samples)
-{
-    std::vector<std::complex<float>> iq_samples(samples);
-    for (size_t i = 0; i < samples; ++i) {
-        iq_samples[i] = std::complex<float>(data[2*i] / 32768.0f, data[2*i+1] / 32768.0f);
+void HackTvLib::setReceivedDataCallback(DataCallback callback) {
+    m_dataCallback = std::move(callback);
+}
+
+void HackTvLib::emitReceivedData(const int16_t* data, size_t samples) {
+    if (m_dataCallback) {
+        m_dataCallback(data, samples);
     }
-    static FMDemodulator demodulator;
-    std::vector<float> demodulated = demodulator.demodulate(iq_samples);
-    std::cout << iq_samples.size() << std::endl;
 }
 
 bool HackTvLib::stop()

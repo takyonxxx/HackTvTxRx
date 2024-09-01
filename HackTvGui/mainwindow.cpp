@@ -18,7 +18,10 @@ MainWindow::MainWindow(QWidget *parent)
     try {        
         m_hackTvLib->setLogCallback([this](const std::string& msg) {
             handleLog(msg);
-        });        
+        });
+        m_hackTvLib->setReceivedDataCallback([this](const int16_t* data, size_t samples) {
+            handleReceivedData(data, samples);
+        });
     }
     catch (const std::exception& e) {
         qDebug() << "Exception in createHackTvLib:" << e.what();
@@ -198,6 +201,32 @@ void MainWindow::setupUi()
             this, &MainWindow::onInputTypeChanged);
     connect(rxtxCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onRxTxTypeChanged);
+}
+
+void MainWindow::processReceivedData(const QVector<int16_t>& data)
+{
+    qDebug() << "Received" << data.size() << "samples.";
+
+    std::vector<std::complex<float>> iq_samples;
+    iq_samples.reserve(data.size() / 2);
+    for (qsizetype i = 0; i < data.size(); i += 2) {
+        float I = data[i] / 32768.0f;
+        float Q = data[i + 1] / 32768.0f;
+        iq_samples.emplace_back(I, Q);
+    }
+
+    std::vector<float> demodulated = m_demodulator.demodulate(iq_samples);
+
+    qDebug() << "Demodulated" << demodulated.size() << "samples. First 10 samples:";
+    for (qsizetype i = 0; i < qMin(qsizetype(10), qsizetype(demodulated.size())); ++i) {
+        qDebug() << demodulated[i];
+    }
+}
+
+void MainWindow::handleReceivedData(const int16_t* data, size_t samples)
+{
+    QMetaObject::invokeMethod(this, "processReceivedData", Qt::QueuedConnection,
+                              Q_ARG(QVector<int16_t>, QVector<int16_t>(data, data + samples)));
 }
 
 void MainWindow::executeCommand()

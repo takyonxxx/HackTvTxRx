@@ -91,43 +91,22 @@ typedef struct {
 
 rxtx_mode m_rxTxMode;
 
-struct FMDemodulator {
-    float last_phase;
-    float phase_accumulator;
-
-    FMDemodulator() : last_phase(0), phase_accumulator(0) {}
-
-    std::vector<float> demodulate(const std::vector<std::complex<float>>& input) {
-        std::vector<float> output(input.size());
-        for (size_t i = 0; i < input.size(); ++i) {
-            float phase = std::arg(input[i]);
-            float delta_phase = phase - last_phase;
-            last_phase = phase;
-
-            // Faz farkını -π ile π arasında normalize et
-            if (delta_phase > M_PI) delta_phase -= 2 * M_PI;
-            if (delta_phase < -M_PI) delta_phase += 2 * M_PI;
-
-            phase_accumulator += delta_phase;
-            output[i] = phase_accumulator;
-        }
-        return output;
-    }
-};
-
 class HackTvLib{
 public:
     using LogCallback = std::function<void(const std::string&)>;
+    using DataCallback = std::function<void(const int16_t*, size_t)>;
 
      HackTvLib();
     ~HackTvLib();
     bool start();
     bool stop();
     void setLogCallback(LogCallback callback);
-    bool setArguments(const std::vector<std::string>& args);
+    void setReceivedDataCallback(DataCallback callback);
+    bool setArguments(const std::vector<std::string>& args);    
 
 private:
-    LogCallback m_logCallback;    
+    LogCallback m_logCallback;
+    DataCallback m_dataCallback;
     std::thread m_thread;
     std::mutex m_mutex;
     std::atomic<bool> m_abort;
@@ -141,7 +120,7 @@ private:
     void cleanupArgv();
     void rfTxLoop();
     void rfRxLoop();
-    void processReceivedData(int16_t* data, size_t samples);
+    void emitReceivedData(const int16_t* data, size_t samples);
 };
 
 #endif // HACKTVLIB_H
