@@ -217,6 +217,7 @@ void MainWindow::processReceivedData(const QVector<int16_t>& data)
     const float max_freq_deviation = _KHZ(75);
 
     try {
+
         std::vector<std::complex<float>> iq_samples;
         iq_samples.reserve(data.size() / 2);
         AGC agc(0.5f, 0.001f, 0.0001f);
@@ -289,11 +290,11 @@ void MainWindow::processReceivedData(const QVector<int16_t>& data)
         audioOutput->writeBuffer(audioData);
 
         qDebug() << "Audio" << audioData.size() / sizeof(float) << "samples. Max amplitude:" << max_amplitude;
-        // qDebug() << "First 10 audio samples:";
-        // for (qsizetype i = 0; i < std::min<qsizetype>(10, audioData.size() / sizeof(float)); ++i) {
-        //     float sample = *reinterpret_cast<const float*>(audioData.constData() + i * sizeof(float));
-        //     qDebug() << sample;
-        // }
+        qDebug() << "First 10 audio samples:";
+        for (qsizetype i = 0; i < std::min<qsizetype>(10, audioData.size() / sizeof(float)); ++i) {
+            float sample = *reinterpret_cast<const float*>(audioData.constData() + i * sizeof(float));
+            qDebug() << sample;
+        }
     }
     catch (const std::exception& e) {
         qDebug() << "Exception caught in processReceivedData:" << e.what();

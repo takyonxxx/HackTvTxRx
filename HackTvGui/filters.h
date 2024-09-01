@@ -1,16 +1,13 @@
 #ifndef FILTERS_H
 #define FILTERS_H
 
-#include <iostream>
-#include <complex>
 #include <vector>
 #include <algorithm>
 #include <cmath>
-#include <cmath>
-
+#include <complex>
+#include <numeric>
 
 #define M_PI 3.14159265358979323846
-
 #define F_PI ((float)(M_PI))
 
 namespace fxpt {
@@ -36,6 +33,7 @@ void sincos(int32_t angle, float* sin_out, float* cos_out) {
 #define DEFAULT_FREQUENCY              _MHZ(100)
 #define DEFAULT_RF_SAMPLE_RATE         _MHZ(16)
 #define DEFAULT_AUDIO_SAMPLE_RATE      _KHZ(48)
+#define DEFAULT_CUT_OFF                _KHZ(300)
 
 class AGC {
 public:
@@ -155,5 +153,99 @@ private:
     std::vector<float> buffer_;
     int input_sample_count_;
 };
+
+void resampleIQData(const std::vector<std::complex<float>>& iq_data,
+                    std::vector<std::complex<float>>& resampled_iq_data,
+                    double resample_ratio) {
+    // Calculate the size of the resampled IQ data
+    size_t resampled_size = static_cast<size_t>(iq_data.size() * resample_ratio);
+    resampled_iq_data.resize(resampled_size);
+
+    // Define the predecimation, interpolation, and decimation factors
+    int predec = 0;
+    int interp = 1;
+    int decim = 70;
+
+    // Calculate the input samples per output sample
+    double samples_per_output = static_cast<double>(interp) / decim;
+
+    // Initialize the index for the original IQ data
+    double original_index = 0.0;
+
+    // Resample the IQ data using the specified factors
+    for (size_t i = 0; i < resampled_size; ++i) {
+        // Calculate the integer and fractional parts of the original index
+        size_t integer_index = static_cast<size_t>(original_index);
+        double fraction = original_index - integer_index;
+
+        // Ensure the integer index is within the bounds of the input data
+        size_t lower_index = integer_index;
+        size_t upper_index = std::min(integer_index + 1, iq_data.size() - 1);
+
+        // Perform linear interpolation using lower and upper indices
+        std::complex<float> interpolated_value = iq_data[lower_index] * std::complex<float>(1 - fraction, 0.0f) +
+                                                 iq_data[upper_index] * std::complex<float>(fraction, 0.0f);
+
+        // Store the resampled value in the output vector
+        resampled_iq_data[i] = interpolated_value;
+
+        // Increment the original index by the samples per output sample
+        original_index += samples_per_output;
+    }
+}
+
+void demodulateWFM(const std::vector<std::complex<float>>& resampled_iq_data,
+                   std::vector<float>& demodulated_signal) {
+    demodulated_signal.reserve(resampled_iq_data.size());
+    for (size_t i = 1; i < resampled_iq_data.size(); ++i) {
+        // Calculate the phase difference
+        std::complex<float> previous_sample = resampled_iq_data[i - 1];
+        std::complex<float> current_sample = resampled_iq_data[i];
+
+        float phase_diff = std::arg(current_sample * std::conj(previous_sample));
+
+        // Store the phase difference in the demodulated signal
+        demodulated_signal.push_back(phase_diff);
+    }
+}
+
+void applyLowPassFilter(const std::vector<float>& input_signal, std::vector<float>& output_signal,
+                        int sample_rate, float cutoff_frequency, size_t num_taps = 101) {
+    // Calculate the filter coefficients using the Hamming window method
+    std::vector<float> filter_coefficients(num_taps);
+    float nyquist = 0.5f * sample_rate;
+    float normalized_cutoff = cutoff_frequency / nyquist;
+
+    // Calculate the filter coefficients using the sinc function and Hamming window
+    size_t mid = num_taps / 2;
+    for (size_t n = 0; n < num_taps; ++n) {
+        float hamming_window = 0.54 - 0.46 * cos((2 * M_PI * n) / (num_taps - 1));
+        float sinc_value = sin(2 * M_PI * normalized_cutoff * (n - mid)) /
+                           (M_PI * (n - mid));
+        if (n == mid) {
+            sinc_value = 2 * normalized_cutoff;
+        }
+        filter_coefficients[n] = hamming_window * sinc_value;
+    }
+
+    // Normalize the filter coefficients
+    float sum = std::accumulate(filter_coefficients.begin(), filter_coefficients.end(), 0.0f);
+    for (float& coeff : filter_coefficients) {
+        coeff /= sum;
+    }
+
+    // Apply the filter to the input signal using convolution
+    output_signal.resize(input_signal.size());
+    for (size_t i = 0; i < input_signal.size(); ++i) {
+        float filtered_sample = 0.0f;
+        for (size_t j = 0; j < num_taps; ++j) {
+            int index = static_cast<int>(i) - static_cast<int>(j) + static_cast<int>(mid);
+            if (index >= 0 && index < static_cast<int>(input_signal.size())) {
+                filtered_sample += input_signal[index] * filter_coefficients[j];
+            }
+        }
+        output_signal[i] = filtered_sample;
+    }
+}
 
 #endif // FILTERS_H
