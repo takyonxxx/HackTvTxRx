@@ -82,6 +82,10 @@ void MainWindow::setupUi()
     sampleRateEdit = new QLineEdit(this);
     sampleRateEdit->setText("16");
     sampleRateEdit->setFixedWidth(35);
+    QLabel *rxtxLabel = new QLabel("RxTx Mode:", this);
+    rxtxCombo = new QComboBox(this);
+    rxtxCombo->addItem("TX", "tx");
+    rxtxCombo->addItem("RX", "rx");
 
     outputLayout->addWidget(outputLabel, 0, 0);
     outputLayout->addWidget(outputCombo, 0, 1);
@@ -92,22 +96,24 @@ void MainWindow::setupUi()
     outputLayout->addWidget(acp, 1, 3);
     outputLayout->addWidget(filter, 1, 4);
 
-    outputLayout->addWidget(freqLabel, 2, 0);
-    outputLayout->addWidget(frequencyEdit, 2, 1);
+    outputLayout->addWidget(channelLabel, 2, 0);
+    outputLayout->addWidget(channelCombo, 2, 1);
     outputLayout->addWidget(sampleRateLabel, 2, 2);
     outputLayout->addWidget(sampleRateEdit, 2, 3);
     outputLayout->addWidget(gainLabel, 2, 4);
     outputLayout->addWidget(gainEdit, 2, 5);
 
-    outputLayout->addWidget(channelLabel, 3, 0);
-    outputLayout->addWidget(channelCombo, 3, 1);
-    outputLayout->addWidget(colorDisabled, 3, 2);
+    outputLayout->addWidget(freqLabel, 3, 0);
+    outputLayout->addWidget(frequencyEdit, 3, 1);    
+    outputLayout->addWidget(rxtxLabel, 3, 2);
+    outputLayout->addWidget(rxtxCombo, 3, 3);
+    outputLayout->addWidget(colorDisabled, 3, 4);
 
     mainLayout->addWidget(outputGroup);
     populateChannelCombo();
 
     // Mode group
-    QGroupBox *modeGroup = new QGroupBox("Mode", this);
+    modeGroup = new QGroupBox("Mode", this);
     QHBoxLayout *modeLayout = new QHBoxLayout(modeGroup);
     modeCombo = new QComboBox(this);
 
@@ -139,7 +145,7 @@ void MainWindow::setupUi()
     mainLayout->addWidget(modeGroup);
 
     // Input type group
-    QGroupBox *inputTypeGroup = new QGroupBox("Input Type", this);
+    inputTypeGroup = new QGroupBox("Input Type", this);
     QVBoxLayout *inputTypeLayout = new QVBoxLayout(inputTypeGroup);
     inputTypeCombo = new QComboBox(this);
     inputTypeCombo->addItems({"File", "Test", "FFmpeg"});
@@ -189,7 +195,9 @@ void MainWindow::setupUi()
     connect(executeButton, &QPushButton::clicked, this, &MainWindow::executeCommand);
     connect(chooseFileButton, &QPushButton::clicked, this, &MainWindow::chooseFile);
     connect(inputTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onInputTypeChanged);    
+            this, &MainWindow::onInputTypeChanged);
+    connect(rxtxCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onRxTxTypeChanged);
 }
 
 void MainWindow::executeCommand()
@@ -271,11 +279,13 @@ QStringList MainWindow::buildCommand()
          args << "--acp";
     }
 
+    QString mode = rxtxCombo->currentText().toLower();
+    args << "--rx-tx-mode" << mode;
+
     auto sample_rate = QString::number(sampleRateEdit->text().toInt() * 1000000);
 
     args << "-f" << frequencyEdit->text()
          << "-s" << sample_rate
-         << "--fit" << "fit"
          << "-m" << modeCombo->currentData().toString();
 
     switch(inputTypeCombo->currentIndex())
@@ -335,6 +345,13 @@ void MainWindow::onInputTypeChanged(int index)
     inputFileEdit->setVisible(isFile);
     chooseFileButton->setVisible(isFile);
     ffmpegOptionsEdit->setVisible(isFFmpeg);    
+}
+
+void MainWindow::onRxTxTypeChanged(int index)
+{
+    bool isTx = (index == 0);
+    inputTypeGroup->setVisible(isTx);
+    modeGroup->setVisible(isTx);
 }
 
 void MainWindow::populateChannelCombo()

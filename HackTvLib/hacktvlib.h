@@ -6,6 +6,8 @@
 #include <thread>
 #include <atomic>
 #include <stdint.h>
+#include <complex>
+#include <vector>
 #include "hacktv/video.h"
 #include "hacktv/rf.h"
 
@@ -86,6 +88,32 @@ typedef struct {
 
 } hacktv_t;
 
+rxtx_mode m_rxTxMode;
+
+struct FMDemodulator {
+    float last_phase;
+    float phase_accumulator;
+
+    FMDemodulator() : last_phase(0), phase_accumulator(0) {}
+
+    std::vector<float> demodulate(const std::vector<std::complex<float>>& input) {
+        std::vector<float> output(input.size());
+        for (size_t i = 0; i < input.size(); ++i) {
+            float phase = std::arg(input[i]);
+            float delta_phase = phase - last_phase;
+            last_phase = phase;
+
+            // Faz farkını -π ile π arasında normalize et
+            if (delta_phase > M_PI) delta_phase -= 2 * M_PI;
+            if (delta_phase < -M_PI) delta_phase += 2 * M_PI;
+
+            phase_accumulator += delta_phase;
+            output[i] = phase_accumulator;
+        }
+        return output;
+    }
+};
+
 class HackTvLib{
 public:
     using LogCallback = std::function<void(const std::string&)>;
@@ -109,7 +137,9 @@ private:
     bool parseArguments();
     void log(const char* format, ...);
     void cleanupArgv();
-    void rfLoop();
+    void rfTxLoop();
+    void rfRxLoop();
+    void processReceivedData(int16_t* data, size_t samples);
 };
 
 #endif // HACKTVLIB_H

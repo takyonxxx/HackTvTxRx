@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <iostream>
 #include "hacktv/av.h"
 #include "hacktv/rf.h"
 
@@ -72,6 +73,7 @@ enum {
     _OPT_LETTERBOX,
     _OPT_PILLARBOX,
     _OPT_VERSION,
+    _OPT_MODE,
 };
 
 static struct option long_options[] = {
@@ -139,20 +141,9 @@ static struct option long_options[] = {
     { "antenna",        required_argument, 0, 'A' },
     { "type",           required_argument, 0, 't' },
     { "version",        no_argument,       0, _OPT_VERSION },
+    { "rx-tx-mode",     required_argument, 0, _OPT_MODE },
     { 0,                0,                 0,  0  }
 };
-
-// char* strdup(const char* str) {
-//     if (str == nullptr) {
-//         return nullptr;
-//     }
-//     size_t len = strlen(str) + 1;
-//     char* copy = static_cast<char*>(std::malloc(len));
-//     if (copy) {
-//         std::strcpy(copy, str);
-//     }
-//     return copy;
-// }
 
 static int _parse_ratio(rational_t *r, const char *s)
 {
@@ -186,69 +177,6 @@ static void print_usage(void)
         );
 }
 
-/* fputs() a string with JSON-style escape sequences */
-static int _fputs_json(const char *str, FILE *stream)
-{
-    int c;
-
-    for(c = 0; *str; str++)
-    {
-        const char *s = NULL;
-        int r;
-
-        switch(*str)
-        {
-        case '"': s = "\\\""; break;
-        case '\\': s = "\\\\"; break;
-        //case '/': s = "\\/"; break;
-        case '\b': s = "\\b"; break;
-        case '\f': s = "\\f"; break;
-        case '\n': s = "\\n"; break;
-        case '\r': s = "\\r"; break;
-        case '\t': s = "\\t"; break;
-        }
-
-        if(s) r = fputs(s, stream);
-        else r = fputc(*str, stream) == EOF ? EOF : 1;
-
-        if(r == EOF)
-        {
-            return(c > 0 ? c : EOF);
-        }
-
-        c += r;
-    }
-
-    return(c);
-}
-
-/* List all avaliable modes, optionally formatted as a JSON array */
-static void _list_modes(int json)
-{
-    const vid_configs_t *vc;
-
-    if(json) printf("[\n");
-
-    /* Load the mode configuration */
-    for(vc = vid_configs; vc->id != NULL; vc++)
-    {
-        if(json)
-        {
-            printf("  {\n    \"id\": \"");
-            _fputs_json(vc->id, stdout);
-            printf("\",\n    \"description\": \"");
-            _fputs_json(vc->desc ? vc->desc : "", stdout);
-            printf("\"\n  }%s\n", vc[1].id != NULL ? "," : "");
-        }
-        else
-        {
-            printf("  %-14s = %s\n", vc->id, vc->desc ? vc->desc : "");
-        }
-    }
-
-    if(json) printf("]\n");
-}
-
 HackTvLib::HackTvLib()
     : m_abort(false), m_signal(0)
 {
@@ -276,6 +204,21 @@ void HackTvLib::log(const char* format, ...) {
     }
 }
 
+const char* getRxTxModeString(rxtx_mode mode) {
+    switch (mode) {
+    case TX_MODE:
+        return "TX";
+    case RX_MODE:
+        return "RX";
+    default:
+        return "Unknown";
+    }
+}
+
+const char* getBoolString(int value) {
+    return value ? "True" : "False";
+}
+
 bool HackTvLib::start()
 {
 
@@ -289,13 +232,13 @@ bool HackTvLib::start()
     s.output_type = "hackrf";
     s.output = NULL;
     s.mode = "b";
-    s.samplerate = 20000000;
+    s.samplerate = 16000000;
     s.pixelrate = 0;
     s.level = 1.0;
     s.deviation = -1;
     s.gamma = -1;
     s.interlace = 0;
-    s.fit_mode = AV_FIT_STRETCH;
+    s.fit_mode = AV_FIT_FIT;
     s.repeat = 0;
     s.shuffle = 0;
     s.verbose = 0;
@@ -328,21 +271,25 @@ bool HackTvLib::start()
     s.file_type = RF_INT16;
     s.raw_bb_blanking_level = 0;
     s.raw_bb_white_level = INT16_MAX;
+    m_rxTxMode = TX_MODE;
 
     if(!parseArguments())
         return false;
 
-    log("freq: %.3f MHz, sample: %.1f MHz, gain: %d, amp: %d, mode: %s",
+    log("Freq: %.3f MHz, Sample: %.1f MHz, Gain: %d, Amp: %s, RxTx: %s",
         s.frequency / 1e6,
         s.samplerate / 1e6,
         s.gain,
-        s.amp,
-        s.mode);
+        getBoolString(s.amp),
+        getRxTxModeString(m_rxTxMode));
 
-    if(optind >= m_argv.size())
+    if(m_rxTxMode == TX_MODE)
     {
-        log("No input specified.");
-        return false;
+        if(optind >= m_argv.size())
+        {
+            log("No input specified.");
+            return false;
+        }
     }
 
     if(!setVideo())
@@ -354,84 +301,29 @@ bool HackTvLib::start()
     if(!initAv())
         return false;
 
-    if (m_thread.joinable()) {
-        return false;
-    }
+    if(m_rxTxMode == TX_MODE)
+    {
+        if (m_thread.joinable()) {
+            return false;
+        }
 
-    m_abort = false;
-    m_signal = 0;
-    m_thread = std::thread(&HackTvLib::rfLoop, this);
+        m_abort = false;
+        m_signal = 0;
+        m_thread = std::thread(&HackTvLib::rfTxLoop, this);
+    }
+    else
+    {
+        if (m_thread.joinable()) {
+            return false;
+        }
+
+        m_abort = false;
+        m_signal = 0;
+        m_thread = std::thread(&HackTvLib::rfRxLoop, this);
+    }
 
     log("HackTvLib started.");
     return true;
-}
-
-void HackTvLib::rfLoop()
-{
-    do
-    {
-        if (s.shuffle)
-        {
-            // Shuffle the input source list
-            for (int c = optind; c < m_argv.size() - 1; c++)
-            {
-                int l = c + (rand() % (m_argv.size() - c - (c == optind ? 1 : 0)));
-                std::swap(m_argv[c], m_argv[l]);
-            }
-        }
-
-        for (size_t c = optind; c < m_argv.size() && !m_abort; c++)
-        {
-            char* pre = m_argv[c];
-            char* sub = strchr(pre, ':');
-            size_t l;
-            if (sub != NULL)
-            {
-                l = sub - pre;
-                sub++;
-            }
-            else
-            {
-                l = strlen(pre);
-            }
-
-            int r;
-            if (strncmp(pre, "test", l) == 0)
-            {
-                r = av_test_open(&s.vid.av);
-            }
-            else if (strncmp(pre, "ffmpeg", l) == 0)
-            {
-                r = av_ffmpeg_open(&s.vid.av, sub, s.ffmt, s.fopts);
-            }
-            else
-            {
-                r = av_ffmpeg_open(&s.vid.av, pre, s.ffmt, s.fopts);
-            }
-
-            if (r != HACKTV_OK)
-            {
-                // Error opening this source. Move to the next
-                continue;
-            }
-
-            while (!m_abort)
-            {
-                size_t samples;
-                int16_t* data = vid_next_line(&s.vid, &samples);
-                if (data == NULL) break;
-                if (rf_write(&s.rf, data, samples) != RF_OK) break;
-            }
-
-            if (m_signal.load() != 0)
-            {
-                log("Caught signal %d", m_signal.load());
-                m_signal.store(0);
-            }
-
-            av_close(&s.vid.av);
-        }
-    } while (s.repeat && !m_abort);
 }
 
 void HackTvLib::cleanupArgv()
@@ -458,8 +350,8 @@ bool HackTvLib::openDevice()
     if(strcmp(s.output_type, "hackrf") == 0)
     {
 #ifdef HAVE_HACKRF
-        if(rf_hackrf_open(&s.rf, s.output, s.vid.sample_rate, s.frequency, s.gain, s.amp) != RF_OK)
-        {
+        if(rf_hackrf_open(m_rxTxMode, &s.rf, s.output, s.vid.sample_rate, s.frequency, s.gain, s.amp) != RF_OK)
+        {            
             vid_free(&s.vid);
             log("Could not open HackRF. Please check the device.");
             return false;
@@ -1206,6 +1098,18 @@ bool HackTvLib::parseArguments()
             print_version();
             return true;
 
+        case _OPT_MODE:
+            if (strcmp(optarg, "rx") == 0) {
+                m_rxTxMode = RX_MODE;
+            } else if (strcmp(optarg, "tx") == 0) {
+                m_rxTxMode = TX_MODE;
+            } else {
+                fprintf(stderr, "Invalid mode. Use 'rx' or 'tx'.\n");
+                return false;
+            }
+            printf("m_rxTxMode value: %s\n", m_rxTxMode == RX_MODE ? "RX_MODE" : "TX_MODE");
+            break;
+
         case '?':
             print_usage();
             return true;
@@ -1214,8 +1118,142 @@ bool HackTvLib::parseArguments()
     return true;
 }
 
-bool HackTvLib::stop()
+void HackTvLib::rfTxLoop()
 {
+    do
+    {
+        if (s.shuffle)
+        {
+            // Shuffle the input source list
+            for (int c = optind; c < m_argv.size() - 1; c++)
+            {
+                int l = c + (rand() % (m_argv.size() - c - (c == optind ? 1 : 0)));
+                std::swap(m_argv[c], m_argv[l]);
+            }
+        }
+
+        for (size_t c = optind; c < m_argv.size() && !m_abort; c++)
+        {
+            char* pre = m_argv[c];
+            char* sub = strchr(pre, ':');
+            size_t l;
+            if (sub != NULL)
+            {
+                l = sub - pre;
+                sub++;
+            }
+            else
+            {
+                l = strlen(pre);
+            }
+
+            int r;
+            if (strncmp(pre, "test", l) == 0)
+            {
+                r = av_test_open(&s.vid.av);
+            }
+            else if (strncmp(pre, "ffmpeg", l) == 0)
+            {
+                r = av_ffmpeg_open(&s.vid.av, sub, s.ffmt, s.fopts);
+            }
+            else
+            {
+                r = av_ffmpeg_open(&s.vid.av, pre, s.ffmt, s.fopts);
+            }
+
+            if (r != HACKTV_OK)
+            {
+                // Error opening this source. Move to the next
+                continue;
+            }
+
+            while (!m_abort)
+            {
+                size_t samples;
+                int16_t* data = vid_next_line(&s.vid, &samples);
+                if (data == NULL) break;
+                if (rf_write(&s.rf, data, samples) != RF_OK) break;
+            }
+
+            if (m_signal.load() != 0)
+            {
+                log("Caught signal %d", m_signal.load());
+                m_signal.store(0);
+            }
+
+            av_close(&s.vid.av);
+        }
+    } while (s.repeat && !m_abort);
+}
+
+void HackTvLib::rfRxLoop()
+{
+    const size_t buffer_size = 262144; // Adjust this based on your needs
+    int16_t* buffer = new int16_t[buffer_size];    
+
+    int retry_count = 0;
+    const int max_retries = 10;
+    const int retry_delay_ms = 100;
+
+    while (!m_abort)
+    {
+        size_t samples_read = rf_read(&s.rf, buffer, buffer_size / 2); // Divide by 2 because each sample is I/Q pair
+
+        if (samples_read == 0)
+        {
+            if (retry_count < max_retries)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(retry_delay_ms));
+                retry_count++;
+                continue;
+            }
+            else
+            {
+                break;
+            }
+
+        }
+        else if (samples_read < 0)
+        {
+            log("Error reading from HackRF. Error code: %d", samples_read);
+            break;
+        }
+
+        retry_count = 0;        
+        processReceivedData(buffer, samples_read);
+
+        if (m_signal.load() != 0)
+        {
+            log("Caught signal %d", m_signal.load());
+            m_signal.store(0);
+            break;
+        }
+    }
+
+    delete[] buffer;
+
+    if (m_abort)
+    {
+        log("Reception aborted");
+    }
+    else
+    {
+        log("Reception completed");
+    }
+}
+
+void HackTvLib::processReceivedData(int16_t* data, size_t samples)
+{
+    std::vector<std::complex<float>> iq_samples(samples);
+    for (size_t i = 0; i < samples; ++i) {
+        iq_samples[i] = std::complex<float>(data[2*i] / 32768.0f, data[2*i+1] / 32768.0f);
+    }
+    static FMDemodulator demodulator;
+    std::vector<float> demodulated = demodulator.demodulate(iq_samples);
+}
+
+bool HackTvLib::stop()
+{   
     if (!m_thread.joinable()) {
         return false;
     }

@@ -7,6 +7,7 @@
 #include <QTimer>
 #include "hacktvlib.h"
 
+class QGroupBox;
 class QLineEdit;
 class QComboBox;
 class QPushButton;
@@ -19,11 +20,15 @@ class MainWindow : public QMainWindow
 public:
     MainWindow(QWidget *parent = nullptr);
 
-private:    
+private:
+    QGroupBox *modeGroup;
+    QGroupBox *inputTypeGroup;
+
     QLineEdit *frequencyEdit;
     QLineEdit *sampleRateEdit;
     QComboBox *outputCombo;
     QComboBox *modeCombo;
+    QComboBox *rxtxCombo;
     QComboBox *channelCombo;
     QLineEdit *inputFileEdit;
     QPushButton *chooseFileButton;
@@ -54,6 +59,7 @@ private slots:
     void chooseFile();
     void updateLogDisplay();
     void onInputTypeChanged(int index);
+    void onRxTxTypeChanged(int index);
     void populateChannelCombo();
     void onChannelChanged(int index);
 };

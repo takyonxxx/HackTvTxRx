@@ -40,7 +40,6 @@ SOURCES += \
     hacktv/dance.c \
     hacktv/eurocrypt.c \
     hacktv/fir.c \
-    hacktv/hacktv.c \
     hacktv/mac.c \
     hacktv/nicam728.c \
     hacktv/rf.c \

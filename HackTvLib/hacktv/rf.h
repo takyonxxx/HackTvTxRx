@@ -46,15 +46,24 @@ extern "C" {
 
 /* RF output function prototypes */
 typedef int (*rf_write_t)(void *ctx, int16_t *iq_data, size_t samples);
+typedef int (*rf_read_t)(void *ctx, int16_t *iq_data, size_t samples);
 typedef int (*rf_close_t)(void *ctx);
 
 typedef struct rf_t {
-    void *ctx;
+    void *ctx;    
     rf_write_t write;
+    rf_read_t read;
     rf_close_t close;
 } rf_t;
 
+
+typedef enum RxTxMode {
+    TX_MODE,
+    RX_MODE,
+}rxtx_mode;
+
 extern int rf_write(rf_t *s, int16_t *iq_data, size_t samples);
+extern int rf_read(rf_t *s, int16_t *iq_data, size_t samples);
 extern int rf_close(rf_t *s);
 
 #include "rf_file.h"

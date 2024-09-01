@@ -30,6 +30,16 @@ int rf_write(rf_t *s, int16_t *iq_data, size_t samples)
 	return(RF_ERROR);
 }
 
+int rf_read(rf_t *s, int16_t *iq_data, size_t samples)
+{
+    if(s->read)
+    {
+        return(s->read(s->ctx, iq_data, samples));
+    }
+
+    return(RF_ERROR);
+}
+
 int rf_close(rf_t *s)
 {
 	if(s->close)
