@@ -212,14 +212,14 @@ void MainWindow::setupUi()
 
 void MainWindow::processReceivedData(const QVector<int16_t>& data)
 {
-    const float input_sample_rate = _MHZ(2);  // 2 MHz
+    const float input_sample_rate = _MHZ(16);
     const float output_sample_rate = _KHZ(48);
-    const float max_freq_deviation = _KHZ(75);
 
     try {
 
         std::vector<std::complex<float>> iq_samples;
         iq_samples.reserve(data.size() / 2);
+
         AGC agc(0.5f, 0.001f, 0.0001f);
         for (qsizetype i = 0; i < data.size() - 1; i += 2) {
             float I = agc.process(data[i] / 32768.0f);
@@ -227,74 +227,50 @@ void MainWindow::processReceivedData(const QVector<int16_t>& data)
             iq_samples.emplace_back(I, Q);
         }
 
-        FMDemodulator demodulator(max_freq_deviation, input_sample_rate);
-        std::vector<float> demodulated = demodulator.demodulate(iq_samples);
+        qDebug() << data.size();
 
-        //Apply pre-emphasis
-        float pre_emphasis_alpha = 1.0f - std::exp(-1.0f / (input_sample_rate * 50e-6f));
-        float pre_emphasis_y = 0.0f;
-        for (float& sample : demodulated) {
-            float x = sample;
-            sample = sample + pre_emphasis_alpha * (sample - pre_emphasis_y);
-            pre_emphasis_y = x;
-        }
+        // // Apply resampler
+        // RationalResampler resampler(12, 1);
+        // std::vector<std::complex<float>> resampled_samples = resampler.resample(iq_samples);
 
-        //Design and apply lowpass filter
-        std::vector<float> lpf_coeffs = design_lowpass_filter(15000.0f, input_sample_rate, 101);
-        FIRFilter lpf(lpf_coeffs);
-        std::vector<float> filtered;
-        filtered.reserve(demodulated.size());
-        for (float sample : demodulated) {
-            filtered.push_back(lpf.process(sample));
-        }
+        // // WFM Demodulation
+        // WfmDemodulator demodulator(5.0f);  // Adjust gain as necessary
+        // std::vector<float> demodulated_audio = demodulator.demodulate(resampled_samples);
 
-        // Rational resampling
-        const int upsample_factor = 1;
-        const int downsample_factor = 48;
+        // // Design FIR filter using low-pass filter design parameters
+        // std::vector<float> fir_taps = design_low_pass_filter(101, output_sample_rate, DEFAULT_CUT_OFF, DEFAULT_CUT_OFF);
+        // FirFilter fir_filter(fir_taps);
 
-        std::vector<float> resampled;
-        resampled.reserve(filtered.size() * upsample_factor / downsample_factor);
-        RationalResampler resampler(upsample_factor, downsample_factor);
+        // // Apply FIR filter
+        // std::vector<float> filtered_audio = fir_filter.filter(demodulated_audio);
 
-        for (float sample : filtered) {
-            std::vector<float> resampled_samples = resampler.process(sample);
-            resampled.insert(resampled.end(), resampled_samples.begin(), resampled_samples.end());
-        }
+        // // Optional: Normalize and apply soft clipping
+        // float max_amplitude = *std::max_element(filtered_audio.begin(), filtered_audio.end(),
+        //                                         [](float a, float b) { return std::abs(a) < std::abs(b); });
+        // float scale_factor = (max_amplitude > 0.01f) ? 0.95f / max_amplitude : 1.0f;
 
-        // De-emphasis filter
-        float de_emphasis_alpha = 1.0f - std::exp(-1.0f / (output_sample_rate * 75e-6f));
-        float de_emphasis_y = 0.0f;
-        for (float& sample : resampled) {
-            de_emphasis_y += de_emphasis_alpha * (sample - de_emphasis_y);
-            sample = de_emphasis_y;
-        }
+        // auto soft_clip = [](float x) {
+        //     return std::tanh(x);
+        // };
 
-        // Normalize and apply soft clipping
-        float max_amplitude = *std::max_element(resampled.begin(), resampled.end(),
-                                                [](float a, float b) { return std::abs(a) < std::abs(b); });
-        float scale_factor = (max_amplitude > 0.01f) ? 0.95f / max_amplitude : 1.0f;
+        // QByteArray audioData;
+        // audioData.reserve(filtered_audio.size() * sizeof(float));
 
-        auto soft_clip = [](float x) {
-            return std::tanh(x);
-        };
+        // for (float sample : filtered_audio) {
+        //     sample *= scale_factor;
+        //     sample = soft_clip(sample);
+        //     audioData.append(reinterpret_cast<const char*>(&sample), sizeof(float));
+        // }
 
-        QByteArray audioData;
-        audioData.reserve(resampled.size() * sizeof(float));
+        // audioOutput->writeBuffer(audioData);
 
-        for (float sample : resampled) {
-            sample *= scale_factor;
-            sample = soft_clip(sample);
-            audioData.append(reinterpret_cast<const char*>(&sample), sizeof(float));
-        }
+        // qDebug() << "Audio" << audioData.size() / sizeof(float) << "samples. Max amplitude:" << max_amplitude;
+        // qDebug() << "First 10 audio samples:";
+        // for (qsizetype i = 0; i < std::min<qsizetype>(10, audioData.size() / sizeof(float)); ++i) {
+        //     float sample = *reinterpret_cast<const float*>(audioData.constData() + i * sizeof(float));
+        //     qDebug() << sample;
+        // }
 
-        audioOutput->writeBuffer(audioData);
-
-        qDebug() << "Audio" << audioData.size() / sizeof(float) << "samples. Max amplitude:" << max_amplitude;
-        qDebug() << "First 10 audio samples:";
-        for (qsizetype i = 0; i < std::min<qsizetype>(10, audioData.size() / sizeof(float)); ++i) {
-            float sample = *reinterpret_cast<const float*>(audioData.constData() + i * sizeof(float));
-            qDebug() << sample;
-        }
     }
     catch (const std::exception& e) {
         qDebug() << "Exception caught in processReceivedData:" << e.what();

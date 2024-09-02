@@ -6,6 +6,17 @@
 #include <cmath>
 #include <complex>
 #include <numeric>
+#include <stdexcept>
+
+#define _GHZ(x) ((uint64_t)(x) * 1000000000)
+#define _MHZ(x) ((x) * 1000000)
+#define _KHZ(x) ((x) * 1000)
+#define _HZ(x) ((x) * 1)
+
+#define DEFAULT_FREQUENCY              _MHZ(100)
+#define DEFAULT_RF_SAMPLE_RATE         _MHZ(16)
+#define DEFAULT_AUDIO_SAMPLE_RATE      _KHZ(48)
+#define DEFAULT_CUT_OFF                _KHZ(75)
 
 #define M_PI 3.14159265358979323846
 #define F_PI ((float)(M_PI))
@@ -25,15 +36,48 @@ void sincos(int32_t angle, float* sin_out, float* cos_out) {
 }
 
 
-#define _GHZ(x) ((uint64_t)(x) * 1000000000)
-#define _MHZ(x) ((x) * 1000000)
-#define _KHZ(x) ((x) * 1000)
-#define _HZ(x) ((x) * 1)
+// Hamming window function
+std::vector<float> hamming_window(int n) {
+    std::vector<float> window(n);
+    for (int i = 0; i < n; ++i) {
+        window[i] = 0.54f - 0.46f * std::cos(2 * M_PI * i / (n - 1));
+    }
+    return window;
+}
 
-#define DEFAULT_FREQUENCY              _MHZ(100)
-#define DEFAULT_RF_SAMPLE_RATE         _MHZ(16)
-#define DEFAULT_AUDIO_SAMPLE_RATE      _KHZ(48)
-#define DEFAULT_CUT_OFF                _KHZ(300)
+// Design a low-pass FIR filter
+std::vector<float> design_low_pass_filter(int taps, float sample_rate, float cutoff_freq, float transition_width) {
+    std::vector<float> filter_taps(taps);
+
+    float fc = cutoff_freq / (sample_rate / 2);  // Normalized cutoff frequency (0 to 1)
+    float tw = transition_width / (sample_rate / 2);  // Normalized transition width
+
+    int m = taps - 1;
+    float sum = 0.0f;
+
+    // Generate the ideal sinc filter
+    for (int i = 0; i <= m; ++i) {
+        float sinc_arg = M_PI * (i - m / 2.0f);
+        if (sinc_arg == 0.0f) {
+            filter_taps[i] = 2 * fc;
+        } else {
+            filter_taps[i] = std::sin(2 * M_PI * fc * (i - m / 2.0f)) / sinc_arg;
+        }
+
+        // Apply the Hamming window
+        filter_taps[i] *= 0.54f - 0.46f * std::cos(2 * M_PI * i / m);
+
+        sum += filter_taps[i];
+    }
+
+    // Normalize filter taps
+    for (int i = 0; i <= m; ++i) {
+        filter_taps[i] /= sum;
+    }
+
+    return filter_taps;
+}
+
 
 class AGC {
 public:
@@ -54,198 +98,169 @@ private:
     float target_level, attack_rate, decay_rate, gain;
 };
 
-class FMDemodulator {
-public:
-    FMDemodulator(float max_freq_deviation, float sample_rate)
-        : d_max_freq_deviation(max_freq_deviation),
-        d_sample_rate(sample_rate),
-        d_last_phase(0.0f) {}
-
-    std::vector<float> demodulate(const std::vector<std::complex<float>>& input) {
-        std::vector<float> output;
-        output.reserve(input.size());
-
-        for (const auto& sample : input) {
-            float current_phase = std::arg(sample);
-            float delta_phase = current_phase - d_last_phase;
-            d_last_phase = current_phase;
-
-            if (delta_phase > M_PI) delta_phase -= 2 * M_PI;
-            if (delta_phase < -M_PI) delta_phase += 2 * M_PI;
-
-            float freq = (delta_phase * d_sample_rate) / (2 * M_PI);
-            float normalized_freq = freq / d_max_freq_deviation;
-            normalized_freq = std::clamp(normalized_freq, -1.0f, 1.0f);
-
-            output.push_back(normalized_freq);
-        }
-
-        return output;
-    }
-
-private:
-    float d_max_freq_deviation;
-    float d_sample_rate;
-    float d_last_phase;
-};
-
-class FIRFilter {
-public:
-    FIRFilter(const std::vector<float>& coeffs) : coeffs(coeffs), buffer(coeffs.size()) {}
-
-    float process(float input) {
-        buffer.push_back(input);
-        float output = 0.0f;
-        for (size_t i = 0; i < coeffs.size(); ++i) {
-            output += coeffs[i] * buffer[buffer.size() - 1 - i];
-        }
-        return output;
-    }
-
-private:
-    std::vector<float> coeffs;
-    std::vector<float> buffer;
-};
-
 class RationalResampler {
 public:
-    RationalResampler(int upsample_factor, int downsample_factor)
-        : upsample_factor_(upsample_factor), downsample_factor_(downsample_factor), input_sample_count_(0) {
-        if (upsample_factor <= 0 || downsample_factor <= 0) {
-            throw std::invalid_argument("Upsample and downsample factors must be positive integers.");
+    RationalResampler(unsigned interpolation, unsigned decimation, const std::vector<float>& taps = {}, float fractional_bw = 0.4)
+        : interpolation_(interpolation), decimation_(decimation), fractional_bw_(fractional_bw), taps_(taps) {
+        if (interpolation == 0 || decimation == 0) {
+            throw std::out_of_range("Interpolation and decimation factors must be > 0");
         }
+
+        if (taps_.empty()) {
+            if (fractional_bw <= 0 || fractional_bw >= 0.5) {
+                throw std::range_error("Invalid fractional_bandwidth, must be in (0, 0.5)");
+            }
+            taps_ = design_resampler_filter(interpolation_, decimation_, fractional_bw_);
+        }
+
+        gcd_ = std::gcd(interpolation_, decimation_);
+        decimation_ /= gcd_;
+        interpolation_ /= gcd_;
+
+        prepare_filters();
     }
 
-    std::vector<float> process(float sample) {
-        // Upsample by inserting the sample followed by (upsample_factor - 1) zeros
-        std::vector<float> upsampled;
-        upsampled.reserve(upsample_factor_);
-        upsampled.push_back(sample);
-        for (int i = 1; i < upsample_factor_; ++i) {
-            upsampled.push_back(0.0f);
-        }
+    std::vector<std::complex<float>> resample(const std::vector<std::complex<float>>& input) {
+        std::vector<std::complex<float>> output;
+        size_t input_size = input.size();
+        size_t output_size = (input_size * interpolation_) / decimation_;
+        output.resize(output_size);
 
-        // Append upsampled samples to the buffer
-        buffer_.insert(buffer_.end(), upsampled.begin(), upsampled.end());
+        unsigned int ctr = 0;
+        int count = 0;
 
-        // Output downsampled samples
-        std::vector<float> output;
-        while (input_sample_count_ < buffer_.size()) {
-            output.push_back(buffer_[input_sample_count_]);
-            input_sample_count_ += downsample_factor_;
-        }
-
-        // Remove processed samples from the buffer
-        if (input_sample_count_ >= buffer_.size()) {
-            input_sample_count_ -= buffer_.size();
-            buffer_.clear();
-        } else {
-            buffer_.erase(buffer_.begin(), buffer_.begin() + input_sample_count_);
-            input_sample_count_ = 0;
+        for (size_t i = 0; i < output_size; ++i) {
+            output[i] = filter(input.data() + count, ctr);
+            ctr += decimation_;
+            if (ctr >= interpolation_) {
+                ctr -= interpolation_;
+                ++count;
+            }
         }
 
         return output;
     }
 
 private:
-    int upsample_factor_;
-    int downsample_factor_;
-    std::vector<float> buffer_;
-    int input_sample_count_;
-};
+    unsigned interpolation_;
+    unsigned decimation_;
+    unsigned gcd_;
+    float fractional_bw_;
+    std::vector<float> taps_;
+    std::vector<std::vector<float>> firs_;
 
-void resampleIQData(const std::vector<std::complex<float>>& iq_data,
-                    std::vector<std::complex<float>>& resampled_iq_data,
-                    double resample_ratio) {
-    // Calculate the size of the resampled IQ data
-    size_t resampled_size = static_cast<size_t>(iq_data.size() * resample_ratio);
-    resampled_iq_data.resize(resampled_size);
-
-    // Define the predecimation, interpolation, and decimation factors
-    int predec = 0;
-    int interp = 1;
-    int decim = 70;
-
-    // Calculate the input samples per output sample
-    double samples_per_output = static_cast<double>(interp) / decim;
-
-    // Initialize the index for the original IQ data
-    double original_index = 0.0;
-
-    // Resample the IQ data using the specified factors
-    for (size_t i = 0; i < resampled_size; ++i) {
-        // Calculate the integer and fractional parts of the original index
-        size_t integer_index = static_cast<size_t>(original_index);
-        double fraction = original_index - integer_index;
-
-        // Ensure the integer index is within the bounds of the input data
-        size_t lower_index = integer_index;
-        size_t upper_index = std::min(integer_index + 1, iq_data.size() - 1);
-
-        // Perform linear interpolation using lower and upper indices
-        std::complex<float> interpolated_value = iq_data[lower_index] * std::complex<float>(1 - fraction, 0.0f) +
-                                                 iq_data[upper_index] * std::complex<float>(fraction, 0.0f);
-
-        // Store the resampled value in the output vector
-        resampled_iq_data[i] = interpolated_value;
-
-        // Increment the original index by the samples per output sample
-        original_index += samples_per_output;
-    }
-}
-
-void demodulateWFM(const std::vector<std::complex<float>>& resampled_iq_data,
-                   std::vector<float>& demodulated_signal) {
-    demodulated_signal.reserve(resampled_iq_data.size());
-    for (size_t i = 1; i < resampled_iq_data.size(); ++i) {
-        // Calculate the phase difference
-        std::complex<float> previous_sample = resampled_iq_data[i - 1];
-        std::complex<float> current_sample = resampled_iq_data[i];
-
-        float phase_diff = std::arg(current_sample * std::conj(previous_sample));
-
-        // Store the phase difference in the demodulated signal
-        demodulated_signal.push_back(phase_diff);
-    }
-}
-
-void applyLowPassFilter(const std::vector<float>& input_signal, std::vector<float>& output_signal,
-                        int sample_rate, float cutoff_frequency, size_t num_taps = 101) {
-    // Calculate the filter coefficients using the Hamming window method
-    std::vector<float> filter_coefficients(num_taps);
-    float nyquist = 0.5f * sample_rate;
-    float normalized_cutoff = cutoff_frequency / nyquist;
-
-    // Calculate the filter coefficients using the sinc function and Hamming window
-    size_t mid = num_taps / 2;
-    for (size_t n = 0; n < num_taps; ++n) {
-        float hamming_window = 0.54 - 0.46 * cos((2 * M_PI * n) / (num_taps - 1));
-        float sinc_value = sin(2 * M_PI * normalized_cutoff * (n - mid)) /
-                           (M_PI * (n - mid));
-        if (n == mid) {
-            sinc_value = 2 * normalized_cutoff;
-        }
-        filter_coefficients[n] = hamming_window * sinc_value;
+    std::vector<float> design_resampler_filter(unsigned interpolation, unsigned decimation, float fractional_bw) {
+        // Design the low-pass filter taps using a Kaiser window
+        // This is a simplified placeholder. You might want to replace this with your actual filter design.
+        unsigned num_taps = interpolation > decimation ? interpolation : decimation;
+        std::vector<float> taps(num_taps, 1.0f);  // Simplified placeholder for actual filter design
+        return taps;
     }
 
-    // Normalize the filter coefficients
-    float sum = std::accumulate(filter_coefficients.begin(), filter_coefficients.end(), 0.0f);
-    for (float& coeff : filter_coefficients) {
-        coeff /= sum;
-    }
+    void prepare_filters() {
+        size_t num_filters = interpolation_;
+        size_t tap_size = taps_.size() / num_filters;
+        firs_.resize(num_filters);
 
-    // Apply the filter to the input signal using convolution
-    output_signal.resize(input_signal.size());
-    for (size_t i = 0; i < input_signal.size(); ++i) {
-        float filtered_sample = 0.0f;
-        for (size_t j = 0; j < num_taps; ++j) {
-            int index = static_cast<int>(i) - static_cast<int>(j) + static_cast<int>(mid);
-            if (index >= 0 && index < static_cast<int>(input_signal.size())) {
-                filtered_sample += input_signal[index] * filter_coefficients[j];
+        for (unsigned i = 0; i < num_filters; ++i) {
+            firs_[i].resize(tap_size);
+            for (size_t j = 0; j < tap_size; ++j) {
+                firs_[i][j] = taps_[i + j * num_filters];
             }
         }
-        output_signal[i] = filtered_sample;
     }
-}
+
+    std::complex<float> filter(const std::complex<float>* input, unsigned int ctr) {
+        const auto& fir = firs_[ctr];
+        std::complex<float> output = 0;
+
+        for (size_t i = 0; i < fir.size(); ++i) {
+            output += input[i] * fir[i];
+        }
+
+        return output;
+    }
+};
+
+class WfmDemodulator {
+public:
+    WfmDemodulator(float gain)
+        : d_gain(gain)
+    {
+        // Initialize history buffer to store the previous sample
+        d_history.resize(2, std::complex<float>(0.0, 0.0));
+    }
+
+    std::vector<float> demodulate(const std::vector<std::complex<float>>& input) {
+        std::vector<float> output(input.size());
+
+        for (size_t i = 1; i < input.size(); ++i) {
+            std::complex<float> product = input[i] * std::conj(d_history[0]);
+            output[i] = d_gain * std::atan2(product.imag(), product.real());
+            d_history[0] = input[i];
+        }
+
+        return output;
+    }
+
+private:
+    float d_gain;
+    std::vector<std::complex<float>> d_history;
+};
+
+class FirFilter {
+public:
+    FirFilter(const std::vector<float>& taps, int decimation = 1) : d_decimation(decimation) {
+        setTaps(taps);
+    }
+
+    void setTaps(const std::vector<float>& taps) {
+        d_taps = taps;
+        d_ntaps = d_taps.size();
+        d_nsamples = d_ntaps;  // For this simple version, nsamples equals ntaps
+
+        // Initialize the tail (overlap-save) buffer to zero
+        d_tail.resize(d_ntaps - 1, 0.0f);
+    }
+
+    std::vector<float> filter(const std::vector<float>& input) {
+        std::vector<float> output;
+
+        // Buffer for storing the input and tail together
+        std::vector<float> inbuf(d_nsamples + d_ntaps - 1);
+
+        // Copy tail to the start of inbuf
+        std::copy(d_tail.begin(), d_tail.end(), inbuf.begin());
+
+        // Loop over input in blocks of d_nsamples
+        for (size_t i = 0; i < input.size(); i += d_nsamples) {
+            size_t block_size = std::min(d_nsamples, (int)(input.size() - i));
+
+            // Copy the next block of input to inbuf after the tail
+            std::copy(input.begin() + i, input.begin() + i + block_size, inbuf.begin() + d_ntaps - 1);
+
+            // Apply the filter
+            for (int n = 0; n < block_size; ++n) {
+                float sum = 0.0f;
+                for (int k = 0; k < d_ntaps; ++k) {
+                    sum += inbuf[n + k] * d_taps[d_ntaps - k - 1];
+                }
+                output.push_back(sum);
+            }
+
+            // Update the tail with the last part of inbuf
+            std::copy(inbuf.end() - (d_ntaps - 1), inbuf.end(), d_tail.begin());
+        }
+
+        return output;
+    }
+
+private:
+    std::vector<float> d_taps;   // Filter coefficients
+    int d_decimation;            // Decimation factor
+    std::vector<float> d_tail;   // Overlap-save buffer
+    int d_ntaps;                 // Number of taps
+    int d_nsamples;              // Number of samples to process in one go
+};
 
 #endif // FILTERS_H
