@@ -41,6 +41,7 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    if(audioOutput)
     delete audioOutput;
 }
 
@@ -158,7 +159,7 @@ void MainWindow::setupUi()
     inputTypeGroup = new QGroupBox("Input Type", this);
     QVBoxLayout *inputTypeLayout = new QVBoxLayout(inputTypeGroup);
     inputTypeCombo = new QComboBox(this);
-    inputTypeCombo->addItems({"File", "Test", "FFmpeg"});
+    inputTypeCombo->addItems({"Mic", "File", "Test", "FFmpeg"});
     inputTypeLayout->addWidget(inputTypeCombo);
 
     // Input file group
@@ -200,6 +201,10 @@ void MainWindow::setupUi()
         initialDir = QDir::homePath() + "/Videos";
     }
     fileDialog->setDirectory(initialDir);
+
+    modeGroup->setVisible(false);
+    inputFileEdit->setVisible(false);
+    chooseFileButton->setVisible(false);
 
     // Connect signals and slots
     connect(executeButton, &QPushButton::clicked, this, &MainWindow::executeCommand);
@@ -376,6 +381,9 @@ QStringList MainWindow::buildCommand()
 
     switch(inputTypeCombo->currentIndex())
     {
+    case 0: // Microphone
+        args << "mic";
+        break;
     case 1: // Test
         args << "test";        
         break;
@@ -425,12 +433,14 @@ void MainWindow::updateLogDisplay()
 
 void MainWindow::onInputTypeChanged(int index)
 {
-    bool isFile = (index == 0);
-    bool isFFmpeg = (index == 2);
+    bool isFile = (index == 1);
+    bool isTest = (index == 2);
+    bool isFFmpeg = (index == 3);
 
     inputFileEdit->setVisible(isFile);
     chooseFileButton->setVisible(isFile);
-    ffmpegOptionsEdit->setVisible(isFFmpeg);    
+    ffmpegOptionsEdit->setVisible(isFFmpeg);
+    modeGroup->setVisible(isFile || isTest);
 }
 
 void MainWindow::onRxTxTypeChanged(int index)
@@ -535,5 +545,5 @@ void MainWindow::onChannelChanged(int index)
     }
 
     long long frequency = channelCombo->itemData(index).toLongLong();
-    frequencyEdit->setText(QString::number(DEFAULT_FREQUENCY));
+    frequencyEdit->setText(QString::number(frequency));
 }

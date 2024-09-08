@@ -10,9 +10,9 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
-#include <iostream>
 #include "hacktv/av.h"
 #include "hacktv/rf.h"
+#include "audioinput.h"
 
 #define VERSION "1.0"
 
@@ -22,6 +22,7 @@ vid_config_t vid_conf;
 char *pre, *sub;
 int l;
 int r;
+rxtx_mode m_rxTxMode;
 
 enum {
     _OPT_TELETEXT = 1000,
@@ -281,7 +282,8 @@ bool HackTvLib::start()
         s.samplerate / 1e6,
         s.gain,
         getBoolString(s.amp),
-        getRxTxModeString(m_rxTxMode));
+        getRxTxModeString(m_rxTxMode));   
+
 
     if(m_rxTxMode == TX_MODE)
     {
@@ -1136,6 +1138,7 @@ void HackTvLib::rfTxLoop()
         {
             char* pre = m_argv[c];
             char* sub = strchr(pre, ':');
+            bool micEnabled = false;
             size_t l;
             if (sub != NULL)
             {
@@ -1147,8 +1150,12 @@ void HackTvLib::rfTxLoop()
                 l = strlen(pre);
             }
 
-            int r;
-            if (strncmp(pre, "test", l) == 0)
+            int r = HACKTV_ERROR;
+            if (strncmp(pre, "mic", l) == 0)
+            {                
+                micEnabled = true;
+            }
+            else if (strncmp(pre, "test", l) == 0)
             {
                 r = av_test_open(&s.vid.av);
             }
@@ -1161,18 +1168,70 @@ void HackTvLib::rfTxLoop()
                 r = av_ffmpeg_open(&s.vid.av, pre, s.ffmt, s.fopts);
             }
 
-            if (r != HACKTV_OK)
+            if (!micEnabled && r != HACKTV_OK)
             {
                 // Error opening this source. Move to the next
                 continue;
             }
 
-            while (!m_abort)
+            if(micEnabled)
             {
-                size_t samples;
-                int16_t* data = vid_next_line(&s.vid, &samples);
-                if (data == NULL) break;
-                if (rf_write(&s.rf, data, samples) != RF_OK) break;
+                std::unique_ptr<AudioManager> manager = std::make_unique<AudioManager>(m_abort);
+
+                if (!manager->initialize())
+                {
+                    std::cerr << "Failed to initialize AudioManager" << std::endl;
+                    return; // or handle the error appropriately
+                }               
+
+                while (!m_abort.load())
+                {
+                    int size;
+                    const int16_t* data = manager->getBuffer(size);
+
+                    if (data == nullptr)
+                    {
+                        std::cerr << "Failed to get audio buffer" << std::endl;
+                        break;
+                    }
+
+                    if (size >= 4096)
+                    {
+                        // Process the data here (e.g., write to rf)
+                        // if (rf_write(&s.rf, data, size / sizeof(int16_t)) != RF_OK)
+                        // {
+                        //     m_abort.store(true);
+                        //     break;
+                        // }
+
+                        for (int i = 0; i < 10 && i < size / sizeof(int16_t); ++i)
+                        {
+                            float floatValue = static_cast<float>(data[i]) / 32768.0f;
+                            std::cout << "Value " << i + 1 << ": " << floatValue << std::endl;
+                        }
+
+                        // Clear the processed data from the buffer
+                        manager->clearBuffer();
+                    }
+                    else
+                    {
+                        std::cout << "Buffer size less than 4096: " << size << std::endl;
+                    }
+
+                    QThread::msleep(10);
+                }
+
+                manager->stopAudio();
+            }
+            else
+            {
+                while (!m_abort)
+                {
+                    size_t samples;
+                    int16_t* data = vid_next_line(&s.vid, &samples);
+                    if (data == NULL) break;
+                    if (rf_write(&s.rf, data, samples) != RF_OK) break;
+                }
             }
 
             if (m_signal.load() != 0)
@@ -1181,7 +1240,8 @@ void HackTvLib::rfTxLoop()
                 m_signal.store(0);
             }
 
-            av_close(&s.vid.av);
+            if(!micEnabled)
+                av_close(&s.vid.av);
         }
     } while (s.repeat && !m_abort);
 }

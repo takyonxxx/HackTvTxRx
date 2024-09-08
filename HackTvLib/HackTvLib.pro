@@ -1,4 +1,4 @@
-QT -= gui
+QT += core multimedia
 
 TEMPLATE = lib
 DEFINES += HACKTVLIB_LIBRARY
@@ -61,6 +61,7 @@ SOURCES += \
 
 HEADERS += \
     HackTvLib_global.h \
+    audioinput.h \
     hacktv/acp.h \
     hacktv/av.h \
     hacktv/av_ffmpeg.h \

@@ -6,7 +6,6 @@
 #include <thread>
 #include <atomic>
 #include <stdint.h>
-#include <complex>
 #include <vector>
 #include <mutex>
 #include "hacktv/video.h"
@@ -88,8 +87,6 @@ typedef struct {
     rf_t rf;
 
 } hacktv_t;
-
-rxtx_mode m_rxTxMode;
 
 class HackTvLib{
 public:
