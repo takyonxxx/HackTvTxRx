@@ -23,7 +23,7 @@ LIBS += -L$$TOOLCHAIN_PATH/bin
 LIBS += -L$$MINGW_PATH/lib
 LIBS += -L$$MINGW_PATH/bin
 
-LIBS += -lusb-1.0 -lhackrf -lfftw3f -losmo-fl2k -lSoapySDR -lfdk-aac -lopus
+LIBS += -lusb-1.0 -lhackrf -lfftw3f -losmo-fl2k -lSoapySDR -lfdk-aac -lopus -lportaudio
 LIBS += -lfltk -lfltk_forms -lfltk_gl -lfltk_images
 LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
 

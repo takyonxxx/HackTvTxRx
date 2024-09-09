@@ -99,8 +99,9 @@ public:
     bool stop();
     void setLogCallback(LogCallback callback);
     void setReceivedDataCallback(DataCallback callback);
-    bool setArguments(const std::vector<std::string>& args);    
-
+    bool setArguments(const std::vector<std::string>& args);
+private slots:
+    void handleAudioData(const float *data, unsigned long frames);
 private:
     LogCallback m_logCallback;
     DataCallback m_dataCallback;

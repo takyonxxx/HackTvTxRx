@@ -1,252 +1,122 @@
 #ifndef AUDIOINPUT_H
 #define AUDIOINPUT_H
+#pragma once
 
-#include <QCoreApplication>
+#include <iostream>
 #include <QObject>
-#include <QAudioSource>
-#include <QByteArray>
-#include <QIODevice>
-#include <QThread>
 #include <QMutex>
 #include <QWaitCondition>
-#include <QMediaDevices>
-#include <QAudioFormat>
-#include <QDebug>
-#include <iostream>
-// #include <atomic>
+#include <vector>
+#include <atomic>
+#include <portaudio.h>
 
-class AudioInput : public QObject
+class PortAudioInput : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit AudioInput(QObject *parent = nullptr) : QObject(parent), audioSource(nullptr), audioInputDevice(nullptr)
+    explicit PortAudioInput(QObject *parent = nullptr)
+        : QObject(parent), stream(nullptr), isRunning(false)
     {
-    }
-
-    ~AudioInput()
-    {
-        stopAudio();
-        if (audioSource) {
-            delete audioSource;
+        PaError err = Pa_Initialize();
+        if (err != paNoError) {
+            std::cout<< "PortAudio initialization error:" << Pa_GetErrorText(err) << std::endl;
         }
     }
 
-    bool initialize()
+    ~PortAudioInput()
     {
-        try {
-            QAudioFormat format;
-            format.setSampleRate(44100);
-            format.setChannelCount(1);
-            format.setSampleFormat(QAudioFormat::Int16);
+        stop();
+        Pa_Terminate();
+    }
 
-            QAudioDevice device = QMediaDevices::defaultAudioInput();
-            if (device.isNull()) {
-                std::cout << "No audio input device available" << std::endl;
-                return false;
-            }
+    bool start()
+    {
+        if (isRunning) {
+            return false; // Already running
+        }
 
-            qDebug() << device.description();
-
-            audioSource = new QAudioSource(device, format, this);
-            if (!audioSource) {
-                std::cout << "Failed to create QAudioSource" << std::endl;
-                return false;
-            }
-
-        } catch (const std::exception& e) {
-            std::cerr << "Exception in AudioInput::initialize: " << e.what() << std::endl;
-            return false;
-        } catch (...) {
-            std::cerr << "Unknown exception in AudioInput::initialize" << std::endl;
+        // Open an input stream
+        PaError err = Pa_OpenDefaultStream(&stream,
+                                           1,                  // Number of input channels
+                                           0,                  // Number of output channels
+                                           paFloat32,          // Sample format
+                                           44100,              // Sample rate
+                                           4096,                // Frames per buffer
+                                           audioCallback,      // Callback function
+                                           this);              // User data
+        if (err != paNoError) {
+            std::cout << "PortAudio stream error:" << Pa_GetErrorText(err) << std::endl;
             return false;
         }
 
+        err = Pa_StartStream(stream);
+        if (err != paNoError) {
+            std::cout << "PortAudio stream start error:" << Pa_GetErrorText(err) << std::endl;
+            return false;
+        }
+
+        isRunning = true;
+        std::cout<< "PortAudio initialized" << std::endl;
         return true;
     }
 
-    void startAudio()
+    void stop()
     {
-        if (!audioSource) {
-            std::cerr << "AudioInput::start failed: audioSource is null" << std::endl;
+        if (!isRunning) {
             return;
         }
 
-        audioInputDevice = audioSource->start();
-        if (audioInputDevice) {
-            bool connected = connect(audioInputDevice, &QIODevice::readyRead, this, &AudioInput::onAudioDataAvailable, Qt::QueuedConnection);
-            if (connected) {
-                std::cout << "Audio input started" << std::endl;
-            } else {
-                std::cerr << "Failed to connect signal to slot" << std::endl;
-            }
-        } else {
-            std::cerr << "Failed to start audio input device" << std::endl;
-        }
+        Pa_StopStream(stream);
+        Pa_CloseStream(stream);
+        stream = nullptr;
+        std::cout<< "PortAudio stopped" << std::endl;
+        isRunning = false;
     }
 
-    void stopAudio()
+
+    const float* getBuffer(int& size)
     {
-        if (audioSource) {
-            audioSource->stop();
+        QMutexLocker locker(&m_mutex);
+        if (!m_bufferNotEmpty.wait(&m_mutex, 100)) // Wait with timeout
+        {
+            std::cout << "Wait timeout in getBuffer" << std::endl;
         }
+        size = m_buffer.size();
+        return m_buffer.empty() ? nullptr : m_buffer.data();
     }
 
-private slots:
-    void onAudioDataAvailable()
+    void clearBuffer()
     {
-        if (QThread::currentThread() != this->thread()) {
-            std::cerr << "Warning: onAudioDataAvailable called from the wrong thread!" << std::endl;
-            return;
-        }
-
-        const qint64 bufferSize = 4096;
-        QByteArray newData(bufferSize, 0);
-
-        if (audioInputDevice) {
-            qint64 bytesRead = audioInputDevice->read(newData.data(), bufferSize);
-            if (bytesRead > 0) {
-                newData.resize(bytesRead);
-                std::cout << "Read " << bytesRead << " bytes" << std::endl;
-            } else {
-                std::cerr << "Failed to read from audioInputDevice" << std::endl;
-            }
-        } else {
-            std::cerr << "audioInputDevice is null" << std::endl;
-        }
+        QMutexLocker locker(&m_mutex);
+        m_buffer.clear();
+        m_bufferNotEmpty.wakeAll(); // Wake up any waiting threads
     }
+
+signals:
+    void audioDataReady(const float *data, unsigned long frames);
 
 private:
-    QAudioSource *audioSource;
-    QIODevice *audioInputDevice;
+    static int audioCallback(const void *inputBuffer, void *outputBuffer, unsigned long framesPerBuffer,
+                             const PaStreamCallbackTimeInfo *timeInfo, PaStreamCallbackFlags statusFlags, void *userData)
+    {        
+        PortAudioInput *paInput = static_cast<PortAudioInput*>(userData);
+        if (paInput && paInput->isRunning) {
+            QMutexLocker locker(&paInput->m_mutex);
+            paInput->m_buffer.clear(); // Clear old data
+
+            const float* in = static_cast<const float*>(inputBuffer);
+            paInput->m_buffer.insert(paInput->m_buffer.end(), in, in + framesPerBuffer); // Append new data
+            paInput->m_bufferNotEmpty.wakeOne(); // Notify that buffer has new data
+        }
+        return paContinue;
+    }
+
+    PaStream *stream;
+    bool isRunning;
+    QMutex m_mutex;
+    QWaitCondition m_bufferNotEmpty;
+    std::vector<float> m_buffer;
 };
-
-// class AudioManager : public QObject
-// {
-//     Q_OBJECT
-
-// public:
-//     explicit AudioManager(std::atomic<bool>& abortFlag, QObject *parent = nullptr)
-//         : QObject(parent)
-//         , m_abortFlag(abortFlag)
-//         , m_audioThread(nullptr)
-//         , m_audioInput(nullptr)
-//     {
-
-//     }
-
-//     ~AudioManager()
-//     {
-//         stopAudio();
-//         if (m_audioThread)
-//         {
-//             m_audioThread->wait();
-//             delete m_audioThread;
-//         }
-//         delete m_audioInput;
-//     }
-
-//     bool initialize()
-//     {
-//         try
-//         {
-//             m_audioInput = new AudioInput();
-//             m_audioInput->initialize();  // This might throw an exception
-
-//             m_audioThread = new QThread(this);
-//             if (!m_audioThread) {
-//                 throw std::runtime_error("Failed to create QThread");
-//             }
-
-//             m_audioInput->moveToThread(m_audioThread);
-
-//             connect(m_audioThread, &QThread::started, m_audioInput, &AudioInput::start);
-//             connect(m_audioThread, &QThread::finished, m_audioInput, &AudioInput::deleteLater);
-//             connect(m_audioInput, &AudioInput::audioDataReady, this, &AudioManager::handleAudioData, Qt::QueuedConnection);
-
-//             m_audioThread->start();
-//             if (!m_audioThread->isRunning()) {
-//                 throw std::runtime_error("Failed to start audio thread");
-//             }
-
-//             std::cout << "AudioManager initialization completed" << std::endl;
-//             return true;
-//         }
-//         catch (const std::exception& e)
-//         {
-//             std::cerr << "Exception in AudioManager::initialize: " << e.what() << std::endl;
-//             return false;
-//         }
-//         catch (...)
-//         {
-//             std::cerr << "Unknown exception in AudioManager::initialize" << std::endl;
-//             return false;
-//         }
-//     }
-
-//     const int16_t* getBuffer(int& size)
-//     {
-//         QMutexLocker locker(&m_mutex);
-//         while (m_buffer.size() < 4096 && !m_abortFlag.load())
-//         {
-//             if (!m_bufferNotEmpty.wait(&m_mutex, 100))
-//             {
-//                 std::cout << "Wait timeout in getBuffer" << std::endl;
-//             }
-//         }
-//         if (m_abortFlag.load())
-//         {
-//             size = 0;
-//             return nullptr;
-//         }
-//         size = m_buffer.size();
-//         return reinterpret_cast<const int16_t*>(m_buffer.constData());
-//     }
-
-//     void clearBuffer()
-//     {
-//         QMutexLocker locker(&m_mutex);
-//         m_buffer.clear();
-//     }
-
-//     void stopAudio()
-//     {
-//         std::cout << "Stopping audio" << std::endl;
-//         if (m_audioInput)
-//         {
-//             m_audioInput->stop();
-//         }
-//         if (m_audioThread)
-//         {
-//             m_audioThread->quit();
-//             if (!m_audioThread->wait(5000)) // 5 seconds timeout
-//             {
-//                 std::cerr << "Audio thread did not stop in time" << std::endl;
-//                 m_audioThread->terminate();
-//             }
-//         }
-//         std::cout << "Stopped audio" << std::endl;
-//     }
-
-// public slots:
-//     void handleAudioData(const QByteArray &data)
-//     {
-//         std::cout << "handleAudioData : " << data.size() << std::endl;
-//         QMutexLocker locker(&m_mutex);
-//         if (!m_abortFlag.load())
-//         {
-//             m_buffer.append(data);
-//             m_bufferNotEmpty.wakeAll();
-//         }
-//     }
-
-// private:
-//     QByteArray m_buffer;
-//     QMutex m_mutex;
-//     QWaitCondition m_bufferNotEmpty;
-//     std::atomic<bool>& m_abortFlag;
-//     QThread *m_audioThread;
-//     AudioInput *m_audioInput;
-// };
 
 #endif // AUDIOINPUT_H

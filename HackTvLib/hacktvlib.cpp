@@ -14,6 +14,8 @@
 #include "hacktv/rf.h"
 #include "audioinput.h"
 
+#include <QThread>
+
 #define VERSION "1.0"
 
 static hacktv_t s;
@@ -1186,72 +1188,43 @@ void HackTvLib::rfTxLoop()
 
             if(micEnabled)
             {
-                std::unique_ptr<AudioInput> m_audioInput = std::make_unique<AudioInput>();
-
-                if (!m_audioInput->initialize()) {
-                    std::cerr << "Failed to initialize AudioInput" << std::endl;
-                    m_audioInput.reset();
+                std::unique_ptr<PortAudioInput> m_audioInput = std::make_unique<PortAudioInput>();
+                if (!m_audioInput->start()) {
+                    std::cerr << "Failed to start PortAudioInput" << std::endl;
                     return;
                 }
 
-                QThread *audioThread = new QThread();
-                m_audioInput->moveToThread(audioThread);
-
-                QObject::connect(audioThread, &QThread::started, m_audioInput.get(), &AudioInput::startAudio);
-                QObject::connect(audioThread, &QThread::finished, m_audioInput.get(), &AudioInput::stopAudio);
-
-                // Start the thread
-                audioThread->start();
-
-                std::cout << "AudioInput initialized successfully" << std::endl;
-
                 while (!m_abort)
                 {
-                    QThread::msleep(100);
+                    int size;
+                    const float* data = m_audioInput->getBuffer(size);
+
+                    if (data == nullptr)
+                    {
+                        std::cerr << "Failed to get audio buffer" << std::endl;
+                        continue;
+                    }
+
+                    if (size >= 4096)
+                    {
+                        // Process the data here
+                        // Example: Write to RF
+                        // if (rf_write(&s.rf, data, size * sizeof(float)) != RF_OK)
+                        // {
+                        //     m_abort.store(true);
+                        //     break;
+                        // }
+
+                        std::cout << "Buffer size : " << size << std::endl;
+                        // for (unsigned long i = 0; i < size; ++i) {
+                        //     std::cout << static_cast<const float*>(data)[i] << " ";
+                        // }
+                        // std::cout << std::endl;
+                        m_audioInput->clearBuffer();
+                    }
+                    QThread::msleep(10);
                 }
-
-                // Later on, to stop and clean up
-                audioThread->quit();
-                audioThread->wait();
-                delete audioThread;
-                // while (!m_abort.load())
-                // {
-                //     int size;
-                //     const int16_t* data = m_audioManager->getBuffer(size);
-
-                //     if (data == nullptr)
-                //     {
-                //         std::cerr << "Failed to get audio buffer" << std::endl;
-                //         break;
-                //     }
-
-                //     if (size >= 4096)
-                //     {
-                //         // Process the data here (e.g., write to rf)
-                //         // if (rf_write(&s.rf, data, size / sizeof(int16_t)) != RF_OK)
-                //         // {
-                //         //     m_abort.store(true);
-                //         //     break;
-                //         // }
-
-                //         for (int i = 0; i < 10 && i < size / sizeof(int16_t); ++i)
-                //         {
-                //             float floatValue = static_cast<float>(data[i]) / 32768.0f;
-                //             std::cout << "Value " << i + 1 << ": " << floatValue << std::endl;
-                //         }
-
-                //         // Clear the processed data from the buffer
-                //         m_audioManager->clearBuffer();
-                //     }
-                //     else
-                //     {
-                //         std::cout << "Buffer size less than 4096: " << size << std::endl;
-                //     }
-
-                //     QThread::msleep(10);
-                // }
-
-                // m_audioManager->stopAudio();
+                m_audioInput->stop();
             }
             else
             {
@@ -1274,6 +1247,11 @@ void HackTvLib::rfTxLoop()
                 av_close(&s.vid.av);
         }
     } while (s.repeat && !m_abort);
+}
+
+void HackTvLib::handleAudioData(const float *data, unsigned long frames)
+{
+    std::cout << "Received" << frames << "frames of audio data" << std::endl;
 }
 
 void HackTvLib::rfRxLoop()
