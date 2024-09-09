@@ -21,7 +21,7 @@ Open MSYS2 and run the following commands:
 
 ```bash
 pacman -Syu
-pacman -S git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-libusb mingw-w64-ucrt-x86_64-fftw mingw-w64-clang-x86_64-toolchain mingw-w64-ucrt-x86_64-git mingw-w64-x86_64-ffmpeg mingw-w64-x86_64-soapysdr mingw-w64-x86_64-fltk mingw-w64-x86_64-opus mingw-w64-x86_64-fdk-aac
+pacman -S git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-libusb mingw-w64-ucrt-x86_64-fftw mingw-w64-clang-x86_64-toolchain mingw-w64-ucrt-x86_64-git mingw-w64-x86_64-ffmpeg mingw-w64-x86_64-soapysdr mingw-w64-x86_64-fltk mingw-w64-x86_64-opus mingw-w64-x86_64-fdk-aac mingw-w64-x86_64-portaudio
 ```
 
 ### 3. Set up PKG_CONFIG_PATH
