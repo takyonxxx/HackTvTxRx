@@ -10,9 +10,12 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+
 #include "hacktv/av.h"
 #include "hacktv/rf.h"
 #include "audioinput.h"
+#include "FrequencyModulator.h"
+#include "RationalResampler.h"
 
 #include <QThread>
 
@@ -290,13 +293,6 @@ bool HackTvLib::start()
         return false;
     }
 
-    m_abort = false;
-    m_signal = 0;
-    m_thread = std::thread(&HackTvLib::rfTxLoop, this);
-
-    return true;
-
-
     if(m_rxTxMode == TX_MODE)
     {
         if(optind >= m_argv.size())
@@ -306,13 +302,13 @@ bool HackTvLib::start()
         }
     }
 
-    if(!setVideo())
+    if(!micEnabled && !setVideo())
         return false;
 
     if(!openDevice())
         return false;
 
-    if(!initAv())
+    if(!micEnabled && !initAv())
         return false;
 
     if(m_rxTxMode == TX_MODE)
@@ -1132,6 +1128,38 @@ bool HackTvLib::parseArguments()
     return true;
 }
 
+void HackTvLib::setMicEnabled(bool newMicEnabled)
+{
+    micEnabled = newMicEnabled;
+}
+
+std::vector<std::complex<float>> HackTvLib::apply_modulation(std::vector<float> buffer)
+{
+
+    int decimation = 1;
+    int interpolation = 48;
+    float sensitivity = 7.5;
+    float filter_size = 0.4;
+    float amplitude = 2.5;
+    size_t desired_size = buffer.size() / 2;
+    std::vector<float> float_buffer(buffer.begin(), buffer.begin() + desired_size);
+    if (float_buffer.size() < desired_size) {
+        return std::vector<std::complex<float>>(); // Return empty vector if size is insufficient
+    }
+    int noutput_items = float_buffer.size();
+    for (int i = 0; i < noutput_items; ++i) {
+        float_buffer[i] *= amplitude;
+    }
+    std::vector<std::complex<float>> modulated_signal(noutput_items);
+    FrequencyModulator modulator(sensitivity);
+    modulator.work(noutput_items, float_buffer, modulated_signal);
+    RationalResampler resampler(interpolation, decimation, filter_size);
+    std::vector<std::complex<float>> resampled_signal = resampler.resample(modulated_signal);
+
+    return resampled_signal;
+}
+
+
 void HackTvLib::rfTxLoop()
 {
     do
@@ -1149,8 +1177,7 @@ void HackTvLib::rfTxLoop()
         for (size_t c = optind; c < m_argv.size() && !m_abort; c++)
         {
             char* pre = m_argv[c];
-            char* sub = strchr(pre, ':');
-            bool micEnabled = false;
+            char* sub = strchr(pre, ':');            
             size_t l;
             if (sub != NULL)
             {
@@ -1207,19 +1234,30 @@ void HackTvLib::rfTxLoop()
 
                     if (size >= 4096)
                     {
-                        // Process the data here
-                        // Example: Write to RF
-                        // if (rf_write(&s.rf, data, size * sizeof(float)) != RF_OK)
-                        // {
-                        //     m_abort.store(true);
-                        //     break;
-                        // }
+                        // Create a vector from the float data
+                        std::vector<float> buffer(data, data + size);
+                        std::cout << "Buffer size : " << buffer.size() << " samples" << std::endl;
 
-                        std::cout << "Buffer size : " << size << std::endl;
-                        // for (unsigned long i = 0; i < size; ++i) {
-                        //     std::cout << static_cast<const float*>(data)[i] << " ";
-                        // }
-                        // std::cout << std::endl;
+                        // Apply modulation and get resampled signal
+                        std::vector<std::complex<float>> resampled_signal = apply_modulation(buffer);
+
+                        // Convert complex float to int16_t for rf_write
+                        std::vector<int16_t> rf_data;
+                        rf_data.reserve(resampled_signal.size() * 2);
+                        for (const auto& complex_sample : resampled_signal) {
+                            // Scale to int16_t range and round
+                            rf_data.push_back(static_cast<int16_t>(std::round(complex_sample.real() * 32767.0f)));
+                            rf_data.push_back(static_cast<int16_t>(std::round(complex_sample.imag() * 32767.0f)));
+                        }
+
+                        // Write to RF
+                        if (rf_write(&s.rf, rf_data.data(), rf_data.size()) != RF_OK)
+                        {
+                            m_abort.store(true);
+                            std::cerr << "Buffer rf write  error." << std::endl;
+                            break;
+                        }
+
                         m_audioInput->clearBuffer();
                     }
                     QThread::msleep(10);
@@ -1247,11 +1285,6 @@ void HackTvLib::rfTxLoop()
                 av_close(&s.vid.av);
         }
     } while (s.repeat && !m_abort);
-}
-
-void HackTvLib::handleAudioData(const float *data, unsigned long frames)
-{
-    std::cout << "Received" << frames << "frames of audio data" << std::endl;
 }
 
 void HackTvLib::rfRxLoop()

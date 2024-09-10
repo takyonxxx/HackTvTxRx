@@ -1,14 +1,15 @@
 #ifndef HACKTVLIB_H
 #define HACKTVLIB_H
 
-#include <thread>
-#include <atomic>
-#include <vector>
-#include <string>
+#include <QStringList>
 #include <functional>
+#include <string>
 #include <thread>
 #include <atomic>
+#include <stdint.h>
+#include <vector>
 #include <mutex>
+#include <complex>
 
 class HackTvLib{
 public:
@@ -22,7 +23,10 @@ public:
     void setLogCallback(LogCallback callback);
     void setReceivedDataCallback(DataCallback callback);
     bool setArguments(const std::vector<std::string>& args);
+    void setMicEnabled(bool newMicEnabled);
 
+private slots:
+    void emitReceivedData(const int16_t* data, size_t samples);
 private:
     LogCallback m_logCallback;
     DataCallback m_dataCallback;
@@ -35,11 +39,12 @@ private:
     bool setVideo();
     bool initAv();
     bool parseArguments();
+    bool micEnabled = false;
     void log(const char* format, ...);
     void cleanupArgv();
     void rfTxLoop();
     void rfRxLoop();
-    void emitReceivedData(const int16_t* data, size_t samples);
+    std::vector<std::complex<float>> apply_modulation(std::vector<float> buffer);
 };
 
 #endif // HACKTVLIB_H

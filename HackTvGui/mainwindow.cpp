@@ -23,6 +23,7 @@ MainWindow::MainWindow(QWidget *parent)
         m_hackTvLib->setReceivedDataCallback([this](const int16_t* data, size_t samples) {
             handleReceivedData(data, samples);
         });
+        m_hackTvLib->setMicEnabled(false);
         audioOutput = new AudioOutput(this, DEFAULT_AUDIO_SAMPLE_RATE);
     }
     catch (const std::exception& e) {
@@ -339,6 +340,7 @@ QStringList MainWindow::buildCommand()
     QStringList args;
 
     auto output = outputCombo->currentData().toString();
+    m_hackTvLib->setMicEnabled(false);
 
     args << "-o" << output;
 
@@ -383,6 +385,7 @@ QStringList MainWindow::buildCommand()
     {
     case 0: // Microphone
         args << "mic";
+        m_hackTvLib->setMicEnabled(true);
         break;
     case 1: // Test
         args << "test";        
