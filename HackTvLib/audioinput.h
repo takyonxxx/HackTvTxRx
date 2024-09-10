@@ -119,4 +119,12 @@ private:
     std::vector<float> m_buffer;
 };
 
+// std::unique_ptr<PortAudioInput> m_audioInput = std::make_unique<PortAudioInput>();
+// if (!m_audioInput->start()) {
+//     std::cerr << "Failed to start PortAudioInput" << std::endl;
+//     return;
+// }
+// int size;
+// const float* data = m_audioInput->getBuffer(size);
+
 #endif // AUDIOINPUT_H

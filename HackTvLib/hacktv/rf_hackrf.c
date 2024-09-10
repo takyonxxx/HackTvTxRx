@@ -16,8 +16,10 @@
 /* along with this program.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdint.h>  // For fixed-width integer types
+#include <stdlib.h>  // For malloc and free
+#include <math.h>    // For sin and M_PI
 #include <libhackrf/hackrf.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -212,7 +214,7 @@ static int _buffer_write(buffers_t *buffers, size_t length)
 }
 
 static int _tx_callback(hackrf_transfer *transfer)
-{
+{    
     hackrf_t *rf = transfer->tx_ctx;
     size_t l = transfer->valid_length;
     uint8_t *buf = transfer->buffer;

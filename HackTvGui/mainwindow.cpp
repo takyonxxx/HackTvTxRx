@@ -160,7 +160,7 @@ void MainWindow::setupUi()
     inputTypeGroup = new QGroupBox("Input Type", this);
     QVBoxLayout *inputTypeLayout = new QVBoxLayout(inputTypeGroup);
     inputTypeCombo = new QComboBox(this);
-    inputTypeCombo->addItems({"Mic", "File", "Test", "FFmpeg"});
+    inputTypeCombo->addItems({"File", "Test", "FFmpeg", "Mic"});
     inputTypeLayout->addWidget(inputTypeCombo);
 
     // Input file group
@@ -202,10 +202,6 @@ void MainWindow::setupUi()
         initialDir = QDir::homePath() + "/Videos";
     }
     fileDialog->setDirectory(initialDir);
-
-    modeGroup->setVisible(false);
-    inputFileEdit->setVisible(false);
-    chooseFileButton->setVisible(false);
 
     // Connect signals and slots
     connect(executeButton, &QPushButton::clicked, this, &MainWindow::executeCommand);
@@ -382,10 +378,11 @@ QStringList MainWindow::buildCommand()
          << "-m" << modeCombo->currentData().toString();
 
     switch(inputTypeCombo->currentIndex())
-    {
-    case 0: // Microphone
-        args << "mic";
-        m_hackTvLib->setMicEnabled(true);
+    {    
+    case 0: // File
+        if (!inputFileEdit->text().isEmpty()) {
+            args << inputFileEdit->text();
+        }
         break;
     case 1: // Test
         args << "test";        
@@ -397,12 +394,14 @@ QStringList MainWindow::buildCommand()
             ffmpegArg += ffmpegOptionsEdit->text();
         }
         args << ffmpegArg;
+        break;
     }
-    break;
-    default: // File
-        if (!inputFileEdit->text().isEmpty()) {
-            args << inputFileEdit->text();
-        }
+    case 3: // Microphone
+        args << "mic";
+        m_hackTvLib->setMicEnabled(true);
+        break;
+    default:
+        args << "test";
         break;
     }
     return args;
@@ -436,9 +435,9 @@ void MainWindow::updateLogDisplay()
 
 void MainWindow::onInputTypeChanged(int index)
 {
-    bool isFile = (index == 1);
-    bool isTest = (index == 2);
-    bool isFFmpeg = (index == 3);
+    bool isFile = (index == 0);
+    bool isTest = (index == 1);
+    bool isFFmpeg = (index == 2);
 
     inputFileEdit->setVisible(isFile);
     chooseFileButton->setVisible(isFile);

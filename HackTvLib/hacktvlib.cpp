@@ -1,4 +1,5 @@
 #include "hacktvlib.h"
+#include <iostream>
 #include <getopt.h>
 #include <cstdarg>
 #include <cstdio>
@@ -10,13 +11,8 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
-
 #include "hacktv/av.h"
 #include "hacktv/rf.h"
-#include "audioinput.h"
-#include "FrequencyModulator.h"
-#include "RationalResampler.h"
-
 #include <QThread>
 
 #define VERSION "1.0"
@@ -1133,32 +1129,35 @@ void HackTvLib::setMicEnabled(bool newMicEnabled)
     micEnabled = newMicEnabled;
 }
 
-std::vector<std::complex<float>> HackTvLib::apply_modulation(std::vector<float> buffer)
-{
+const double FREQUENCY = 440;        // Frequency of the sine wave in Hz
+const double MODULATION_INDEX = 0.5; // FM modulation index
+const double MODULATION_FREQUENCY = 75000; // Frequency of modulation in Hz
 
-    int decimation = 1;
-    int interpolation = 48;
-    float sensitivity = 7.5;
-    float filter_size = 0.4;
-    float amplitude = 2.5;
-    size_t desired_size = buffer.size() / 2;
-    std::vector<float> float_buffer(buffer.begin(), buffer.begin() + desired_size);
-    if (float_buffer.size() < desired_size) {
-        return std::vector<std::complex<float>>(); // Return empty vector if size is insufficient
-    }
-    int noutput_items = float_buffer.size();
-    for (int i = 0; i < noutput_items; ++i) {
-        float_buffer[i] *= amplitude;
-    }
-    std::vector<std::complex<float>> modulated_signal(noutput_items);
-    FrequencyModulator modulator(sensitivity);
-    modulator.work(noutput_items, float_buffer, modulated_signal);
-    RationalResampler resampler(interpolation, decimation, filter_size);
-    std::vector<std::complex<float>> resampled_signal = resampler.resample(modulated_signal);
+void generate_fm_samples(int16_t* buffer, size_t num_samples) {
+    auto sample_rate = s.samplerate;
+    const double time_step = 1.0 / sample_rate;
+    double t = 0.0;
+    double phase = 0.0;
 
-    return resampled_signal;
+    // Precompute some constants
+    const double omega_c = 2 * M_PI * FREQUENCY;
+    const double omega_m = 2 * M_PI * MODULATION_FREQUENCY;
+    const double beta = MODULATION_INDEX * MODULATION_FREQUENCY / MODULATION_FREQUENCY;
+
+    for (size_t i = 0; i < num_samples; i += 2) {
+        // Calculate the instantaneous phase
+        double inst_phase = omega_c * t + beta * std::sin(omega_m * t);
+
+        // Generate complex FM sample
+        std::complex<double> sample = std::exp(std::complex<double>(0, inst_phase));
+
+        // Scale and convert to 16-bit integers for I and Q
+        buffer[i] = static_cast<int16_t>(sample.real() * 32767);
+        buffer[i+1] = static_cast<int16_t>(sample.imag() * 32767);
+
+        t += time_step;
+    }
 }
-
 
 void HackTvLib::rfTxLoop()
 {
@@ -1192,7 +1191,7 @@ void HackTvLib::rfTxLoop()
             int r = HACKTV_ERROR;
             if (strncmp(pre, "mic", l) == 0)
             {                
-                micEnabled = true;
+                micEnabled = true;                
             }
             else if (strncmp(pre, "test", l) == 0)
             {
@@ -1209,69 +1208,38 @@ void HackTvLib::rfTxLoop()
 
             if (!micEnabled && r != HACKTV_OK)
             {
-                // Error opening this source. Move to the next
                 continue;
-            }
+            }           
 
-            if(micEnabled)
+            while (!m_abort)
             {
-                std::unique_ptr<PortAudioInput> m_audioInput = std::make_unique<PortAudioInput>();
-                if (!m_audioInput->start()) {
-                    std::cerr << "Failed to start PortAudioInput" << std::endl;
-                    return;
-                }
-
-                while (!m_abort)
-                {
-                    int size;
-                    const float* data = m_audioInput->getBuffer(size);
-
-                    if (data == nullptr)
-                    {
-                        std::cerr << "Failed to get audio buffer" << std::endl;
-                        continue;
-                    }
-
-                    if (size >= 4096)
-                    {
-                        // Create a vector from the float data
-                        std::vector<float> buffer(data, data + size);
-                        std::cout << "Buffer size : " << buffer.size() << " samples" << std::endl;
-
-                        // Apply modulation and get resampled signal
-                        std::vector<std::complex<float>> resampled_signal = apply_modulation(buffer);
-
-                        // Convert complex float to int16_t for rf_write
-                        std::vector<int16_t> rf_data;
-                        rf_data.reserve(resampled_signal.size() * 2);
-                        for (const auto& complex_sample : resampled_signal) {
-                            // Scale to int16_t range and round
-                            rf_data.push_back(static_cast<int16_t>(std::round(complex_sample.real() * 32767.0f)));
-                            rf_data.push_back(static_cast<int16_t>(std::round(complex_sample.imag() * 32767.0f)));
-                        }
-
-                        // Write to RF
-                        if (rf_write(&s.rf, rf_data.data(), rf_data.size()) != RF_OK)
-                        {
-                            m_abort.store(true);
-                            std::cerr << "Buffer rf write  error." << std::endl;
-                            break;
-                        }
-
-                        m_audioInput->clearBuffer();
-                    }
-                    QThread::msleep(10);
-                }
-                m_audioInput->stop();
-            }
-            else
-            {
-                while (!m_abort)
+                if(!micEnabled)
                 {
                     size_t samples;
                     int16_t* data = vid_next_line(&s.vid, &samples);
                     if (data == NULL) break;
                     if (rf_write(&s.rf, data, samples) != RF_OK) break;
+                }
+                else
+                {
+                    const size_t BUFFER_SIZE = 262144; // HackRF's TRANSFER_BUFFER_SIZE
+                    const size_t NUM_SAMPLES = BUFFER_SIZE / 2; // Each sample is I and Q, so half the buffer size
+
+                    // Allocate buffer for int16_t samples
+                    int16_t* fm_buffer = (int16_t*)malloc(BUFFER_SIZE * sizeof(int16_t));
+                    if (fm_buffer == NULL) {
+                        std::cerr << "Memory allocation failed" << std::endl;
+                        return;
+                    }
+
+                    // Generate FM samples
+                    generate_fm_samples(fm_buffer, NUM_SAMPLES);
+
+                    // Write samples to HackRF using the rf_write function
+                    if (rf_write(&s.rf, fm_buffer, NUM_SAMPLES) != RF_OK) {
+                        std::cerr << "RF write failed" << std::endl;
+                    }
+                    free(fm_buffer);
                 }
             }
 

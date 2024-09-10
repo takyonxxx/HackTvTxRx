@@ -60,9 +60,7 @@ SOURCES += \
     hacktvlib.cpp
 
 HEADERS += \
-    FrequencyModulator.h \
     HackTvLib_global.h \
-    RationalResampler.h \
     audioinput.h \
     hacktv/acp.h \
     hacktv/av.h \
