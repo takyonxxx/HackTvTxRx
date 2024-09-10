@@ -42,7 +42,7 @@ public:
                                            0,                  // Number of output channels
                                            paFloat32,          // Sample format
                                            44100,              // Sample rate
-                                           4096,                // Frames per buffer
+                                           1024,                // Frames per buffer
                                            audioCallback,      // Callback function
                                            this);              // User data
         if (err != paNoError) {

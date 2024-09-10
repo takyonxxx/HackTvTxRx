@@ -1,4 +1,5 @@
 #include "hacktvlib.h"
+#include <QThread>
 #include <iostream>
 #include <getopt.h>
 #include <cstdarg>
@@ -13,7 +14,8 @@
 #include <cstdlib>
 #include "hacktv/av.h"
 #include "hacktv/rf.h"
-#include <QThread>
+#include "modulation.h"
+#include "audioinput.h"
 
 #define VERSION "1.0"
 
@@ -1240,6 +1242,51 @@ void HackTvLib::rfTxLoop()
                         std::cerr << "RF write failed" << std::endl;
                     }
                     free(fm_buffer);
+
+                    // std::unique_ptr<PortAudioInput> m_audioInput = std::make_unique<PortAudioInput>();
+                    // if (!m_audioInput->start()) {
+                    //     std::cerr << "Failed to start PortAudioInput" << std::endl;
+                    //     return;
+                    // }
+
+                    // while (!m_abort)
+                    // {
+                    //     int size;
+                    //     const float* data = m_audioInput->getBuffer(size);
+
+                    //     if (data == nullptr)
+                    //     {
+                    //         std::cerr << "Failed to get audio buffer" << std::endl;
+                    //         continue;
+                    //     }
+
+                    //     // Create a vector from the float data
+                    //     std::vector<float> buffer(data, data + size);
+
+                    //     // Apply modulation and get resampled signal
+                    //     std::vector<std::complex<float>> resampled_signal = apply_modulation(buffer);
+
+                    //     // Convert complex float to int16_t for rf_write
+                    //     std::vector<int16_t> rf_data;
+                    //     rf_data.reserve(resampled_signal.size() * 2);
+                    //     for (const auto& complex_sample : resampled_signal) {
+                    //         // Scale to int16_t range and round
+                    //         rf_data.push_back(static_cast<int16_t>(std::round(complex_sample.real() * 32767.0f)));
+                    //         rf_data.push_back(static_cast<int16_t>(std::round(complex_sample.imag() * 32767.0f)));
+                    //     }
+
+                    //     std::cout << "Buffer size : " << rf_data.size() << " samples" << std::endl;
+
+                    //     // Write to RF
+                    //     if (rf_write(&s.rf, rf_data.data(), rf_data.size()) != RF_OK)
+                    //     {
+                    //         m_abort.store(true);
+                    //         std::cerr << "Buffer rf write  error." << std::endl;
+                    //         break;
+                    //     }
+                    //     m_audioInput->clearBuffer();
+                    // }
+                    // m_audioInput->stop();
                 }
             }
 
@@ -1346,4 +1393,28 @@ bool HackTvLib::stop()
 
     log("HackTvLib stopped.");
     return true;
+}
+
+std::vector<std::complex<float>> HackTvLib::apply_modulation(std::vector<float> buffer)
+{
+
+    int decimation = 1;
+    int interpolation = 48;
+    float sensitivity = 1.0;
+    float filter_size = 0.0;
+    float amplitude = 2.5;
+    size_t desired_size = buffer.size() / 2;
+    std::vector<float> float_buffer(buffer.begin(), buffer.begin() + desired_size);
+
+    int noutput_items = float_buffer.size();
+    for (int i = 0; i < noutput_items; ++i) {
+        float_buffer[i] *= amplitude;
+    }
+    std::vector<std::complex<float>> modulated_signal(noutput_items);
+    FrequencyModulator modulator(sensitivity);
+    modulator.work(noutput_items, float_buffer, modulated_signal);
+    RationalResampler resampler(interpolation, decimation, filter_size);
+    std::vector<std::complex<float>> resampled_signal = resampler.resample(modulated_signal);
+
+    return resampled_signal;
 }
