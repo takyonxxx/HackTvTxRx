@@ -1,5 +1,6 @@
 #ifndef MODULATION_H
 #define MODULATION_H
+
 #include <vector>
 #include <cmath>
 #include <complex>
@@ -8,18 +9,46 @@
 #define M_PI 3.14159265358979323846
 #define F_PI ((float)(M_PI))
 
-namespace fxpt {
+namespace fxpt
+{
 constexpr int32_t FIXED_POINT_ONE = 1 << 16;
-
-int32_t float_to_fixed(float x) {
+inline int32_t float_to_fixed(float x) {
     return static_cast<int32_t>(x * FIXED_POINT_ONE);
 }
-
-void sincos(int32_t angle, float* sin_out, float* cos_out) {
+inline void sincos(int32_t angle, float* sin_out, float* cos_out) {
     float radians = static_cast<float>(angle) / FIXED_POINT_ONE;
     *sin_out = std::sin(radians);
     *cos_out = std::cos(radians);
 }
+}
+
+const double FREQUENCY = 440;        // Frequency of the sine wave in Hz
+const double MODULATION_INDEX = 0.5; // FM modulation index
+const double MODULATION_FREQUENCY = 75000; // Frequency of modulation in Hz
+
+inline void generate_fm_samples(int16_t* buffer, size_t num_samples, int sample_rate) {
+    const double time_step = 1.0 / sample_rate;
+    double t = 0.0;
+    double phase = 0.0;
+
+    // Precompute some constants
+    const double omega_c = 2 * M_PI * FREQUENCY;
+    const double omega_m = 2 * M_PI * MODULATION_FREQUENCY;
+    const double beta = MODULATION_INDEX * MODULATION_FREQUENCY / MODULATION_FREQUENCY;
+
+    for (size_t i = 0; i < num_samples; i += 2) {
+        // Calculate the instantaneous phase
+        double inst_phase = omega_c * t + beta * std::sin(omega_m * t);
+
+        // Generate complex FM sample
+        std::complex<double> sample = std::exp(std::complex<double>(0, inst_phase));
+
+        // Scale and convert to 16-bit integers for I and Q
+        buffer[i] = static_cast<int16_t>(sample.real() * 32767);
+        buffer[i+1] = static_cast<int16_t>(sample.imag() * 32767);
+
+        t += time_step;
+    }
 }
 
 class FrequencyModulator {
@@ -61,11 +90,10 @@ public:
     }
 
     std::vector<std::complex<float>> resample(const std::vector<std::complex<float>>& input) {
-
         std::vector<std::complex<float>> filtered_input = apply_low_pass_filter(input);
 
         std::vector<std::complex<float>> interpolated_output;
-        interpolated_output.reserve(input.size() * interpolation);
+        interpolated_output.reserve(filtered_input.size() * interpolation);
 
         for (size_t i = 0; i < filtered_input.size() - 1; ++i) {
             interpolated_output.push_back(filtered_input[i]);
@@ -84,6 +112,14 @@ public:
 
         for (size_t i = 0; i < interpolated_output.size(); i += decimation) {
             output.push_back(interpolated_output[i]);
+        }
+
+        // Ensure output size matches expected size
+        size_t expected_size = 1024; // Desired size
+        if (output.size() > expected_size) {
+            output.resize(expected_size); // Trim if too large
+        } else if (output.size() < expected_size) {
+            output.resize(expected_size, std::complex<float>(0.0f, 0.0f)); // Pad if too small
         }
 
         return output;
@@ -105,14 +141,14 @@ private:
             sum += tap_value;
         }
 
-        // Filtre normalizasyonu
+        // Filter normalization
         for (auto& tap : filter) {
             tap /= sum;
         }
 
         std::vector<std::complex<float>> filtered_input;
 
-        // Filtreyi uygulama
+        // Apply filter
         for (size_t i = 0; i < input.size(); ++i) {
             std::complex<float> sum = 0;
             for (size_t j = 0; j < filter.size(); ++j) {
@@ -129,4 +165,32 @@ private:
             return input;
     }
 };
+
+inline std::vector<std::complex<float>> apply_modulation(std::vector<float> buffer)
+{
+    int decimation = 1;
+    int interpolation = 32;
+    float sensitivity = 1.0;
+    float filter_size = 0.0;
+    float amplitude = 1.0;
+
+    size_t desired_size = buffer.size() / 2;
+    std::vector<float> float_buffer(buffer.begin(), buffer.begin() + desired_size);
+
+    // Apply amplitude scaling
+    for (auto& sample : float_buffer) {
+        sample *= amplitude;
+    }
+
+    FrequencyModulator modulator(sensitivity);
+    std::vector<std::complex<float>> modulated_signal(float_buffer.size());
+    modulator.work(float_buffer.size(), float_buffer, modulated_signal);
+
+    RationalResampler resampler(interpolation, decimation, filter_size);
+    std::vector<std::complex<float>> resampled_signal = resampler.resample(modulated_signal);
+
+    return resampled_signal;
+}
+
+
 #endif // MODULATION_H

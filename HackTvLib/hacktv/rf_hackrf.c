@@ -19,7 +19,6 @@
 #include <string.h>
 #include <stdint.h>  // For fixed-width integer types
 #include <stdlib.h>  // For malloc and free
-#include <math.h>    // For sin and M_PI
 #include <libhackrf/hackrf.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -214,30 +213,37 @@ static int _buffer_write(buffers_t *buffers, size_t length)
 }
 
 static int _tx_callback(hackrf_transfer *transfer)
-{    
+{
     hackrf_t *rf = transfer->tx_ctx;
     size_t l = transfer->valid_length;
     uint8_t *buf = transfer->buffer;
     int r;
 
-    while(l)
+    while (l)
     {
-        r = _buffer_read(&rf->buffers, (int8_t *) buf, l);
+        r = _buffer_read(&rf->buffers, (int8_t *)buf, l);
 
-        if(r == 0)
+        if (r < 0)
         {
-            /* Buffer underrun, fill with zero */
+            // Error reading buffer
+            printf("Error: Buffer read failed with code %d\n", r);
+            return -1; // Return an error code
+        }
+        else if (r == 0)
+        {
+            // Buffer underrun, fill with zeros
             memset(buf, 0, l);
             l = 0;
         }
         else
         {
+            printf("Copied %d bytes to TX buffer\n", r);
             l -= r;
             buf += r;
         }
     }
 
-    return(0);
+    return 0;
 }
 
 static int _rx_callback(hackrf_transfer *transfer)
