@@ -90,7 +90,9 @@ HEADERS += \
     hacktv/vits.h \
     hacktv/wss.h \
     hacktvlib.h \
-    modulation.h
+    modulation.h \
+    stream_tx.h \
+    types.h
 
 TRANSLATIONS += \
     HackTvLib_tr_TR.ts

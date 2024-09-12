@@ -23,7 +23,6 @@
 #include <pthread.h>
 #include <unistd.h>
 #include "rf.h"
-
 /* Value from host/libhackrf/src/hackrf.c */
 #define TRANSFER_BUFFER_SIZE 262144
 
@@ -528,7 +527,64 @@ int rf_hackrf_open(
     s->write = _rf_write;
     s->read = _rf_read;
     s->close = _rf_close;
-
     return(RF_OK);
 }
+
+// std::unique_ptr<PortAudioInput> m_audioInput = std::make_unique<PortAudioInput>(nullptr, &s.rf);
+// if(micEnabled)
+// {
+//     if (!m_audioInput->start()) {
+//         std::cerr << "Failed to start PortAudioInput" << std::endl;
+//         return;
+//     }
+// }
+
+// std::vector<float> readStreamToSize(size_t size)
+// {
+//     std::vector<float> float_buffer;
+//     float_buffer.reserve(size);
+//     while (float_buffer.size() < size) {
+//         std::vector<float> temp_buffer = stream_tx.readBufferToVector();
+//         size_t elements_needed = size - float_buffer.size();
+//         size_t elements_to_add = (elements_needed < temp_buffer.size()) ? elements_needed : temp_buffer.size();
+//         float_buffer.insert(float_buffer.end(), temp_buffer.begin(), temp_buffer.begin() + elements_to_add);
+//     }
+//     return float_buffer;
+// }
+
+// int apply_modulation(int8_t* buffer, uint32_t length)
+// {
+//     int decimation = 1;
+//     float amplitude = 1.0;
+//     float modulation_index = 5.0;
+//     float interpolation = 48;
+//     float filter_size = 0.0;
+
+//     size_t desired_size = length / 2;
+//     std::vector<float> float_buffer = readStreamToSize(desired_size);
+
+//     if (float_buffer.size() < desired_size) {
+//         return 0;
+//     }
+
+//     int noutput_items = float_buffer.size();
+//     for (int i = 0; i < noutput_items; ++i) {
+//         float_buffer[i] *= amplitude;
+//     }
+
+//     std::vector<std::complex<float>> modulated_signal(noutput_items);
+//     float sensitivity = modulation_index;
+//     FrequencyModulator modulator(sensitivity);
+//     modulator.work(noutput_items, float_buffer, modulated_signal);
+
+//     RationalResampler resampler(interpolation, decimation, filter_size);
+//     std::vector<std::complex<float>> resampled_signal = resampler.resample(modulated_signal);
+
+//     for (int i = 0; i < noutput_items; ++i) {
+//         buffer[2 * i] = static_cast<int8_t>(std::real(resampled_signal[i]) * 127.0f);
+//         buffer[2 * i + 1] = static_cast<int8_t>(std::imag(resampled_signal[i]) * 127.0f);
+//     }
+//     return 0;
+// }
+
 

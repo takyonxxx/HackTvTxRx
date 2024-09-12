@@ -6,10 +6,13 @@
 #include <QObject>
 #include <QMutex>
 #include <QWaitCondition>
-#include <complex>
-#include "modulation.h"
 #include <portaudio.h>
 #include "hacktv/rf.h"
+#include <thread>  // For std::this_thread::sleep_for
+#include <chrono>  // For std::chrono::milliseconds
+#include "types.h"
+#include "stream_tx.h"
+#include "modulation.h"
 
 class PortAudioInput : public QObject
 {
@@ -43,7 +46,7 @@ public:
                                            0,                  // Number of output channels
                                            paFloat32,          // Sample format
                                            44100,              // Sample rate
-                                           1024,                // Frames per buffer
+                                           4096,                // Frames per buffer
                                            audioCallback,      // Callback function
                                            this);              // User data
         if (err != paNoError) {
@@ -75,57 +78,71 @@ public:
         isRunning = false;
     }
 
-    // const float* getBuffer(int& size)
-    // {
-    //     QMutexLocker locker(&m_mutex);
-    //     if (!m_bufferNotEmpty.wait(&m_mutex, 100)) // Wait with timeout
-    //     {
-    //         std::cout << "Wait timeout in getBuffer" << std::endl;
-    //     }
-    //     size = m_buffer.size();
-    //     return m_buffer.empty() ? nullptr : m_buffer.data();
-    // }
+    std::vector<float> readStreamToSize(size_t size) {
+        std::vector<float> float_buffer;
+        float_buffer.reserve(size);
 
-    // void clearBuffer()
-    // {
-    //     QMutexLocker locker(&m_mutex);
-    //     m_buffer.clear();
-    //     m_bufferNotEmpty.wakeAll(); // Wake up any waiting threads
-    // }
+        while (float_buffer.size() < size) {
+            std::vector<float> temp_buffer = stream_tx.readBufferToVector();
+            if (temp_buffer.empty()) {
+                // Add a sleep or yield to avoid busy-waiting
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            } else {
+                size_t elements_needed = size - float_buffer.size();
+                size_t elements_to_add = (elements_needed < temp_buffer.size()) ? elements_needed : temp_buffer.size();
+                float_buffer.insert(float_buffer.end(), temp_buffer.begin(), temp_buffer.begin() + elements_to_add);
+            }
+        }
+        return float_buffer;
+    }
+
+    int apply_modulation(int8_t* buffer, uint32_t length)
+    {
+        int decimation = 1;
+        float amplitude = 1.0;
+        float modulation_index = 5.0;
+        float interpolation = 48;
+        float filter_size = 0.0;
+
+        size_t desired_size = length / 2;
+        std::vector<float> float_buffer = readStreamToSize(desired_size);
+
+        if (float_buffer.size() < desired_size) {
+            return 0;
+        }
+
+        int noutput_items = float_buffer.size();
+        for (int i = 0; i < noutput_items; ++i) {
+            float_buffer[i] *= amplitude;
+        }
+
+        std::vector<std::complex<float>> modulated_signal(noutput_items);
+        float sensitivity = modulation_index;
+        FrequencyModulator modulator(sensitivity);
+        modulator.work(noutput_items, float_buffer, modulated_signal);
+
+        RationalResampler resampler(interpolation, decimation, filter_size);
+        std::vector<std::complex<float>> resampled_signal = resampler.resample(modulated_signal);
+
+        for (int i = 0; i < noutput_items; ++i) {
+            buffer[2 * i] = static_cast<int8_t>(std::real(resampled_signal[i]) * 127.0f);
+            buffer[2 * i + 1] = static_cast<int8_t>(std::imag(resampled_signal[i]) * 127.0f);
+        }
+        return 0;
+    }
 
 private:
     static int audioCallback(const void *inputBuffer, void *outputBuffer, unsigned long framesPerBuffer,
                              const PaStreamCallbackTimeInfo *timeInfo, PaStreamCallbackFlags statusFlags, void *userData)
     {
         PortAudioInput *paInput = static_cast<PortAudioInput*>(userData);
-
-        if (paInput && paInput->isRunning) {
-            QMutexLocker locker(&paInput->m_mutex);
-
-            if (inputBuffer) {
-                int numChannels = 1;
-                size_t numSamples = framesPerBuffer * numChannels;
-
-                const float* in = static_cast<const float*>(inputBuffer);
-                std::vector<float> buffer(in, in + numSamples);
-
-                std::vector<std::complex<float>> resampled_signal = apply_modulation(buffer);
-
-                std::vector<int16_t> rf_data(resampled_signal.size() * 2);
-                for (size_t i = 0; i < resampled_signal.size(); ++i) {
-                    rf_data[2 * i]     = static_cast<int16_t>(resampled_signal[i].real() * 32767);
-                    rf_data[2 * i + 1] = static_cast<int16_t>(resampled_signal[i].imag() * 32767);
-                }
-
-                if (rf_write(paInput->rf_ptr, rf_data.data(), rf_data.size() * sizeof(int16_t)) != RF_OK) {
-                    std::cerr << "Buffer rf write error." << std::endl;
-                }
-
-                // paInput->m_buffer.clear(); // Clear old data
-                // paInput->m_buffer.insert(paInput->m_buffer.end(), in, in + framesPerBuffer); // Append new data
-                // paInput->m_bufferNotEmpty.wakeOne(); // Notify that buffer has new data
-            }
+        if (inputBuffer == nullptr) {
+            std::cerr << "audioCallback: inputBuffer is null!" << std::endl;
+            return paContinue;
         }
+
+        std::memcpy(paInput->stream_tx.writeBuf, inputBuffer, framesPerBuffer * sizeof(dsp::complex_tx));
+        paInput->stream_tx.swap(framesPerBuffer);
         return paContinue;
     }
 
@@ -133,8 +150,8 @@ private:
     bool isRunning;
     QMutex m_mutex;
     QWaitCondition m_bufferNotEmpty;
-    //std::vector<float> m_buffer;
     rf_t* rf_ptr;
+    dsp::stream_tx<dsp::complex_tx> stream_tx;
 };
 
 #endif // AUDIOINPUT_H

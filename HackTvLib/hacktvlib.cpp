@@ -15,6 +15,7 @@
 #include "hacktv/av.h"
 #include "hacktv/rf.h"
 #include "audioinput.h"
+#include "modulation.h"
 
 #define VERSION "1.0"
 
@@ -1130,6 +1131,15 @@ void HackTvLib::setMicEnabled(bool newMicEnabled)
     micEnabled = newMicEnabled;
 }
 
+int16_t* convertFloatToInt16(const std::vector<float>& float_buffer) {
+    size_t size = float_buffer.size();
+    int16_t* fm_buffer = new int16_t[size];
+    for (size_t i = 0; i < size; ++i) {
+        fm_buffer[i] = static_cast<int16_t>(std::clamp(float_buffer[i], -1.0f, 1.0f) * 32767.0f);
+    }
+    return fm_buffer;
+}
+
 void HackTvLib::rfTxLoop()
 {
     do
@@ -1221,13 +1231,11 @@ void HackTvLib::rfTxLoop()
                     // }
                     // free(fm_buffer);
 
-                    QThread::msleep(100);
+                    size_t desired_size = 262144 / 2;  // Desired size for the float buffer
+                    std::vector<float> float_buffer = m_audioInput->readStreamToSize(desired_size);
+                    std::cout << "Final buffer size " << float_buffer.size() << std::endl;
+                    QThread::msleep(10);
                 }                
-            }
-
-            if(micEnabled)
-            {
-                m_audioInput->stop();
             }
 
             if (m_signal.load() != 0)
@@ -1235,6 +1243,9 @@ void HackTvLib::rfTxLoop()
                 log("Caught signal %d", m_signal.load());
                 m_signal.store(0);
             }
+
+            if(micEnabled)
+                m_audioInput->stop();
 
             if(!micEnabled)
                 av_close(&s.vid.av);

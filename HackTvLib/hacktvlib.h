@@ -122,8 +122,7 @@ private:
     void log(const char* format, ...);
     void cleanupArgv();
     void rfTxLoop();
-    void rfRxLoop();
-    std::vector<std::complex<float>> apply_modulation(std::vector<float> buffer);
+    void rfRxLoop();        
 };
 
 #endif // HACKTVLIB_H
