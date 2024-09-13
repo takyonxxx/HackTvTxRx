@@ -15,7 +15,6 @@
 #include "hacktv/av.h"
 #include "hacktv/rf.h"
 #include "audioinput.h"
-#include "modulation.h"
 
 #define VERSION "1.0"
 
