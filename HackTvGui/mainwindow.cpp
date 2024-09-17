@@ -229,8 +229,6 @@ void MainWindow::processReceivedData(const QVector<int16_t>& data)
             iq_samples.emplace_back(I, Q);
         }
 
-        qDebug() << data.size();
-
         // // Apply resampler
         // RationalResampler resampler(12, 1);
         // std::vector<std::complex<float>> resampled_samples = resampler.resample(iq_samples);
@@ -460,6 +458,7 @@ void MainWindow::populateChannelCombo()
     };
 
     QVector<Channel> channels = {
+        {"PowerFM", 100000000},
         {"E2", 48250000},
         {"E3", 55250000},
         {"E4", 62250000},
@@ -525,15 +524,13 @@ void MainWindow::populateChannelCombo()
     };
 
     connect(channelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onChannelChanged);
-
-    channelCombo->addItem("Custom", "");
+            this, &MainWindow::onChannelChanged);    
 
     for (const auto &channel : channels) {
         channelCombo->addItem(channel.name, channel.frequency);
     }
 
-    int defaultIndex = channelCombo->findText("E12");
+    int defaultIndex = channelCombo->findText("PowerFM");
     if (defaultIndex != -1) {
         channelCombo->setCurrentIndex(defaultIndex);
     }
@@ -541,11 +538,6 @@ void MainWindow::populateChannelCombo()
 
 void MainWindow::onChannelChanged(int index)
 {
-    if (index == 0) {
-        // "Custom" selected, do nothing
-        return;
-    }
-
     long long frequency = channelCombo->itemData(index).toLongLong();
     frequencyEdit->setText(QString::number(frequency));
 }

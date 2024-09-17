@@ -236,7 +236,7 @@ static int _tx_callback(hackrf_transfer *transfer)
         }
         else
         {
-            printf("Copied %d bytes to TX buffer\n", r);
+            //printf("Copied %d bytes to TX buffer\n", r);
             l -= r;
             buf += r;
         }

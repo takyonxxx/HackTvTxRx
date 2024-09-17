@@ -276,6 +276,20 @@ bool HackTvLib::start()
     s.raw_bb_white_level = INT16_MAX;
     m_rxTxMode = TX_MODE;
 
+    // std::unique_ptr<PortAudioInput> m_audioInput = std::make_unique<PortAudioInput>(nullptr, &s.rf);
+    // if(micEnabled)
+    // {
+    //     if (!m_audioInput->start()) {
+    //         std::cerr << "Failed to start PortAudioInput" << std::endl;
+    //         return;
+    //     }
+    // }
+
+    // size_t desired_size = 262144 / 2;  // Desired size for the float buffer
+    // std::vector<float> float_buffer = m_audioInput->readStreamToSize(desired_size);
+    // std::cout << "Final buffer size " << float_buffer.size() << std::endl;
+    // m_audioInput->stop();
+
     if(!parseArguments())
         return false;
 
@@ -284,11 +298,7 @@ bool HackTvLib::start()
         s.samplerate / 1e6,
         s.gain,
         getBoolString(s.amp),
-        getRxTxModeString(m_rxTxMode));
-
-    if (m_thread.joinable()) {
-        return false;
-    }
+        getRxTxModeString(m_rxTxMode));   
 
     if(m_rxTxMode == TX_MODE)
     {
@@ -297,26 +307,33 @@ bool HackTvLib::start()
             log("No input specified.");
             return false;
         }
-    }
-
-    if(!micEnabled && !setVideo())
-        return false;
-
-    if(!openDevice())
-        return false;
-
-    if(!micEnabled && !initAv())
-        return false;
+    }   
 
     if(m_rxTxMode == TX_MODE)
     {
-        if (m_thread.joinable()) {
+        if (micEnabled)
+        {
+            log("HackTvLib mic mode not implemented yet.");
             return false;
         }
+
+        if (m_thread.joinable()) {
+            return false;
+        }        
+
+        if(!setVideo())
+            return false;
+
+        if(!openDevice())
+            return false;
+
+        if(!initAv())
+            return false;
 
         m_abort = false;
         m_signal = 0;
         m_thread = std::thread(&HackTvLib::rfTxLoop, this);
+        log("HackTvLib started at TX mode.");
     }
     else
     {
@@ -324,12 +341,14 @@ bool HackTvLib::start()
             return false;
         }
 
+        if(!openDevice())
+            return false;
+
         m_abort = false;
         m_signal = 0;
         m_thread = std::thread(&HackTvLib::rfRxLoop, this);
-    }
-
-    log("HackTvLib started.");
+        log("HackTvLib started at RX mode.");
+    }    
     return true;
 }
 
@@ -1169,11 +1188,7 @@ void HackTvLib::rfTxLoop()
             }
 
             int r = HACKTV_ERROR;
-            if (strncmp(pre, "mic", l) == 0)
-            {                
-                micEnabled = true;                
-            }
-            else if (strncmp(pre, "test", l) == 0)
+            if (strncmp(pre, "test", l) == 0)
             {
                 r = av_test_open(&s.vid.av);
             }
@@ -1186,55 +1201,17 @@ void HackTvLib::rfTxLoop()
                 r = av_ffmpeg_open(&s.vid.av, pre, s.ffmt, s.fopts);
             }
 
-            if (!micEnabled && r != HACKTV_OK)
+            if (r != HACKTV_OK)
             {
                 continue;
-            }
-
-            std::unique_ptr<PortAudioInput> m_audioInput = std::make_unique<PortAudioInput>(nullptr, &s.rf);
-            if(micEnabled)
-            {
-                if (!m_audioInput->start()) {
-                    std::cerr << "Failed to start PortAudioInput" << std::endl;
-                    return;
-                }
-            }
+            }           
 
             while (!m_abort)
-            {
-                if(!micEnabled)
-                {
-                    size_t samples;
-                    int16_t* data = vid_next_line(&s.vid, &samples);
-                    if (data == NULL) break;
-                    if (rf_write(&s.rf, data, samples) != RF_OK) break;
-                }
-                else
-                {
-                    // const size_t BUFFER_SIZE = 262144; // HackRF's TRANSFER_BUFFER_SIZE
-                    // const size_t NUM_SAMPLES = BUFFER_SIZE / 2; // Each sample is I and Q, so half the buffer size
-
-                    // // Allocate buffer for int16_t samples
-                    // int16_t* fm_buffer = (int16_t*)malloc(BUFFER_SIZE * sizeof(int16_t));
-                    // if (fm_buffer == NULL) {
-                    //     std::cerr << "Memory allocation failed" << std::endl;
-                    //     return;
-                    // }
-
-                    // // Generate FM samples
-                    // generate_fm_samples(fm_buffer, NUM_SAMPLES, s.samplerate);
-
-                    // // Write samples to HackRF using the rf_write function
-                    // if (rf_write(&s.rf, fm_buffer, NUM_SAMPLES) != RF_OK) {
-                    //     std::cerr << "RF write failed" << std::endl;
-                    // }
-                    // free(fm_buffer);
-
-                    size_t desired_size = 262144 / 2;  // Desired size for the float buffer
-                    std::vector<float> float_buffer = m_audioInput->readStreamToSize(desired_size);
-                    std::cout << "Final buffer size " << float_buffer.size() << std::endl;
-                    QThread::msleep(10);
-                }                
+            {                
+                size_t samples;
+                int16_t* data = vid_next_line(&s.vid, &samples);
+                if (data == NULL) break;
+                if (rf_write(&s.rf, data, samples) != RF_OK) break;
             }
 
             if (m_signal.load() != 0)
@@ -1242,69 +1219,34 @@ void HackTvLib::rfTxLoop()
                 log("Caught signal %d", m_signal.load());
                 m_signal.store(0);
             }
-
-            if(micEnabled)
-                m_audioInput->stop();
-
-            if(!micEnabled)
-                av_close(&s.vid.av);
+            av_close(&s.vid.av);
         }
     } while (s.repeat && !m_abort);
 }
 
 void HackTvLib::rfRxLoop()
 {
-    const size_t SAMPLES_PER_READ = 131072;  // 262144 / 2, her örnek I/Q çifti olduğu için
+    const size_t SAMPLES_PER_READ = 131072;  // 262144 / 2, as each sample is an I/Q pair
     const size_t BUFFER_SIZE = SAMPLES_PER_READ * 2;
-    std::vector<int16_t> buffer(BUFFER_SIZE);  // vector kullanarak otomatik bellek yönetimi
-
-    int retry_count = 0;
-    const int MAX_RETRIES = 10;
-    const std::chrono::milliseconds RETRY_DELAY(100);
+    std::vector<int16_t> buffer(BUFFER_SIZE);
 
     while (!m_abort.load(std::memory_order_relaxed))
     {
         size_t samples_read = rf_read(&s.rf, buffer.data(), SAMPLES_PER_READ);
-
-        if (samples_read == 0)
+        if (samples_read != 0)
         {
-            if (retry_count < MAX_RETRIES)
-            {
-                std::this_thread::sleep_for(RETRY_DELAY);
-                retry_count++;
-                continue;
-            }
-            else
-            {
-                log("Max retries reached, exiting read loop");
-                break;
-            }
-        }
-        else if (samples_read < 0)
-        {
-            log("Error reading from HackRF. Error code: %d", samples_read);
-            break;
+            emitReceivedData(buffer.data(), samples_read);
         }
 
-        retry_count = 0;
-
-        emitReceivedData(buffer.data(), samples_read);
-
-        if (m_signal.load(std::memory_order_relaxed) != 0)
-        {
-            log("Caught signal %d", m_signal.load(std::memory_order_relaxed));
-            m_signal.store(0, std::memory_order_relaxed);
-            break;
-        }
+        // Use a short sleep instead of a condition variable
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
 
-    if (m_abort.load(std::memory_order_relaxed))
+    int signal = m_signal.load(std::memory_order_relaxed);
+    if (signal != 0)
     {
-        log("Reception aborted");
-    }
-    else
-    {
-        log("Reception completed");
+        log("Caught signal %d", signal);
+        m_signal.store(0, std::memory_order_relaxed);
     }
 }
 
