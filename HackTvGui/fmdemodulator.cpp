@@ -48,7 +48,7 @@ float FMDemodulator::removeDCOffset(const std::vector<float>& input)
 std::vector<float> FMDemodulator::applyLowPassFilter(const std::vector<float>& input)
 {
     std::vector<float> output(input.size());
-    const float alpha = 0.5f; // Adjust this value to change the cutoff frequency
+    const float alpha = 0.4f; // Adjust this value to change the cutoff frequency
 
     output[0] = input[0];
     for (size_t i = 1; i < input.size(); ++i) {

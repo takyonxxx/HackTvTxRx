@@ -25,9 +25,9 @@ MainWindow::MainWindow(QWidget *parent)
         });
         m_hackTvLib->setMicEnabled(false);
 
-        lowPassFilter = std::make_unique<LowPassFilter>(2e6, 75e3, 10e3, 7);
+        lowPassFilter = std::make_unique<LowPassFilter>(2e6, 75e3, 10e3, 6);
         rationalResampler = std::make_unique<RationalResampler>(2, 1);
-        fmDemodulator = std::make_unique<FMDemodulator>(480e3, 12);
+        fmDemodulator = std::make_unique<FMDemodulator>(480e3, 14);
 
         audioOutput = std::make_unique<AudioOutput>();
         if (!audioOutput) {
