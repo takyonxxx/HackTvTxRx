@@ -2,7 +2,7 @@
 #include <QDebug>
 #include <QBuffer>
 
-AudioOutput::AudioOutput(QObject *parent, int sampleRate):
+AudioOutput::AudioOutput(QObject *parent):
     QObject(parent)
 {
     QAudioDevice outputDevice;
@@ -18,9 +18,9 @@ AudioOutput::AudioOutput(QObject *parent, int sampleRate):
         return;
     }
 
-    m_format.setSampleFormat(QAudioFormat::Float);
-    m_format.setSampleRate(sampleRate);
-    m_format.setChannelCount(1);
+    m_format.setSampleFormat(QAudioFormat::Int16);
+    m_format.setSampleRate(SAMPLE_RATE);
+    m_format.setChannelCount(CHANNEL_COUNT);
 
     if (!outputDevice.isFormatSupported(m_format)) {
         qDebug() << "Desired audio format is not supported by the device. Trying to use nearest format.";
@@ -52,6 +52,23 @@ void AudioOutput::handleAudioOutputStateChanged(QAudio::State newState)
     if (newState == QAudio::StoppedState) {
     } else if (newState == QAudio::ActiveState) {
     }
+}
+
+void AudioOutput::processAudio(const std::vector<float> &audioData)
+{
+    if (!audioDevice) {
+        return;
+    }
+
+    buffer.resize(audioData.size() * sizeof(qint16));
+    qint16* output = reinterpret_cast<qint16*>(buffer.data());
+
+    for (size_t i = 0; i < audioData.size(); ++i) {
+        output[i] = static_cast<qint16>(audioData[i] * 32767.0f);
+    }
+
+    QMutexLocker locker(mutex);
+    audioDevice->write(buffer);
 }
 
 void AudioOutput::stop()

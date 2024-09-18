@@ -16,14 +16,20 @@ class AudioOutput: public QObject
 {
     Q_OBJECT
 public:
-    explicit AudioOutput(QObject *parent, int sampleRate);
+    explicit AudioOutput(QObject *parent = nullptr);
     ~AudioOutput();
     void stop();
     void writeBuffer(const QByteArray &buffer);
+    void setVolume(float volume);
 
-private slots:
+public slots:
     void handleAudioOutputStateChanged(QAudio::State newState);
+    void processAudio(const std::vector<float>& audioData);
 private:
+
+    static constexpr int SAMPLE_RATE = 48000;
+    static constexpr int CHANNEL_COUNT = 1;
+    static constexpr int SAMPLE_SIZE = 16;
 
     QMutex *mutex{};
     bool m_abort {false};
@@ -31,6 +37,7 @@ private:
     QAudioFormat m_format;
     QScopedPointer<QAudioSink> m_audioOutput;
     QIODevice *audioDevice;
+    QByteArray buffer;
 };
 
 #endif // AUDIOOUTPUT_H

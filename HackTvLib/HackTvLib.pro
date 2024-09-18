@@ -32,6 +32,7 @@ win32:LIBS += -lwinmm -lcomctl32 -lole32 -luuid -lws2_32 -lgdi32 -lshell32 -ladv
 QMAKE_LFLAGS += -Wl,--subsystem,windows
 
 SOURCES += \
+    hackrfdevice.cpp \
     hacktv/acp.c \
     hacktv/av.c \
     hacktv/av_ffmpeg.c \
@@ -62,6 +63,7 @@ SOURCES += \
 HEADERS += \
     HackTvLib_global.h \
     audioinput.h \
+    hackrfdevice.h \
     hacktv/acp.h \
     hacktv/av.h \
     hacktv/av_ffmpeg.h \

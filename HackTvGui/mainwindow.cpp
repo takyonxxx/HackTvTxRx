@@ -7,12 +7,12 @@
 #include <QGroupBox>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QDockWidget>
 #include <QLabel>
-#include "filters.h"
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
-    m_hackTvLib(std::make_unique<HackTvLib>())
+    m_hackTvLib(std::make_unique<HackTvLib>()), m_isProcessing(false)
 {
     setupUi();
 
@@ -20,11 +20,20 @@ MainWindow::MainWindow(QWidget *parent)
         m_hackTvLib->setLogCallback([this](const std::string& msg) {
             handleLog(msg);
         });
-        m_hackTvLib->setReceivedDataCallback([this](const int16_t* data, size_t samples) {
-            handleReceivedData(data, samples);
+        m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
+            handleReceivedData(data, len);
         });
         m_hackTvLib->setMicEnabled(false);
-        audioOutput = new AudioOutput(this, DEFAULT_AUDIO_SAMPLE_RATE);
+
+        lowPassFilter = std::make_unique<LowPassFilter>(2e6, 75e3, 10e3, 7);
+        rationalResampler = std::make_unique<RationalResampler>(2, 1);
+        fmDemodulator = std::make_unique<FMDemodulator>(480e3, 12);
+
+        audioOutput = std::make_unique<AudioOutput>();
+        if (!audioOutput) {
+            throw std::runtime_error("Failed to create AudioOutput");
+        }        
+
     }
     catch (const std::exception& e) {
         qDebug() << "Exception in createHackTvLib:" << e.what();
@@ -42,8 +51,50 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
-    if(audioOutput)
-    delete audioOutput;
+    audioOutput.reset();
+    fmDemodulator.reset();
+    rationalResampler.reset();
+    lowPassFilter.reset();
+}
+
+void MainWindow::processReceivedData(const int8_t *data, size_t len)
+{
+    if (!m_isProcessing.load() || !data || len == 0) {
+        return;
+    }
+
+    try
+    {
+        std::vector<std::complex<float>> samples;
+        samples.reserve(len / 2);
+        for (size_t i = 0; i < len; i += 2) {
+            float i_sample = data[i] / 128.0f;
+            float q_sample = data[i + 1] / 128.0f;
+            samples.emplace_back(i_sample, q_sample);
+        }
+
+        if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput) {
+            auto filteredSamples = lowPassFilter->apply(samples);
+            auto resampledSamples = rationalResampler->resample(filteredSamples);
+            auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);
+            audioOutput->processAudio(demodulatedSamples);
+        } else {
+            qDebug() << "One or more components of the signal chain are not initialized.";
+        }
+    }
+    catch (const std::exception& e) {
+        qDebug() << "Exception caught in processReceivedData:" << e.what();
+    }
+    catch (...) {
+        qDebug() << "Unknown exception caught in processReceivedData";
+    }
+}
+
+void MainWindow::handleReceivedData(const int8_t *data, size_t len)
+{
+    QMetaObject::invokeMethod(this, "processReceivedData", Qt::QueuedConnection,
+                              Q_ARG(const int8_t*, data),
+                              Q_ARG(size_t, len));
 }
 
 void MainWindow::setupUi()
@@ -92,7 +143,7 @@ void MainWindow::setupUi()
     channelCombo = new QComboBox(this);
     QLabel *sampleRateLabel = new QLabel("Sample Rate (MHz):", this);
     sampleRateEdit = new QLineEdit(this);
-    sampleRateEdit->setText("16");
+    sampleRateEdit->setText("2");
     sampleRateEdit->setFixedWidth(35);
     QLabel *rxtxLabel = new QLabel("RxTx Mode:", this);
     rxtxCombo = new QComboBox(this);
@@ -209,81 +260,8 @@ void MainWindow::setupUi()
     connect(inputTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onInputTypeChanged);
     connect(rxtxCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onRxTxTypeChanged);
-}
+            this, &MainWindow::onRxTxTypeChanged);    
 
-void MainWindow::processReceivedData(const QVector<int16_t>& data)
-{
-    const float input_sample_rate = _MHZ(16);
-    const float output_sample_rate = _KHZ(48);
-
-    try {
-
-        std::vector<std::complex<float>> iq_samples;
-        iq_samples.reserve(data.size() / 2);
-
-        AGC agc(0.5f, 0.001f, 0.0001f);
-        for (qsizetype i = 0; i < data.size() - 1; i += 2) {
-            float I = agc.process(data[i] / 32768.0f);
-            float Q = agc.process(data[i + 1] / 32768.0f);
-            iq_samples.emplace_back(I, Q);
-        }
-
-        // // Apply resampler
-        // RationalResampler resampler(12, 1);
-        // std::vector<std::complex<float>> resampled_samples = resampler.resample(iq_samples);
-
-        // // WFM Demodulation
-        // WfmDemodulator demodulator(5.0f);  // Adjust gain as necessary
-        // std::vector<float> demodulated_audio = demodulator.demodulate(resampled_samples);
-
-        // // Design FIR filter using low-pass filter design parameters
-        // std::vector<float> fir_taps = design_low_pass_filter(101, output_sample_rate, DEFAULT_CUT_OFF, DEFAULT_CUT_OFF);
-        // FirFilter fir_filter(fir_taps);
-
-        // // Apply FIR filter
-        // std::vector<float> filtered_audio = fir_filter.filter(demodulated_audio);
-
-        // // Optional: Normalize and apply soft clipping
-        // float max_amplitude = *std::max_element(filtered_audio.begin(), filtered_audio.end(),
-        //                                         [](float a, float b) { return std::abs(a) < std::abs(b); });
-        // float scale_factor = (max_amplitude > 0.01f) ? 0.95f / max_amplitude : 1.0f;
-
-        // auto soft_clip = [](float x) {
-        //     return std::tanh(x);
-        // };
-
-        // QByteArray audioData;
-        // audioData.reserve(filtered_audio.size() * sizeof(float));
-
-        // for (float sample : filtered_audio) {
-        //     sample *= scale_factor;
-        //     sample = soft_clip(sample);
-        //     audioData.append(reinterpret_cast<const char*>(&sample), sizeof(float));
-        // }
-
-        // audioOutput->writeBuffer(audioData);
-
-        // qDebug() << "Audio" << audioData.size() / sizeof(float) << "samples. Max amplitude:" << max_amplitude;
-        // qDebug() << "First 10 audio samples:";
-        // for (qsizetype i = 0; i < std::min<qsizetype>(10, audioData.size() / sizeof(float)); ++i) {
-        //     float sample = *reinterpret_cast<const float*>(audioData.constData() + i * sizeof(float));
-        //     qDebug() << sample;
-        // }
-
-    }
-    catch (const std::exception& e) {
-        qDebug() << "Exception caught in processReceivedData:" << e.what();
-    }
-    catch (...) {
-        qDebug() << "Unknown exception caught in processReceivedData";
-    }
-}
-
-void MainWindow::handleReceivedData(const int16_t* data, size_t samples)
-{
-    QMetaObject::invokeMethod(this, "processReceivedData", Qt::QueuedConnection,
-                              Q_ARG(QVector<int16_t>, QVector<int16_t>(data, data + samples)));
 }
 
 void MainWindow::executeCommand()
@@ -306,7 +284,8 @@ void MainWindow::executeCommand()
                 executeButton->setText("Stop");
                 QString argsString = args.join(' ');
                 logBrowser->append(argsString);
-            } else {               
+                m_isProcessing.store(true);
+            } else {
                 logBrowser->append("Failed to start HackTvLib.");
             }
         }
@@ -318,6 +297,8 @@ void MainWindow::executeCommand()
     {
         try
         {
+            m_isProcessing.store(false);
+
             if(m_hackTvLib->stop())
                 executeButton->setText("Start");
             else
@@ -402,6 +383,7 @@ QStringList MainWindow::buildCommand()
         args << "test";
         break;
     }
+
     return args;
 }
 

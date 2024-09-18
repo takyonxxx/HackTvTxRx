@@ -11,6 +11,7 @@
 #include <complex>
 #include "hacktv/video.h"
 #include "hacktv/rf.h"
+#include "hackrfdevice.h"
 
 /* Return codes */
 #define HACKTV_OK             0
@@ -90,10 +91,12 @@ typedef struct {
 } hacktv_t;
 
 
-class HackTvLib{
+class HackTvLib
+{
+
 public:
     using LogCallback = std::function<void(const std::string&)>;
-    using DataCallback = std::function<void(const int16_t*, size_t)>;
+    using DataCallback = std::function<void(const int8_t*, size_t)>;
 
      HackTvLib();
     ~HackTvLib();
@@ -105,7 +108,8 @@ public:
     void setMicEnabled(bool newMicEnabled);
 
 private slots:
-    void emitReceivedData(const int16_t* data, size_t samples);
+    void emitReceivedData(const int8_t *data, size_t data_len);
+    void dataReceived(const int8_t* data, size_t data_len);
 private:
     LogCallback m_logCallback;
     DataCallback m_dataCallback;
@@ -122,7 +126,7 @@ private:
     void log(const char* format, ...);
     void cleanupArgv();
     void rfTxLoop();
-    void rfRxLoop();        
+    HackRfDevice *hackRfDevice{};
 };
 
 #endif // HACKTVLIB_H
