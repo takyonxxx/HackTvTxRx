@@ -9,6 +9,7 @@
 #include <QMessageBox>
 #include <QDockWidget>
 #include <QLabel>
+#include "constants.h"
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
@@ -24,10 +25,6 @@ MainWindow::MainWindow(QWidget *parent)
             handleReceivedData(data, len);
         });
         m_hackTvLib->setMicEnabled(false);
-
-        lowPassFilter = std::make_unique<LowPassFilter>(2e6, 75e3, 10e3, 6);
-        rationalResampler = std::make_unique<RationalResampler>(2, 1);
-        fmDemodulator = std::make_unique<FMDemodulator>(480e3, 14);
 
         audioOutput = std::make_unique<AudioOutput>();
         if (!audioOutput) {
@@ -73,10 +70,19 @@ void MainWindow::processReceivedData(const int8_t *data, size_t len)
             samples.emplace_back(i_sample, q_sample);
         }
 
+        int fft_size = 2048;
+        std::vector<float> fft_output(fft_size);
+        getFft(samples, fft_output, fft_size);
+
+        cPlotter->setNewFttData(fft_output.data(), fft_output.data(), fft_size);
+
         if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput) {
             auto filteredSamples = lowPassFilter->apply(samples);
             auto resampledSamples = rationalResampler->resample(filteredSamples);
             auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);
+            for (auto& sample : demodulatedSamples) {
+                sample *= audioGain;
+            }
             audioOutput->processAudio(demodulatedSamples);
         } else {
             qDebug() << "One or more components of the signal chain are not initialized.";
@@ -101,6 +107,8 @@ void MainWindow::setupUi()
 {
     QWidget *centralWidget = new QWidget(this);
     QVBoxLayout *mainLayout = new QVBoxLayout(centralWidget);
+
+    resize(800, 600);
 
     // Output device group
     QGroupBox *outputGroup = new QGroupBox("Output Device", this);
@@ -172,7 +180,37 @@ void MainWindow::setupUi()
     outputLayout->addWidget(rxtxCombo, 3, 3);
     outputLayout->addWidget(colorDisabled, 3, 4);
 
+    cPlotter = new CPlotter(this);
+    cPlotter->setTooltipsEnabled(true);
+
+    cPlotter->setSampleRate(DEFAULT_RF_SAMPLE_RATE);
+    cPlotter->setSpanFreq(static_cast<quint32>(DEFAULT_RF_SAMPLE_RATE));
+    cPlotter->setCenterFreq(static_cast<quint64>(DEFAULT_FREQUENCY));
+
+    cPlotter->setFftRange(-140.0f, 20.0f);
+    cPlotter->setFftRate(fftrate);
+    cPlotter->setPandapterRange(-140.f, 20.f);
+    cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
+    cPlotter->setDemodRanges(m_LowCutFreq, -_KHZ(5), _KHZ(5),m_HiCutFreq, true);
+
+    cPlotter->setFreqUnits(1000);
+    cPlotter->setPercent2DScreen(50);
+    cPlotter->setFilterBoxEnabled(true);
+    cPlotter->setCenterLineEnabled(true);
+    cPlotter->setClickResolution(1);
+
+    cPlotter->setFftPlotColor(QColor("#CEECF5"));
+    cPlotter->setFreqStep(_KHZ(5));
+
+    //cPlotter->setPeakDetection(true ,2);
+    cPlotter->setFftFill(true);
+    cPlotter->setMinimumHeight(200);
+
+    connect(cPlotter, &CPlotter::newDemodFreq, this, &MainWindow::on_plotter_newDemodFreq);
+    connect(cPlotter, &CPlotter::newFilterFreq, this, &MainWindow::on_plotter_newFilterFreq);
+
     mainLayout->addWidget(outputGroup);
+    mainLayout->addWidget(cPlotter);
     populateChannelCombo();
 
     // Mode group
@@ -260,8 +298,21 @@ void MainWindow::setupUi()
     connect(inputTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onInputTypeChanged);
     connect(rxtxCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onRxTxTypeChanged);    
+            this, &MainWindow::onRxTxTypeChanged);
 
+    rxtxCombo->setCurrentIndex(1);
+}
+
+void MainWindow::on_plotter_newDemodFreq(qint64 freq, qint64 delta)
+{
+    qDebug() << freq << delta;
+}
+
+void MainWindow::on_plotter_newFilterFreq(int low, int high)
+{
+    m_LowCutFreq = low;
+    m_HiCutFreq = high;
+    qDebug() << low << high;
 }
 
 void MainWindow::executeCommand()
@@ -384,6 +435,12 @@ QStringList MainWindow::buildCommand()
         break;
     }
 
+    auto decimation = int(sample_rate.toInt() / DEFAULT_CHANNEL_WIDTH);
+
+    lowPassFilter = std::make_unique<LowPassFilter>(sample_rate.toInt(), m_HiCutFreq, 10e3, decimation);
+    rationalResampler = std::make_unique<RationalResampler>(2, 1);
+    fmDemodulator = std::make_unique<FMDemodulator>(480e3, 14);
+
     return args;
 }
 
@@ -439,8 +496,8 @@ void MainWindow::populateChannelCombo()
         long long frequency;
     };
 
-    QVector<Channel> channels = {
-        {"PowerFM", 100000000},
+    QVector<Channel> channels = {       
+        {"PowerFm", 100000000},
         {"E2", 48250000},
         {"E3", 55250000},
         {"E4", 62250000},

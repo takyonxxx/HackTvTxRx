@@ -12,6 +12,7 @@
 #include "audiooutput.h"
 #include "lowpassfilter.h"
 #include "rationalresampler.h"
+#include "cplotter.h"
 
 class QGroupBox;
 class QLineEdit;
@@ -60,7 +61,14 @@ private:
     std::unique_ptr<FMDemodulator> fmDemodulator;
     std::unique_ptr<AudioOutput> audioOutput;
     std::unique_ptr<RationalResampler> rationalResampler;
-    float audioGain = 0.75f;
+    CPlotter *cPlotter;
+    float audioGain = 0.5f;
+    int m_LowCutFreq = -75e3;
+    int m_HiCutFreq = 75e3;
+    int flo = -5000;
+    int fhi = 5000;
+    int click_res = 100;
+    int fftrate = 25;
 
     std::atomic<bool> m_isProcessing;
 
@@ -78,6 +86,8 @@ private slots:
     void populateChannelCombo();
     void onChannelChanged(int index);
     void processReceivedData(const int8_t *data, size_t len);
+    void on_plotter_newDemodFreq(qint64 freq, qint64 delta);
+    void on_plotter_newFilterFreq(int low, int high);
 };
 
 #endif // MAINWINDOW_H
