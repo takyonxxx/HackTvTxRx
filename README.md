@@ -1,6 +1,9 @@
 # HackTvWindows QT 6.6 Library Project
 
-This project is a clone of https://github.com/fsphil/hacktv with modifications for building on Windows. Enabled Rx WFM && FFt spectrum
+This project is a clone of https://github.com/fsphil/hacktv with modifications for building on Windows. 
+
+Enabled Rx WFM && FFt spectrum
+
 Still continue to develop.
 
 <b>Please compile with Desktop Qt 6.6x MinGW 64-bit</b>
