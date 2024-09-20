@@ -13,9 +13,11 @@ SOURCES += \
     audiooutput.cpp \
     cplotter.cpp \
     fmdemodulator.cpp \
+    freqctrl.cpp \
     lowpassfilter.cpp \
     main.cpp \
     mainwindow.cpp \
+    meter.cpp \
     rationalresampler.cpp
 
 HEADERS += \
@@ -23,8 +25,10 @@ HEADERS += \
     constants.h \
     cplotter.h \
     fmdemodulator.h \
+    freqctrl.h \
     lowpassfilter.h \
     mainwindow.h \
+    meter.h \
     rationalresampler.h
 
 FORMS += \

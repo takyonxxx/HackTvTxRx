@@ -284,7 +284,41 @@ bool HackTvLib::start()
         s.samplerate / 1e6,
         s.gain,
         getBoolString(s.amp),
-        getRxTxModeString(m_rxTxMode));    
+        getRxTxModeString(m_rxTxMode));
+
+    if(m_rxTxMode != RX_MODE && micEnabled)
+    {
+        log("Mic not implemented.");
+        return false;
+    }
+
+    if(m_rxTxMode == RX_MODE)
+    {
+        m_abort = false;
+        m_signal = 0;        
+        // m_thread = std::thread(&HackTvLib::rfRxLoop, this);
+
+        hackRfDevice = new HackRfDevice();
+        if(!micEnabled)
+        {
+            hackRfDevice->setDataCallback([this](const int8_t* data, size_t len) {
+                this->dataReceived(data, len);
+            });
+        }
+
+        hackRfDevice->setSampleRate(s.samplerate);
+        hackRfDevice->setFrequency(s.frequency);
+        hackRfDevice->setAmpEnable(s.amp);
+
+        if(hackRfDevice->start(rf_mode::RX) != RF_OK)
+        {
+            log("Could not open HackRF. Please check the device.");
+            return false;
+        }
+
+        log("HackTvLib started at RX mode.");
+        return true;
+    }
 
     if(m_rxTxMode != RX_MODE && optind >= m_argv.size())
     {
@@ -305,22 +339,24 @@ bool HackTvLib::start()
     if(m_rxTxMode != RX_MODE && !initAv())
         return false;
 
-    if(m_rxTxMode == RX_MODE)
-    {
-        m_abort = false;
-        m_signal = 0;
-        m_thread = std::thread(&HackTvLib::rfRxLoop, this);
-        log("HackTvLib started at RX mode.");
-    }
-    else
-    {
-        m_abort = false;
-        m_signal = 0;
-        m_thread = std::thread(&HackTvLib::rfTxLoop, this);
-        log("HackTvLib started at TX mode.");
-    }
+    m_abort = false;
+    m_signal = 0;
+    m_thread = std::thread(&HackTvLib::rfTxLoop, this);
+    log("HackTvLib started at TX mode.");
 
     return true;
+}
+
+void HackTvLib::setFrequency(uint64_t frequency_hz)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setFrequency(frequency_hz);
+    }
+}
+
+void HackTvLib::dataReceived(const int8_t *data, size_t len)
+{
+    emitReceivedData(data, len);
 }
 
 void HackTvLib::cleanupArgv()
@@ -1209,24 +1245,18 @@ void HackTvLib::rfTxLoop()
 
 void HackTvLib::rfRxLoop()
 {
-    static const size_t HACKRF_TRANSFER_BUFFER_SIZE = 262144; // 262,144 bytes
-    uint8_t buffer[HACKRF_TRANSFER_BUFFER_SIZE];
+    const size_t SAMPLES_PER_READ = 131072;  // Number of I/Q pairs to read
+    const size_t BUFFER_SIZE = SAMPLES_PER_READ * 2;  // Correct, as each I/Q pair is 2 int8_t values
+    std::vector<int16_t> buffer(BUFFER_SIZE);
 
     while (!m_abort)
     {
-        // Read data using rf_read
-        int result = rf_read(&s.rf, reinterpret_cast<int16_t*>(buffer), HACKRF_TRANSFER_BUFFER_SIZE / sizeof(int16_t));
-
-        if (result > 0)
+        size_t bytes_read = rf_read(&s.rf, buffer.data(), BUFFER_SIZE);
+        if (bytes_read != 0)
         {
-            size_t bytes_read = result * sizeof(int16_t);
-            emitReceivedData(reinterpret_cast<const int8_t*>(buffer), bytes_read);
+            log("Bytes read: %zu", bytes_read);
         }
-        else if (result == RF_ERROR)
-        {
-            log("RF read error");
-            break;
-        }
+        QThread::msleep(10);
     }
 
     if (m_signal.load() != 0)
@@ -1234,10 +1264,20 @@ void HackTvLib::rfRxLoop()
         log("Caught signal %d", m_signal.load());
         m_signal.store(0);
     }
-    av_close(&s.vid.av);
 }
+
 bool HackTvLib::stop()
 {
+    if(m_rxTxMode == RX_MODE)
+    {
+        if(hackRfDevice->stop() == 0)
+        {
+            delete hackRfDevice;
+            log("HackTvLib stopped.");
+            return true;
+        }
+        return false;
+    }
 
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_thread.joinable()) {

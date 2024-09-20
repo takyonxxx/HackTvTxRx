@@ -71,6 +71,7 @@ typedef struct {
 
 } hackrf_t;
 
+
 static int _buffer_init(buffers_t *buffers, size_t count, size_t length)
 {
     int i;

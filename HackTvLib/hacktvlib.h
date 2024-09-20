@@ -106,9 +106,11 @@ public:
     void setReceivedDataCallback(DataCallback callback);
     bool setArguments(const std::vector<std::string>& args);
     void setMicEnabled(bool newMicEnabled);
+    void setFrequency(uint64_t frequency_hz);
 
 private slots:
     void emitReceivedData(const int8_t *data, size_t data_len);
+    void dataReceived(const int8_t* data, size_t data_len);
 private:
     LogCallback m_logCallback;
     DataCallback m_dataCallback;
@@ -126,6 +128,7 @@ private:
     void cleanupArgv();
     void rfTxLoop();
     void rfRxLoop();
+    HackRfDevice *hackRfDevice{};
 };
 
 #endif // HACKTVLIB_H

@@ -24,6 +24,7 @@ public:
     void setReceivedDataCallback(DataCallback callback);
     bool setArguments(const std::vector<std::string>& args);
     void setMicEnabled(bool newMicEnabled);
+    void setFrequency(uint64_t frequency_hz);
 
 private slots:
     void emitReceivedData(const int16_t* data, size_t samples);

@@ -186,7 +186,6 @@ void HackRfDevice::emitReceivedData(const int8_t *data, size_t len)
     }
 }
 
-// Setter implementations
 void HackRfDevice::setFrequency(uint64_t frequency_hz)
 {
     m_frequency = frequency_hz;

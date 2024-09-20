@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <vector>
 #include <cmath>
-#include <chrono>
 
 #define _GHZ(x) ((uint64_t)(x) * 1000000000)
 #define _MHZ(x) ((x) * 1000000)
@@ -14,9 +13,14 @@
 #define _HZ(x) ((x) * 1)
 
 #define DEFAULT_FREQUENCY              _MHZ(100)
-#define DEFAULT_RF_SAMPLE_RATE         _MHZ(2)
+#define DEFAULT_SAMPLE_RATE            _MHZ(2)
 #define DEFAULT_AUDIO_SAMPLE_RATE      _KHZ(48)
-#define DEFAULT_CUT_OFF                _KHZ(75)
+#define DEFAULT_CUT_OFF                _KHZ(100)
+#define HACKRF_TX_VGA_MAX_DB            47.0
+#define HACKRF_RX_VGA_MAX_DB            40.0
+#define HACKRF_RX_LNA_MAX_DB            40.0
+#define HACKRF_AMP_MAX_DB               14.0
+#define DEFAULT_FFT_SIZE                1024
 
 #define M_PI 3.14159265358979323846
 #define F_PI ((float)(M_PI))
@@ -70,14 +74,14 @@ inline void getFft(const std::vector<std::complex<float>>& samples, std::vector<
     fft(fft_data);
     // FFT çıktısını yeniden düzenle (DC'yi ortaya al)
     std::rotate(fft_data.begin(), fft_data.begin() + fft_size / 2, fft_data.end());
-    float maxPower = 1e-20f;
+    float maxPower = 1e-10f;
     for (int i = 0; i < fft_size; ++i) {
         float power = std::norm(fft_data[i]);
         maxPower = std::max(maxPower, power);
     }
-    float amplificationFactor = 2.0f; // Genliği koruyoruz
+    float amplificationFactor = 2.0; // Genliği koruyoruz
     float minDisplayPower = maxPower / 1e4; // Dinamik aralığı koruyoruz (-40 dB)
-    float refLevel = 0.0f; // Referans seviyesini daha da yukarı çektik, bu sinyali daha aşağı kaydıracak
+    float refLevel = 10.0f; // Referans seviyesini daha da yukarı çektik, bu sinyali daha aşağı kaydıracak
     fft_output.resize(fft_size);
     for (int i = 0; i < fft_size; ++i) {
         float power = std::norm(fft_data[i]);

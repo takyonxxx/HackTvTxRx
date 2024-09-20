@@ -13,9 +13,30 @@
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
-    m_hackTvLib(std::make_unique<HackTvLib>()), m_isProcessing(false)
+    m_hackTvLib(std::make_unique<HackTvLib>()),
+    m_LowCutFreq(-1*int(DEFAULT_CUT_OFF)),
+    m_HiCutFreq(DEFAULT_CUT_OFF),
+    m_frequency(DEFAULT_FREQUENCY),
+    m_sampleRate(DEFAULT_SAMPLE_RATE),
+    m_isProcessing(false),
+    m_isInitialized(false)
 {
+    QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+    m_sSettingsFile = homePath + "/settings.ini";
+
     setupUi();
+
+    if (QFile(m_sSettingsFile).exists())
+        loadSettings();
+    else
+        saveSettings();
+
+    frequencyEdit->setText(QString::number(m_frequency));
+    sampleRateEdit->setText(QString::number(m_sampleRate));
+    cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
+    cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
+    cPlotter->setDemodRanges(m_LowCutFreq, -_KHZ(5), _KHZ(5),m_HiCutFreq, true);
+    freqCtrl->setFrequency(m_frequency);
 
     try {        
         m_hackTvLib->setLogCallback([this](const std::string& msg) {
@@ -29,7 +50,9 @@ MainWindow::MainWindow(QWidget *parent)
         audioOutput = std::make_unique<AudioOutput>();
         if (!audioOutput) {
             throw std::runtime_error("Failed to create AudioOutput");
-        }        
+        }
+
+        m_isInitialized = true;
 
     }
     catch (const std::exception& e) {
@@ -55,7 +78,7 @@ MainWindow::~MainWindow()
 }
 
 void MainWindow::setupUi()
-{
+{   
     QWidget *centralWidget = new QWidget(this);
     QVBoxLayout *mainLayout = new QVBoxLayout(centralWidget);
 
@@ -98,8 +121,7 @@ void MainWindow::setupUi()
     channelCombo = new QComboBox(this);
     QLabel *sampleRateLabel = new QLabel("Sample Rate (MHz):", this);
     sampleRateEdit = new QLineEdit(this);
-    sampleRateEdit->setText("2");
-    sampleRateEdit->setFixedWidth(35);
+    sampleRateEdit->setFixedWidth(100);
     QLabel *rxtxLabel = new QLabel("RxTx Mode:", this);
     rxtxCombo = new QComboBox(this);
     rxtxCombo->addItem("TX", "tx");
@@ -125,12 +147,21 @@ void MainWindow::setupUi()
     outputLayout->addWidget(rxtxLabel, 3, 2);
     outputLayout->addWidget(rxtxCombo, 3, 3);
 
+    mainLayout->addWidget(outputGroup);
+
+    freqCtrl = new CFreqCtrl();
+    freqCtrl->setup(0, 0, 6000e6, 1, FCTL_UNIT_MHZ);
+    freqCtrl->setDigitColor(QColor("#FFC300"));
+    freqCtrl->setFrequency(DEFAULT_FREQUENCY);
+    connect(freqCtrl, &CFreqCtrl::newFrequency, this, &MainWindow::onFreqCtrl_setFrequency);
+    freqCtrl->setMinimumHeight(50);
+
     cPlotter = new CPlotter(this);
     cPlotter->setTooltipsEnabled(true);
 
-    cPlotter->setSampleRate(DEFAULT_RF_SAMPLE_RATE);
-    cPlotter->setSpanFreq(static_cast<quint32>(DEFAULT_RF_SAMPLE_RATE));
-    cPlotter->setCenterFreq(static_cast<quint64>(DEFAULT_FREQUENCY));
+    cPlotter->setSampleRate(m_sampleRate);
+    cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
+    cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
 
     cPlotter->setFftRange(-140.0f, 20.0f);
     cPlotter->setFftRate(fftrate);
@@ -154,13 +185,19 @@ void MainWindow::setupUi()
     connect(cPlotter, &CPlotter::newDemodFreq, this, &MainWindow::on_plotter_newDemodFreq);
     connect(cPlotter, &CPlotter::newFilterFreq, this, &MainWindow::on_plotter_newFilterFreq);
 
-    mainLayout->addWidget(outputGroup);
-    mainLayout->addWidget(cPlotter);
-    populateChannelCombo();
+    QGroupBox *rxGroup = new QGroupBox("Receiver", this);
+    QGridLayout *rxLayout = new QGridLayout(rxGroup);
+    rxLayout->setVerticalSpacing(15);
+    rxLayout->setHorizontalSpacing(15);
+    rxLayout->addWidget(freqCtrl);
+    rxLayout->addWidget(cPlotter);
+    mainLayout->addWidget(rxGroup);
 
     // Mode group
     modeGroup = new QGroupBox("Mode", this);
     QHBoxLayout *modeLayout = new QHBoxLayout(modeGroup);
+    populateChannelCombo();
+
     modeCombo = new QComboBox(this);
 
     QVector<QPair<QString, QString>> modes = {
@@ -217,6 +254,13 @@ void MainWindow::setupUi()
     logBrowser = new QTextBrowser(this);
     mainLayout->addWidget(logBrowser);
 
+    QGroupBox *logGroup = new QGroupBox("Info", this);
+    QGridLayout *logLayout = new QGridLayout(logGroup);
+    logLayout->setVerticalSpacing(15);
+    logLayout->setHorizontalSpacing(15);
+    logLayout->addWidget(logBrowser);
+    mainLayout->addWidget(logGroup);
+
     executeButton = new QPushButton("Start", this);
     exitButton = new QPushButton("Exit", this);
     connect(exitButton, &QPushButton::clicked, this, &MainWindow::close);
@@ -246,6 +290,28 @@ void MainWindow::setupUi()
             this, &MainWindow::onRxTxTypeChanged);
 
     rxtxCombo->setCurrentIndex(1);
+}
+
+void MainWindow::saveSettings()
+{
+    QSettings settings(m_sSettingsFile, QSettings::IniFormat);
+    settings.beginGroup("Rf");
+    settings.setValue("frequency", m_frequency);
+    settings.setValue("samplerate", m_sampleRate);
+    settings.setValue("lowcutfreq", m_LowCutFreq);
+    settings.setValue("hicutfreq", m_HiCutFreq);
+    settings.endGroup();
+}
+
+void MainWindow::loadSettings()
+{
+    QSettings settings(m_sSettingsFile, QSettings::IniFormat);
+    settings.beginGroup("Rf");
+    m_frequency = settings.value("frequency").toInt();
+    m_sampleRate = settings.value("samplerate").toInt();
+    m_LowCutFreq = settings.value("lowcutfreq").toInt();
+    m_HiCutFreq = settings.value("hicutfreq").toInt();
+    settings.endGroup();
 }
 
 void MainWindow::processReceivedData(const int8_t *data, size_t len)
@@ -297,10 +363,25 @@ void MainWindow::handleReceivedData(const int8_t *data, size_t len)
                               Q_ARG(size_t, len));
 }
 
+void MainWindow::onFreqCtrl_setFrequency(qint64 freq)
+{
+    m_frequency = freq;
+    cPlotter->setCenterFreq(static_cast<quint64>(freq));
+    if (m_isInitialized)
+    m_hackTvLib->setFrequency(m_frequency);
+    frequencyEdit->setText(QString::number(m_frequency));
+    saveSettings();
+}
+
 void MainWindow::on_plotter_newDemodFreq(qint64 freq, qint64 delta)
 {
+    m_frequency = freq;
     cPlotter->setCenterFreq(static_cast<quint64>(freq));
-    qDebug() << freq << delta;
+    if (m_isInitialized)
+    m_hackTvLib->setFrequency(m_frequency);
+    frequencyEdit->setText(QString::number(m_frequency));
+    freqCtrl->setFrequency(m_frequency);
+    saveSettings();
 }
 
 void MainWindow::on_plotter_newFilterFreq(int low, int high)
@@ -308,8 +389,7 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
     m_LowCutFreq = low;
     m_HiCutFreq = high;
     lowPassFilter->designFilter(m_sampleRate, m_HiCutFreq, 10e3);
-
-    qDebug() << low << high;
+    saveSettings();
 }
 
 void MainWindow::executeCommand()
@@ -317,6 +397,18 @@ void MainWindow::executeCommand()
     if (executeButton->text() == "Start")
     {
         QStringList args = buildCommand();
+
+        auto decimation = m_sampleRate / DEFAULT_CHANNEL_WIDTH;
+
+        lowPassFilter = std::make_unique<LowPassFilter>(m_sampleRate, m_HiCutFreq, 10e3, decimation);
+        rationalResampler = std::make_unique<RationalResampler>(2, 1);
+        fmDemodulator = std::make_unique<FMDemodulator>(480e3, 14);
+
+        cPlotter->setSampleRate(m_sampleRate);
+        cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
+        cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
+
+        saveSettings();
 
         // Convert QStringList to std::vector<std::string>
         std::vector<std::string> stdArgs;
@@ -365,6 +457,9 @@ QStringList MainWindow::buildCommand()
     auto output = outputCombo->currentData().toString();
     m_hackTvLib->setMicEnabled(false);
 
+    mode = rxtxCombo->currentText().toLower();
+    args << "--rx-tx-mode" << mode;
+
     args << "-o" << output;  
 
     if (ampEnabled->isChecked()) {
@@ -376,7 +471,7 @@ QStringList MainWindow::buildCommand()
     }
 
     if (repeat->isChecked()) {
-         args << "--repeat";
+        args << "--repeat";
     }
 
     if (a2Stereo->isChecked()) {
@@ -388,13 +483,10 @@ QStringList MainWindow::buildCommand()
     }
 
     if (acp->isChecked()) {
-         args << "--acp";
+        args << "--acp";
     }
 
-    mode = rxtxCombo->currentText().toLower();
-    args << "--rx-tx-mode" << mode;
-
-    m_sampleRate = sampleRateEdit->text().toInt() * 1000000;
+    m_sampleRate = sampleRateEdit->text().toInt();
     m_frequency = frequencyEdit->text().toInt();
 
     auto sample_rate = QString::number(m_sampleRate);
@@ -402,6 +494,9 @@ QStringList MainWindow::buildCommand()
     args << "-f" << frequencyEdit->text()
          << "-s" << sample_rate
          << "-m" << modeCombo->currentData().toString();
+
+    if(mode == "rx")
+        return args;
 
     switch(inputTypeCombo->currentIndex())
     {    
@@ -430,17 +525,6 @@ QStringList MainWindow::buildCommand()
         args << "test";
         break;
     }
-
-    auto decimation = int(sample_rate.toInt() / DEFAULT_CHANNEL_WIDTH);
-
-    lowPassFilter = std::make_unique<LowPassFilter>(sample_rate.toInt(), m_HiCutFreq, 10e3, decimation);
-    rationalResampler = std::make_unique<RationalResampler>(2, 1);
-    fmDemodulator = std::make_unique<FMDemodulator>(480e3, 14);
-
-    cPlotter->setSampleRate(m_sampleRate);
-    cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
-    cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
-
     return args;
 }
 
@@ -497,70 +581,70 @@ void MainWindow::populateChannelCombo()
     };
 
     QVector<Channel> channels = {       
-        {"PowerFm", 100000000},
-        {"E2", 48250000},
-        {"E3", 55250000},
-        {"E4", 62250000},
-        {"E5", 175250000},
-        {"E6", 182250000},
-        {"E7", 189250000},
-        {"E8", 196250000},
-        {"E9", 203250000},
-        {"E10", 210250000},
-        {"E11", 217250000},
-        {"E12", 224250000},
-        {"E21", 471250000},
-        {"E22", 479250000},
-        {"E21", 471250000},
-        {"E22", 479250000},
-        {"E23", 487250000},
-        {"E24", 495250000},
-        {"E25", 503250000},
-        {"E26", 511250000},
-        {"E27", 519250000},
-        {"E28", 527250000},
-        {"E29", 535250000},
-        {"E30", 543250000},
-        {"E31", 551250000},
-        {"E32", 559250000},
-        {"E33", 567250000},
-        {"E34", 575250000},
-        {"E35", 583250000},
-        {"E36", 591250000},
-        {"E37", 599250000},
-        {"E38", 607250000},
-        {"E39", 615250000},
-        {"E40", 623250000},
-        {"E41", 631250000},
-        {"E42", 639250000},
-        {"E43", 647250000},
-        {"E44", 655250000},
-        {"E45", 663250000},
-        {"E46", 671250000},
-        {"E47", 679250000},
-        {"E48", 687250000},
-        {"E49", 695250000},
-        {"E50", 703250000},
-        {"E51", 711250000},
-        {"E52", 719250000},
-        {"E53", 727250000},
-        {"E54", 735250000},
-        {"E55", 743250000},
-        {"E56", 751250000},
-        {"E57", 759250000},
-        {"E58", 767250000},
-        {"E59", 775250000},
-        {"E60", 783250000},
-        {"E61", 791250000},
-        {"E62", 799250000},
-        {"E63", 807250000},
-        {"E64", 815250000},
-        {"E65", 823250000},
-        {"E66", 831250000},
-        {"E67", 839250000},
-        {"E68", 847250000},
-        {"E69", 855250000},
-    };
+                                 {"PowerFm", 100000000},
+                                 {"E2", 48250000},
+                                 {"E3", 55250000},
+                                 {"E4", 62250000},
+                                 {"E5", 175250000},
+                                 {"E6", 182250000},
+                                 {"E7", 189250000},
+                                 {"E8", 196250000},
+                                 {"E9", 203250000},
+                                 {"E10", 210250000},
+                                 {"E11", 217250000},
+                                 {"E12", 224250000},
+                                 {"E21", 471250000},
+                                 {"E22", 479250000},
+                                 {"E21", 471250000},
+                                 {"E22", 479250000},
+                                 {"E23", 487250000},
+                                 {"E24", 495250000},
+                                 {"E25", 503250000},
+                                 {"E26", 511250000},
+                                 {"E27", 519250000},
+                                 {"E28", 527250000},
+                                 {"E29", 535250000},
+                                 {"E30", 543250000},
+                                 {"E31", 551250000},
+                                 {"E32", 559250000},
+                                 {"E33", 567250000},
+                                 {"E34", 575250000},
+                                 {"E35", 583250000},
+                                 {"E36", 591250000},
+                                 {"E37", 599250000},
+                                 {"E38", 607250000},
+                                 {"E39", 615250000},
+                                 {"E40", 623250000},
+                                 {"E41", 631250000},
+                                 {"E42", 639250000},
+                                 {"E43", 647250000},
+                                 {"E44", 655250000},
+                                 {"E45", 663250000},
+                                 {"E46", 671250000},
+                                 {"E47", 679250000},
+                                 {"E48", 687250000},
+                                 {"E49", 695250000},
+                                 {"E50", 703250000},
+                                 {"E51", 711250000},
+                                 {"E52", 719250000},
+                                 {"E53", 727250000},
+                                 {"E54", 735250000},
+                                 {"E55", 743250000},
+                                 {"E56", 751250000},
+                                 {"E57", 759250000},
+                                 {"E58", 767250000},
+                                 {"E59", 775250000},
+                                 {"E60", 783250000},
+                                 {"E61", 791250000},
+                                 {"E62", 799250000},
+                                 {"E63", 807250000},
+                                 {"E64", 815250000},
+                                 {"E65", 823250000},
+                                 {"E66", 831250000},
+                                 {"E67", 839250000},
+                                 {"E68", 847250000},
+                                 {"E69", 855250000},
+                                 };
 
     connect(channelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onChannelChanged);    
@@ -579,4 +663,6 @@ void MainWindow::onChannelChanged(int index)
 {
     long long frequency = channelCombo->itemData(index).toLongLong();
     frequencyEdit->setText(QString::number(frequency));
+    m_frequency = frequency;
+    freqCtrl->setFrequency(m_frequency);
 }
