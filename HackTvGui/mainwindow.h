@@ -96,6 +96,7 @@ private slots:
     void updateLogDisplay();
     void onInputTypeChanged(int index);
     void onRxTxTypeChanged(int index);
+    void onSampleRateChanged(int index);
     void populateChannelCombo();
     void onChannelChanged(int index);
     void processReceivedData(const int8_t *data, size_t len);

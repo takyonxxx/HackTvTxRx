@@ -354,6 +354,13 @@ void HackTvLib::setFrequency(uint64_t frequency_hz)
     }
 }
 
+void HackTvLib::setSampleRate(uint32_t sample_rate)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setSampleRate(sample_rate);
+    }
+}
+
 void HackTvLib::dataReceived(const int8_t *data, size_t len)
 {
     emitReceivedData(data, len);

@@ -323,6 +323,8 @@ void MainWindow::setupUi()
             this, &MainWindow::onInputTypeChanged);
     connect(rxtxCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onRxTxTypeChanged);
+    connect(sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onSampleRateChanged);
 
     rxtxCombo->setCurrentIndex(1);
 }
@@ -403,7 +405,7 @@ void MainWindow::onFreqCtrl_setFrequency(qint64 freq)
     m_frequency = freq;
     cPlotter->setCenterFreq(static_cast<quint64>(freq));
     if (m_isInitialized)
-    m_hackTvLib->setFrequency(m_frequency);
+        m_hackTvLib->setFrequency(m_frequency);
     frequencyEdit->setText(QString::number(m_frequency));
     saveSettings();
 }
@@ -413,7 +415,7 @@ void MainWindow::on_plotter_newDemodFreq(qint64 freq, qint64 delta)
     m_frequency = freq;
     cPlotter->setCenterFreq(static_cast<quint64>(freq));
     if (m_isInitialized)
-    m_hackTvLib->setFrequency(m_frequency);
+        m_hackTvLib->setFrequency(m_frequency);
     frequencyEdit->setText(QString::number(m_frequency));
     freqCtrl->setFrequency(m_frequency);
     saveSettings();
@@ -606,6 +608,17 @@ void MainWindow::onRxTxTypeChanged(int index)
     bool isTx = (index == 0);
     inputTypeGroup->setVisible(isTx);
     modeGroup->setVisible(isTx);
+}
+
+void MainWindow::onSampleRateChanged(int index)
+{
+    m_sampleRate = sampleRateCombo->currentData().toInt();
+    if (m_isInitialized)
+    {
+        m_hackTvLib->setSampleRate(m_sampleRate);
+        lowPassFilter->designFilter(m_sampleRate, m_HiCutFreq, 10e3);
+    }
+    saveSettings();
 }
 
 void MainWindow::populateChannelCombo()

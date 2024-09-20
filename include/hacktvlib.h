@@ -25,6 +25,7 @@ public:
     bool setArguments(const std::vector<std::string>& args);
     void setMicEnabled(bool newMicEnabled);
     void setFrequency(uint64_t frequency_hz);
+    void setSampleRate(uint32_t sample_rate);
 
 private slots:
     void emitReceivedData(const int16_t* data, size_t samples);
