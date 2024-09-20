@@ -54,55 +54,6 @@ MainWindow::~MainWindow()
     lowPassFilter.reset();
 }
 
-void MainWindow::processReceivedData(const int8_t *data, size_t len)
-{
-    if (!m_isProcessing.load() || !data || len == 0) {
-        return;
-    }
-
-    try
-    {
-        std::vector<std::complex<float>> samples;
-        samples.reserve(len / 2);
-        for (size_t i = 0; i < len; i += 2) {
-            float i_sample = data[i] / 128.0f;
-            float q_sample = data[i + 1] / 128.0f;
-            samples.emplace_back(i_sample, q_sample);
-        }
-
-        int fft_size = 2048;
-        std::vector<float> fft_output(fft_size);
-        getFft(samples, fft_output, fft_size);
-
-        cPlotter->setNewFttData(fft_output.data(), fft_output.data(), fft_size);
-
-        if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput) {
-            auto filteredSamples = lowPassFilter->apply(samples);
-            auto resampledSamples = rationalResampler->resample(filteredSamples);
-            auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);
-            for (auto& sample : demodulatedSamples) {
-                sample *= audioGain;
-            }
-            audioOutput->processAudio(demodulatedSamples);
-        } else {
-            qDebug() << "One or more components of the signal chain are not initialized.";
-        }
-    }
-    catch (const std::exception& e) {
-        qDebug() << "Exception caught in processReceivedData:" << e.what();
-    }
-    catch (...) {
-        qDebug() << "Unknown exception caught in processReceivedData";
-    }
-}
-
-void MainWindow::handleReceivedData(const int8_t *data, size_t len)
-{
-    QMetaObject::invokeMethod(this, "processReceivedData", Qt::QueuedConnection,
-                              Q_ARG(const int8_t*, data),
-                              Q_ARG(size_t, len));
-}
-
 void MainWindow::setupUi()
 {
     QWidget *centralWidget = new QWidget(this);
@@ -139,11 +90,7 @@ void MainWindow::setupUi()
     acp = new QCheckBox("Acp", this);
     acp->setChecked(true);
     filter = new QCheckBox("Filter", this);
-    filter->setChecked(true);
-    QLabel *gainLabel = new QLabel("Gain:", this);
-    gainEdit = new QLineEdit(this);
-    gainEdit->setText("47");
-    gainEdit->setFixedWidth(35);
+    filter->setChecked(true);  
     QLabel *freqLabel = new QLabel("Frequency (Hz):", this);
     frequencyEdit = new QLineEdit(this);
     frequencyEdit->setFixedWidth(75);
@@ -166,19 +113,17 @@ void MainWindow::setupUi()
     outputLayout->addWidget(repeat, 1, 2);
     outputLayout->addWidget(acp, 1, 3);
     outputLayout->addWidget(filter, 1, 4);
+    outputLayout->addWidget(colorDisabled, 1, 5);
 
     outputLayout->addWidget(channelLabel, 2, 0);
     outputLayout->addWidget(channelCombo, 2, 1);
     outputLayout->addWidget(sampleRateLabel, 2, 2);
     outputLayout->addWidget(sampleRateEdit, 2, 3);
-    outputLayout->addWidget(gainLabel, 2, 4);
-    outputLayout->addWidget(gainEdit, 2, 5);
 
     outputLayout->addWidget(freqLabel, 3, 0);
-    outputLayout->addWidget(frequencyEdit, 3, 1);    
+    outputLayout->addWidget(frequencyEdit, 3, 1);
     outputLayout->addWidget(rxtxLabel, 3, 2);
     outputLayout->addWidget(rxtxCombo, 3, 3);
-    outputLayout->addWidget(colorDisabled, 3, 4);
 
     cPlotter = new CPlotter(this);
     cPlotter->setTooltipsEnabled(true);
@@ -303,8 +248,58 @@ void MainWindow::setupUi()
     rxtxCombo->setCurrentIndex(1);
 }
 
+void MainWindow::processReceivedData(const int8_t *data, size_t len)
+{
+    if (!m_isProcessing.load() || !data || len == 0) {
+        return;
+    }
+
+    try
+    {
+        std::vector<std::complex<float>> samples;
+        samples.reserve(len / 2);
+        for (size_t i = 0; i < len; i += 2) {
+            float i_sample = data[i] / 128.0f;
+            float q_sample = data[i + 1] / 128.0f;
+            samples.emplace_back(i_sample, q_sample);
+        }
+
+        int fft_size = 2048;
+        std::vector<float> fft_output(fft_size);
+        getFft(samples, fft_output, fft_size);
+
+        cPlotter->setNewFttData(fft_output.data(), fft_output.data(), fft_size);
+
+        if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput) {
+            auto filteredSamples = lowPassFilter->apply(samples);
+            auto resampledSamples = rationalResampler->resample(filteredSamples);
+            auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);
+            for (auto& sample : demodulatedSamples) {
+                sample *= audioGain;
+            }
+            audioOutput->processAudio(demodulatedSamples);
+        } else {
+            qDebug() << "One or more components of the signal chain are not initialized.";
+        }
+    }
+    catch (const std::exception& e) {
+        qDebug() << "Exception caught in processReceivedData:" << e.what();
+    }
+    catch (...) {
+        qDebug() << "Unknown exception caught in processReceivedData";
+    }
+}
+
+void MainWindow::handleReceivedData(const int8_t *data, size_t len)
+{
+    QMetaObject::invokeMethod(this, "processReceivedData", Qt::QueuedConnection,
+                              Q_ARG(const int8_t*, data),
+                              Q_ARG(size_t, len));
+}
+
 void MainWindow::on_plotter_newDemodFreq(qint64 freq, qint64 delta)
 {
+    cPlotter->setCenterFreq(static_cast<quint64>(freq));
     qDebug() << freq << delta;
 }
 
@@ -312,6 +307,8 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
 {
     m_LowCutFreq = low;
     m_HiCutFreq = high;
+    lowPassFilter->designFilter(m_sampleRate, m_HiCutFreq, 10e3);
+
     qDebug() << low << high;
 }
 
@@ -368,11 +365,7 @@ QStringList MainWindow::buildCommand()
     auto output = outputCombo->currentData().toString();
     m_hackTvLib->setMicEnabled(false);
 
-    args << "-o" << output;
-
-    if (!gainEdit->text().isEmpty()) {
-        args << "-g" << gainEdit->text();
-    }
+    args << "-o" << output;  
 
     if (ampEnabled->isChecked()) {
         args << "-a" ;
@@ -398,10 +391,13 @@ QStringList MainWindow::buildCommand()
          args << "--acp";
     }
 
-    QString mode = rxtxCombo->currentText().toLower();
+    mode = rxtxCombo->currentText().toLower();
     args << "--rx-tx-mode" << mode;
 
-    auto sample_rate = QString::number(sampleRateEdit->text().toInt() * 1000000);
+    m_sampleRate = sampleRateEdit->text().toInt() * 1000000;
+    m_frequency = frequencyEdit->text().toInt();
+
+    auto sample_rate = QString::number(m_sampleRate);
 
     args << "-f" << frequencyEdit->text()
          << "-s" << sample_rate
@@ -440,6 +436,10 @@ QStringList MainWindow::buildCommand()
     lowPassFilter = std::make_unique<LowPassFilter>(sample_rate.toInt(), m_HiCutFreq, 10e3, decimation);
     rationalResampler = std::make_unique<RationalResampler>(2, 1);
     fmDemodulator = std::make_unique<FMDemodulator>(480e3, 14);
+
+    cPlotter->setSampleRate(m_sampleRate);
+    cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
+    cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
 
     return args;
 }

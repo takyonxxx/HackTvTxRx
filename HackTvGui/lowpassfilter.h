@@ -7,11 +7,11 @@ class LowPassFilter {
 public:
     LowPassFilter(double sampleRate, double cutoffFreq, double transitionWidth, double decimation);
     std::vector<std::complex<float>> apply(const std::vector<std::complex<float>>& input);
+    void designFilter(double sampleRate, double cutoffFreq, double transitionWidth);
 
 private:
     std::vector<float> taps;
-    int decimation;
-    void designFilter(double sampleRate, double cutoffFreq, double transitionWidth);
+    int decimation;    
 };
 
 #endif // LOWPASSFILTER_H

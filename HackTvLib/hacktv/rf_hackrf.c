@@ -1,20 +1,3 @@
-/* hacktv - Analogue video transmitter for the HackRF                    */
-/*=======================================================================*/
-/* Copyright 2017 Philip Heron <phil@sanslogic.co.uk>                    */
-/*                                                                       */
-/* This program is free software: you can redistribute it and/or modify  */
-/* it under the terms of the GNU General Public License as published by  */
-/* the Free Software Foundation, either version 3 of the License, or     */
-/* (at your option) any later version.                                   */
-/*                                                                       */
-/* This program is distributed in the hope that it will be useful,       */
-/* but WITHOUT ANY WARRANTY; without even the implied warranty of        */
-/* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         */
-/* GNU General Public License for more details.                          */
-/*                                                                       */
-/* You should have received a copy of the GNU General Public License     */
-/* along with this program.  If not, see <http://www.gnu.org/licenses/>. */
-
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>  // For fixed-width integer types
@@ -25,6 +8,21 @@
 #include "rf.h"
 /* Value from host/libhackrf/src/hackrf.c */
 #define TRANSFER_BUFFER_SIZE 262144
+
+#define _GHZ(x) ((uint64_t)(x) * 1000000000)
+#define _MHZ(x) ((x) * 1000000)
+#define _KHZ(x) ((x) * 1000)
+#define _HZ(x) ((x) * 1)
+
+#define DEFAULT_FREQUENCY              _MHZ(100)
+#define DEFAULT_SAMPLE_RATE            _MHZ(20)
+#define DEFAULT_AUDIO_SAMPLE_RATE      _KHZ(48)
+#define DEFAULT_CUT_OFF                _KHZ(75)
+#define HACKRF_TX_VGA_MAX_DB            47.0
+#define HACKRF_RX_VGA_MAX_DB            40.0
+#define HACKRF_RX_LNA_MAX_DB            40.0
+#define HACKRF_AMP_MAX_DB               14.0
+#define DEFAULT_FFT_SIZE                1024
 
 typedef enum {
     BUFFER_EMPTY,
@@ -369,15 +367,11 @@ int rf_hackrf_open(
     const char *serial,
     uint32_t sample_rate,
     uint64_t frequency_hz,
-    unsigned int rf_gain,
     unsigned char amp_enable)
 {
     hackrf_t *rf;
     int r;
-    uint8_t rev;
-
-    if(rf_gain > 47)
-        rf_gain = 47;
+    uint8_t rev;    
 
     rf = calloc(1, sizeof(hackrf_t));
     if(!rf)
@@ -440,7 +434,7 @@ int rf_hackrf_open(
         return(RF_ERROR);
     }
 
-    r = hackrf_set_txvga_gain(rf->d, rf_gain);
+    r = hackrf_set_txvga_gain(rf->d, HACKRF_TX_VGA_MAX_DB);
     if(r != HACKRF_SUCCESS)
     {
         fprintf(stderr, "hackrf_set_txvga_gain() failed: %s (%d)\n", hackrf_error_name(r), r);
@@ -463,12 +457,7 @@ int rf_hackrf_open(
 
     if(rf->mode == RX_MODE)
     {
-        if(rf_gain > 40)
-        {
-            rf_gain = 40;
-        }
-
-        r =  hackrf_set_lna_gain(rf->d, rf_gain);
+        r =  hackrf_set_lna_gain(rf->d, HACKRF_RX_LNA_MAX_DB);
         if(r != HACKRF_SUCCESS)
         {
             fprintf(stderr, "hackrf_set_lna_gain() failed: %s (%d)\n", hackrf_error_name(r), r);
@@ -476,7 +465,7 @@ int rf_hackrf_open(
             return(RF_ERROR);
         }
 
-        r =   hackrf_set_vga_gain(rf->d, rf_gain);
+        r =   hackrf_set_vga_gain(rf->d, HACKRF_RX_VGA_MAX_DB);
         if(r != HACKRF_SUCCESS)
         {
             fprintf(stderr, " hackrf_set_vga_gain() failed: %s (%d)\n", hackrf_error_name(r), r);
@@ -529,62 +518,3 @@ int rf_hackrf_open(
     s->close = _rf_close;
     return(RF_OK);
 }
-
-// std::unique_ptr<PortAudioInput> m_audioInput = std::make_unique<PortAudioInput>(nullptr, &s.rf);
-// if(micEnabled)
-// {
-//     if (!m_audioInput->start()) {
-//         std::cerr << "Failed to start PortAudioInput" << std::endl;
-//         return;
-//     }
-// }
-
-// std::vector<float> readStreamToSize(size_t size)
-// {
-//     std::vector<float> float_buffer;
-//     float_buffer.reserve(size);
-//     while (float_buffer.size() < size) {
-//         std::vector<float> temp_buffer = stream_tx.readBufferToVector();
-//         size_t elements_needed = size - float_buffer.size();
-//         size_t elements_to_add = (elements_needed < temp_buffer.size()) ? elements_needed : temp_buffer.size();
-//         float_buffer.insert(float_buffer.end(), temp_buffer.begin(), temp_buffer.begin() + elements_to_add);
-//     }
-//     return float_buffer;
-// }
-
-// int apply_modulation(int8_t* buffer, uint32_t length)
-// {
-//     int decimation = 1;
-//     float amplitude = 1.0;
-//     float modulation_index = 5.0;
-//     float interpolation = 48;
-//     float filter_size = 0.0;
-
-//     size_t desired_size = length / 2;
-//     std::vector<float> float_buffer = readStreamToSize(desired_size);
-
-//     if (float_buffer.size() < desired_size) {
-//         return 0;
-//     }
-
-//     int noutput_items = float_buffer.size();
-//     for (int i = 0; i < noutput_items; ++i) {
-//         float_buffer[i] *= amplitude;
-//     }
-
-//     std::vector<std::complex<float>> modulated_signal(noutput_items);
-//     float sensitivity = modulation_index;
-//     FrequencyModulator modulator(sensitivity);
-//     modulator.work(noutput_items, float_buffer, modulated_signal);
-
-//     RationalResampler resampler(interpolation, decimation, filter_size);
-//     std::vector<std::complex<float>> resampled_signal = resampler.resample(modulated_signal);
-
-//     for (int i = 0; i < noutput_items; ++i) {
-//         buffer[2 * i] = static_cast<int8_t>(std::real(resampled_signal[i]) * 127.0f);
-//         buffer[2 * i + 1] = static_cast<int8_t>(std::imag(resampled_signal[i]) * 127.0f);
-//     }
-//     return 0;
-// }
-
-

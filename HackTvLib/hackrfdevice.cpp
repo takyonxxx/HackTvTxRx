@@ -1,6 +1,7 @@
 #include "hackrfdevice.h"
+#include <iostream>
 
-std::string removeZerosFromBegging(const std::string &string) {
+std::string removeZerosFromBeginning(const std::string &string) {
     uint32_t i = 0;
     while (i < string.length() && string[i] == '0') {
         i++;
@@ -9,30 +10,17 @@ std::string removeZerosFromBegging(const std::string &string) {
 }
 
 HackRfDevice::HackRfDevice(QObject *parent):
-    QObject(parent)
+    QObject(parent),
+    h_device(nullptr),
+    m_frequency(DEFAULT_FREQUENCY),
+    m_sampleRate(DEFAULT_SAMPLE_RATE),
+    m_lnaGain(HACKRF_RX_LNA_MAX_DB),
+    m_vgaGain(HACKRF_RX_VGA_MAX_DB),
+    m_txVgaGain(HACKRF_TX_VGA_MAX_DB),
+    m_ampEnable(false),    
+    m_antennaEnable(false)
 {
-    // std::unique_ptr<PortAudioInput> m_audioInput = std::make_unique<PortAudioInput>(nullptr, &s.rf);
-    // if(micEnabled)
-    // {
-    //     if (!m_audioInput->start()) {
-    //         std::cerr << "Failed to start PortAudioInput" << std::endl;
-    //         return;
-    //     }
-    // }
-
-    // size_t desired_size = 262144 / 2;  // Desired size for the float buffer
-    // std::vector<float> float_buffer = m_audioInput->readStreamToSize(desired_size);
-    // std::cout << "Final buffer size " << float_buffer.size() << std::endl;
-    // m_audioInput->stop();
-
-    int r;
-    /* Print the library version number */
-    fprintf(stderr, "libhackrf version: %s (%s)\n",
-            hackrf_library_release(),
-            hackrf_library_version());
-
-    /* Prepare the HackRF for output */
-    r = hackrf_init();
+    int r = hackrf_init();
     if(r != HACKRF_SUCCESS)
     {
         fprintf(stderr, "hackrf_init() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
@@ -44,161 +32,108 @@ HackRfDevice::HackRfDevice(QObject *parent):
 
 HackRfDevice::~HackRfDevice()
 {
-
+    if (h_device) {
+        stop();
+    }
+    hackrf_exit();
 }
 
 std::vector<std::string> HackRfDevice::listDevices()
 {
     auto list = hackrf_device_list();
     if (!list) {
-        std::cout << "can not read hackrf devices list" << std::endl;
+        std::cout << "Cannot read HackRF devices list" << std::endl;
+        return device_serials;
     }
     for (int i = 0; i < list->devicecount; ++i) {
         if (!list->serial_numbers[i]) {
-            std::cout << "can not read hackrf serial" << std::endl;
+            std::cout << "Cannot read HackRF serial" << std::endl;
+            continue;
         }
-        device_serials.push_back(removeZerosFromBegging(list->serial_numbers[i]));
+        device_serials.push_back(removeZerosFromBeginning(list->serial_numbers[i]));
         device_board_ids.push_back(list->usb_board_ids[i]);
-        std::cout << "Found HackRf " << removeZerosFromBegging(list->serial_numbers[i]) << " " << list->usb_board_ids[i] << std::endl;
+        std::cout << "Found HackRF " << device_serials.back() << " " << device_board_ids.back() << std::endl;
     }
     hackrf_device_list_free(list);
     return device_serials;
 }
 
-
-int HackRfDevice::start(rf_mode _mode,
-                        uint32_t sample_rate,
-                        uint64_t frequency_hz,
-                        unsigned int lna_gain,
-                        unsigned int vga_gain,
-                        unsigned int tx_gain,
-                        unsigned char amp_enable)
+int HackRfDevice::start(rf_mode _mode)
 {
-    int r;
-    uint8_t rev;
     mode = _mode;
-    auto serial = device_serials[0];
 
-    r = hackrf_open_by_serial(serial.c_str(), &h_device);
+    if (device_serials.empty()) {
+        fprintf(stderr, "No HackRF devices found\n");
+        return RF_ERROR;
+    }
+
+    int r = hackrf_open_by_serial(device_serials[0].c_str(), &h_device);
     if(r != HACKRF_SUCCESS)
     {
         fprintf(stderr, "hackrf_open() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
-        return(RF_ERROR);
+        return RF_ERROR;
     }
 
-    /* Print the hardware revision */
-    r = hackrf_board_rev_read(h_device, &rev);
-    if(r == HACKRF_SUCCESS)
-    {
-        fprintf(stderr, "hackrf: Hardware Revision: %s\n", hackrf_board_rev_name(static_cast<hackrf_board_rev>(rev)));
-    }
-
-    r = hackrf_set_sample_rate_manual(h_device, sample_rate, 1);
-    if(r != HACKRF_SUCCESS)
-    {
-        fprintf(stderr, "hackrf_sample_rate_set() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
-        return(RF_ERROR);
-    }
-
-    r = hackrf_set_baseband_filter_bandwidth(h_device, hackrf_compute_baseband_filter_bw(sample_rate));
-    if(r != HACKRF_SUCCESS)
-    {
-        fprintf(stderr, "hackrf_baseband_filter_bandwidth_set() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
-        return(RF_ERROR);
-    }
-
-    r = hackrf_set_freq(h_device, frequency_hz);
-    if(r != HACKRF_SUCCESS)
-    {
-        fprintf(stderr, "hackrf_set_freq() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
-        return(RF_ERROR);
-    }
-
-    r = hackrf_set_amp_enable(h_device, amp_enable);
-    if(r != HACKRF_SUCCESS)
-    {
-        fprintf(stderr, "hackrf_set_amp_enable() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
-        return(RF_ERROR);
-    }
+    // Apply all settings
+    setFrequency(m_frequency);
+    setSampleRate(m_sampleRate);
+    setLnaGain(m_lnaGain);
+    setVgaGain(m_vgaGain);
+    setTxVgaGain(m_txVgaGain);
+    setAmpEnable(m_ampEnable);
+    setBasebandFilterBandwidth(hackrf_compute_baseband_filter_bw(m_sampleRate));
+    setAntennaEnable(m_antennaEnable);
 
     if(mode == RX)
     {
-        r =  hackrf_set_lna_gain(h_device, lna_gain);
-        if(r != HACKRF_SUCCESS)
-        {
-            fprintf(stderr, "hackrf_set_lna_gain() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
-            return(RF_ERROR);
-        }
-
-        r =   hackrf_set_vga_gain(h_device, vga_gain);
-        if(r != HACKRF_SUCCESS)
-        {
-            fprintf(stderr, " hackrf_set_vga_gain() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
-            return(RF_ERROR);
-        }
-
-        r = hackrf_set_antenna_enable(h_device, true);
-        if(r != HACKRF_SUCCESS)
-        {
-            fprintf(stderr, "hackrf_set_antenna_enable() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
-            return(RF_ERROR);
-        }
-
         r = hackrf_start_rx(h_device, _rx_callback, this);
         if(r != HACKRF_SUCCESS)
         {
             fprintf(stderr, "hackrf_start_rx() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
-            return(RF_ERROR);
+            return RF_ERROR;
         }
         printf("hackrf_start_rx() ok\n");
     }
     else if(mode == TX)
     {
-        r = hackrf_set_txvga_gain(h_device, tx_gain);
-        if(r != HACKRF_SUCCESS)
-        {
-            fprintf(stderr, "hackrf_set_txvga_gain() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
-            return(RF_ERROR);
-        }
-
-        /* Begin transmitting */
         r = hackrf_start_tx(h_device, _tx_callback, this);
         if(r != HACKRF_SUCCESS)
         {
             fprintf(stderr, "hackrf_start_tx() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
-            return(RF_ERROR);
+            return RF_ERROR;
         }
         printf("hackrf_start_tx() ok\n");
     }
 
-    std::cout << "HackRf Started" << std::endl;
-    return(RF_OK);
+    std::cout << "HackRF Started" << std::endl;
+    return RF_OK;
 }
 
 int HackRfDevice::stop()
 {
-    int r;  
+    if (!h_device) {
+        return RF_OK;
+    }
+
+    int r;
 
     if(mode == RX)
     {
         r = hackrf_stop_rx(h_device);
-        if(r != HACKRF_SUCCESS)
-        {
-            fprintf(stderr, "hackrf_stop_rx() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
-            return(RF_ERROR);
-        }
     }
     else
     {
         r = hackrf_stop_tx(h_device);
-        if(r != HACKRF_SUCCESS)
-        {
-            fprintf(stderr, "hackrf_stop_tx() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
-            return(RF_ERROR);
-        }
     }
 
-    /* Wait until streaming has stopped */
+    if(r != HACKRF_SUCCESS)
+    {
+        fprintf(stderr, "hackrf_stop_%s() failed: %s (%d)\n",
+                (mode == RX ? "rx" : "tx"),
+                hackrf_error_name(static_cast<hackrf_error>(r)), r);
+        return RF_ERROR;
+    }
+
     while(hackrf_is_streaming(h_device) == HACKRF_TRUE)
     {
         usleep(100);
@@ -210,16 +145,16 @@ int HackRfDevice::stop()
         fprintf(stderr, "hackrf_close() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
     }
 
-    hackrf_exit();
+    h_device = nullptr;
+    std::cout << "HackRF Stopped" << std::endl;
 
-    std::cout << "HackRf Stopped" << std::endl;
-
-    return(RF_OK);
+    return RF_OK;
 }
 
 int HackRfDevice::_tx_callback(hackrf_transfer *transfer)
 {
     HackRfDevice *device = reinterpret_cast<HackRfDevice *>(transfer->tx_ctx);
+    // Implement your TX logic here
     return 0;
 }
 
@@ -232,7 +167,6 @@ int HackRfDevice::_rx_callback(hackrf_transfer *transfer)
         return -1; // Invalid data length
     }
 
-    // Invoke the data callback if it's set
     if (device->m_dataCallback) {
         device->m_dataCallback(rf_data, len);
     }
@@ -250,4 +184,135 @@ void HackRfDevice::emitReceivedData(const int8_t *data, size_t len)
     if (m_dataCallback) {
         m_dataCallback(data, len);
     }
+}
+
+// Setter implementations
+void HackRfDevice::setFrequency(uint64_t frequency_hz)
+{
+    m_frequency = frequency_hz;
+    if (h_device) {
+        int r = hackrf_set_freq(h_device, m_frequency);
+        if (r != HACKRF_SUCCESS) {
+            fprintf(stderr, "hackrf_set_freq() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
+        }
+    }
+}
+
+void HackRfDevice::setSampleRate(uint32_t sample_rate)
+{
+    m_sampleRate = sample_rate;
+    if (h_device) {
+        int r = hackrf_set_sample_rate(h_device, m_sampleRate);
+        if (r != HACKRF_SUCCESS) {
+            fprintf(stderr, "hackrf_set_sample_rate() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
+        }
+        setBasebandFilterBandwidth(hackrf_compute_baseband_filter_bw(m_sampleRate));
+    }
+}
+
+void HackRfDevice::setLnaGain(unsigned int lna_gain)
+{
+    m_lnaGain = lna_gain;
+    if (h_device) {
+        int r = hackrf_set_lna_gain(h_device, m_lnaGain);
+        if (r != HACKRF_SUCCESS) {
+            fprintf(stderr, "hackrf_set_lna_gain() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
+        }
+    }
+}
+
+void HackRfDevice::setVgaGain(unsigned int vga_gain)
+{
+    m_vgaGain = vga_gain;
+    if (h_device) {
+        int r = hackrf_set_vga_gain(h_device, m_vgaGain);
+        if (r != HACKRF_SUCCESS) {
+            fprintf(stderr, "hackrf_set_vga_gain() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
+        }
+    }
+}
+
+void HackRfDevice::setTxVgaGain(unsigned int tx_vga_gain)
+{
+    m_txVgaGain = tx_vga_gain;
+    if (h_device) {
+        int r = hackrf_set_txvga_gain(h_device, m_txVgaGain);
+        if (r != HACKRF_SUCCESS) {
+            fprintf(stderr, "hackrf_set_txvga_gain() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
+        }
+    }
+}
+
+void HackRfDevice::setAmpEnable(bool enable)
+{
+    m_ampEnable = enable;
+    if (h_device) {
+        int r = hackrf_set_amp_enable(h_device, m_ampEnable ? 1 : 0);
+        if (r != HACKRF_SUCCESS) {
+            fprintf(stderr, "hackrf_set_amp_enable() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
+        }
+    }
+}
+
+void HackRfDevice::setBasebandFilterBandwidth(uint32_t bandwidth)
+{
+    m_basebandFilterBandwidth = bandwidth;
+    if (h_device) {
+        int r = hackrf_set_baseband_filter_bandwidth(h_device, m_basebandFilterBandwidth);
+        if (r != HACKRF_SUCCESS) {
+            fprintf(stderr, "hackrf_set_baseband_filter_bandwidth() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
+        }
+    }
+}
+
+void HackRfDevice::setAntennaEnable(bool enable)
+{
+    m_antennaEnable = enable;
+    if (h_device) {
+        int r = hackrf_set_antenna_enable(h_device, m_antennaEnable ? 1 : 0);
+        if (r != HACKRF_SUCCESS) {
+            fprintf(stderr, "hackrf_set_antenna_enable() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
+        }
+    }
+}
+
+// Getter implementations
+uint64_t HackRfDevice::getFrequency() const
+{
+    return m_frequency;
+}
+
+uint32_t HackRfDevice::getSampleRate() const
+{
+    return m_sampleRate;
+}
+
+unsigned int HackRfDevice::getLnaGain() const
+{
+    return m_lnaGain;
+}
+
+unsigned int HackRfDevice::getVgaGain() const
+{
+    return m_vgaGain;
+}
+
+unsigned int HackRfDevice::getTxVgaGain() const
+{
+    return m_txVgaGain;
+}
+
+bool HackRfDevice::getAmpEnable() const
+{
+    return m_ampEnable;
+}
+
+uint32_t HackRfDevice::getBasebandFilterBandwidth() const
+{
+    return m_basebandFilterBandwidth;
+}
+
+bool HackRfDevice::getAntennaEnable() const
+{
+    return m_antennaEnable;
 }
