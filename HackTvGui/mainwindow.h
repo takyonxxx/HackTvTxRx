@@ -33,7 +33,7 @@ private:
     QGroupBox *inputTypeGroup;
 
     QLineEdit *frequencyEdit;
-    QLineEdit *sampleRateEdit;
+    QComboBox *sampleRateCombo;
     QComboBox *outputCombo;
     QComboBox *modeCombo;
     QComboBox *rxtxCombo;
@@ -73,7 +73,7 @@ private:
     int flo = -5000;
     int fhi = 5000;
     int click_res = 100;
-    int fftrate = 25;
+    int fftrate = 50;
 
     uint64_t m_frequency;
     uint32_t m_sampleRate;
@@ -88,6 +88,7 @@ private:
     void handleReceivedData(const int8_t *data, size_t len);
     void loadSettings();
     void saveSettings();
+    void setCurrentSampleRate(int sampleRate);
 
 private slots:
     void executeCommand();

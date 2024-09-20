@@ -32,7 +32,7 @@ MainWindow::MainWindow(QWidget *parent)
         saveSettings();
 
     frequencyEdit->setText(QString::number(m_frequency));
-    sampleRateEdit->setText(QString::number(m_sampleRate));
+    setCurrentSampleRate(m_sampleRate);
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
     cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
     cPlotter->setDemodRanges(m_LowCutFreq, -_KHZ(5), _KHZ(5),m_HiCutFreq, true);
@@ -75,6 +75,26 @@ MainWindow::~MainWindow()
     fmDemodulator.reset();
     rationalResampler.reset();
     lowPassFilter.reset();
+}
+
+void MainWindow::setCurrentSampleRate(int sampleRate)
+{
+    int index = sampleRateCombo->findData(sampleRate);
+    if (index != -1) {
+        sampleRateCombo->setCurrentIndex(index);
+    } else {
+        // If the exact sample rate is not found, find the closest one
+        int closestIndex = 0;
+        int smallestDiff = std::numeric_limits<int>::max();
+        for (int i = 0; i < sampleRateCombo->count(); ++i) {
+            int diff = std::abs(sampleRateCombo->itemData(i).toInt() - sampleRate);
+            if (diff < smallestDiff) {
+                smallestDiff = diff;
+                closestIndex = i;
+            }
+        }
+        sampleRateCombo->setCurrentIndex(closestIndex);
+    }
 }
 
 void MainWindow::setupUi()
@@ -120,8 +140,23 @@ void MainWindow::setupUi()
     QLabel *channelLabel = new QLabel("Channel:", this);
     channelCombo = new QComboBox(this);
     QLabel *sampleRateLabel = new QLabel("Sample Rate (MHz):", this);
-    sampleRateEdit = new QLineEdit(this);
-    sampleRateEdit->setFixedWidth(100);
+    sampleRateCombo = new QComboBox(this);
+    sampleRateCombo->setFixedWidth(100);
+
+    std::map<int, QString> sortedSampleRates {
+        {2000000, "2"},
+        {4000000, "4"},
+        {8000000, "8"},
+        {10000000, "10"},
+        {12500000, "12.5"},
+        {16000000, "16"},
+        {20000000, "20"}
+    };
+
+    for (const auto& [rate, displayText] : sortedSampleRates) {
+        sampleRateCombo->addItem(displayText + " MHz", rate);
+    }
+
     QLabel *rxtxLabel = new QLabel("RxTx Mode:", this);
     rxtxCombo = new QComboBox(this);
     rxtxCombo->addItem("TX", "tx");
@@ -140,7 +175,7 @@ void MainWindow::setupUi()
     outputLayout->addWidget(channelLabel, 2, 0);
     outputLayout->addWidget(channelCombo, 2, 1);
     outputLayout->addWidget(sampleRateLabel, 2, 2);
-    outputLayout->addWidget(sampleRateEdit, 2, 3);
+    outputLayout->addWidget(sampleRateCombo, 2, 3);
 
     outputLayout->addWidget(freqLabel, 3, 0);
     outputLayout->addWidget(frequencyEdit, 3, 1);
@@ -486,7 +521,7 @@ QStringList MainWindow::buildCommand()
         args << "--acp";
     }
 
-    m_sampleRate = sampleRateEdit->text().toInt();
+    m_sampleRate =  sampleRateCombo->currentData().toInt();
     m_frequency = frequencyEdit->text().toInt();
 
     auto sample_rate = QString::number(m_sampleRate);
