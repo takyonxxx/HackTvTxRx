@@ -24,7 +24,6 @@ extern int rf_hackrf_open(
     const char *serial,
     uint32_t sample_rate,
     uint64_t frequency_hz,
-    unsigned int rf_gain,
     unsigned char amp_enable);
 
 #endif

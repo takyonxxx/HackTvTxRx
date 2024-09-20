@@ -49,8 +49,7 @@ private:
     QCheckBox *repeat;
     QCheckBox *acp;
     QCheckBox *filter;
-    QCheckBox *colorDisabled;
-    QLineEdit *gainEdit;
+    QCheckBox *colorDisabled;    
     std::unique_ptr<HackTvLib> m_hackTvLib;
 
     QTextBrowser *logBrowser;
@@ -71,6 +70,11 @@ private:
     int fftrate = 25;
 
     std::atomic<bool> m_isProcessing;
+
+    uint64_t m_frequency;
+    uint32_t m_sampleRate;
+    float decimation;
+    QString mode;
 
     void setupUi();
     QStringList buildCommand();
