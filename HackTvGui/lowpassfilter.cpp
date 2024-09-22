@@ -3,14 +3,16 @@
 #include <algorithm>
 #include "constants.h"
 
-LowPassFilter::LowPassFilter(double sampleRate, double cutoffFreq, double transitionWidth, double decimation)
-    : decimation(decimation)
+LowPassFilter::LowPassFilter(double sampleRate, double cutoffFreq, double transitionWidth)
+    : decimation( sampleRate / DEFAULT_CHANNEL_WIDTH)
 {
     designFilter(sampleRate, cutoffFreq, transitionWidth);
 }
 
 void LowPassFilter::designFilter(double sampleRate, double cutoffFreq, double transitionWidth)
 {
+    decimation = sampleRate / DEFAULT_CHANNEL_WIDTH;
+
     int numTaps = static_cast<int>(3.3 / (transitionWidth / sampleRate));
     numTaps = (numTaps % 2 == 0) ? numTaps + 1 : numTaps; // Ensure odd number of taps
 

@@ -5,6 +5,7 @@
 #include <QTextBrowser>
 #include <QCheckBox>
 #include <QDockWidget>
+#include <QThreadPool>
 #include <QTimer>
 #include "hacktvlib.h"
 #include "audiooutput.h"
@@ -14,6 +15,7 @@
 #include "rationalresampler.h"
 #include "cplotter.h"
 #include "freqctrl.h"
+#include "signalprocessor.h"
 
 class QGroupBox;
 class QLineEdit;
@@ -29,6 +31,8 @@ public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 private:
+    QThreadPool m_threadPool;
+
     QGroupBox *modeGroup;
     QGroupBox *inputTypeGroup;
 
@@ -80,7 +84,10 @@ private:
     float decimation;
     QString mode;
     std::atomic<bool> m_isProcessing;
-    bool m_isInitialized;
+
+    SignalProcessor* m_signalProcessor;
+    static const int MAX_FFT_SIZE = 2048;
+    static const int BUFFER_SIZE = 1048576; // 1 MB
 
     void setupUi();
     QStringList buildCommand();
@@ -103,6 +110,10 @@ private slots:
     void on_plotter_newDemodFreq(qint64 freq, qint64 delta);
     void on_plotter_newFilterFreq(int low, int high);
     void onFreqCtrl_setFrequency(qint64 freq);
+    void handleSamples(const std::vector<std::complex<float>>& samples);
+    void processFft(const std::vector<std::complex<float>>& samples);
+    void processDemod(const std::vector<std::complex<float>>& samples);
+    void processAudio(const std::vector<float>& demodulatedSamples);
 };
 
 #endif // MAINWINDOW_H

@@ -8,7 +8,11 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QDockWidget>
+
+#include <QFuture>
 #include <QLabel>
+#include <QtConcurrent/QtConcurrent>
+#include <QFuture>
 #include "constants.h"
 
 MainWindow::MainWindow(QWidget *parent)
@@ -18,11 +22,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_HiCutFreq(DEFAULT_CUT_OFF),
     m_frequency(DEFAULT_FREQUENCY),
     m_sampleRate(DEFAULT_SAMPLE_RATE),
-    m_isProcessing(false),
-    m_isInitialized(false)
+    m_isProcessing(false)
 {
     QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
     m_sSettingsFile = homePath + "/settings.ini";
+    m_threadPool.setMaxThreadCount(QThread::idealThreadCount());
 
     setupUi();
 
@@ -52,8 +56,9 @@ MainWindow::MainWindow(QWidget *parent)
             throw std::runtime_error("Failed to create AudioOutput");
         }
 
-        m_isInitialized = true;
-
+        m_signalProcessor = new SignalProcessor(this);
+        connect(m_signalProcessor, &SignalProcessor::samplesReady, this, &MainWindow::handleSamples);
+        m_signalProcessor->start();
     }
     catch (const std::exception& e) {
         qDebug() << "Exception in createHackTvLib:" << e.what();
@@ -71,6 +76,8 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    m_signalProcessor->stop();
+    m_signalProcessor->wait();
     audioOutput.reset();
     fmDemodulator.reset();
     rationalResampler.reset();
@@ -351,39 +358,69 @@ void MainWindow::loadSettings()
     settings.endGroup();
 }
 
+void MainWindow::handleSamples(const std::vector<std::complex<float>>& samples)
+{
+    QFuture<void> fftFuture = QtConcurrent::run(&m_threadPool, [this, samples]() {
+        this->processFft(samples);
+    });
+
+    QFuture<void> audioFuture = QtConcurrent::run(&m_threadPool, [this, samples]() {
+        this->processDemod(samples);
+    });
+
+    fftFuture.waitForFinished();
+}
+
+void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
+{
+    int fft_size = 2048;
+    std::vector<float> fft_output(fft_size);
+    getFft(samples, fft_output, fft_size);
+
+    cPlotter->setNewFttData(fft_output.data(), fft_output.data(), fft_size);
+}
+
+void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
+{
+    if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput) {
+        auto filteredSamples = lowPassFilter->apply(samples);
+        auto resampledSamples = rationalResampler->resample(filteredSamples);
+        auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);
+
+#pragma omp parallel for
+        for (size_t i = 0; i < demodulatedSamples.size(); ++i) {
+            demodulatedSamples[i] *= audioGain;
+        }
+
+        QMetaObject::invokeMethod(this, "processAudio",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(const std::vector<float>&, demodulatedSamples));
+    } else {
+        qDebug() << "One or more components of the signal chain are not initialized.";
+    }
+}
+
+void MainWindow::processAudio(const std::vector<float>& demodulatedSamples)
+{
+    audioOutput->processAudio(demodulatedSamples);
+}
+
 void MainWindow::processReceivedData(const int8_t *data, size_t len)
 {
-    if (!m_isProcessing.load() || !data || len == 0) {
+    if (!m_isProcessing.load() || !data || len != 262144) {
         return;
     }
 
     try
     {
-        std::vector<std::complex<float>> samples;
-        samples.reserve(len / 2);
+        std::vector<std::complex<float>> samples(len / 2);
         for (size_t i = 0; i < len; i += 2) {
             float i_sample = data[i] / 128.0f;
             float q_sample = data[i + 1] / 128.0f;
-            samples.emplace_back(i_sample, q_sample);
+            samples[i/2] = std::complex<float>(i_sample, q_sample);
         }
 
-        int fft_size = 2048;
-        std::vector<float> fft_output(fft_size);
-        getFft(samples, fft_output, fft_size);
-
-        cPlotter->setNewFttData(fft_output.data(), fft_output.data(), fft_size);
-
-        if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput) {
-            auto filteredSamples = lowPassFilter->apply(samples);
-            auto resampledSamples = rationalResampler->resample(filteredSamples);
-            auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);
-            for (auto& sample : demodulatedSamples) {
-                sample *= audioGain;
-            }
-            audioOutput->processAudio(demodulatedSamples);
-        } else {
-            qDebug() << "One or more components of the signal chain are not initialized.";
-        }
+        m_signalProcessor->addSamples(samples.data());
     }
     catch (const std::exception& e) {
         qDebug() << "Exception caught in processReceivedData:" << e.what();
@@ -404,7 +441,7 @@ void MainWindow::onFreqCtrl_setFrequency(qint64 freq)
 {
     m_frequency = freq;
     cPlotter->setCenterFreq(static_cast<quint64>(freq));
-    if (m_isInitialized)
+    if (m_isProcessing)
         m_hackTvLib->setFrequency(m_frequency);
     frequencyEdit->setText(QString::number(m_frequency));
     saveSettings();
@@ -414,7 +451,7 @@ void MainWindow::on_plotter_newDemodFreq(qint64 freq, qint64 delta)
 {
     m_frequency = freq;
     cPlotter->setCenterFreq(static_cast<quint64>(freq));
-    if (m_isInitialized)
+    if (m_isProcessing)
         m_hackTvLib->setFrequency(m_frequency);
     frequencyEdit->setText(QString::number(m_frequency));
     freqCtrl->setFrequency(m_frequency);
@@ -433,11 +470,9 @@ void MainWindow::executeCommand()
 {
     if (executeButton->text() == "Start")
     {
-        QStringList args = buildCommand();
+        QStringList args = buildCommand();        
 
-        auto decimation = m_sampleRate / DEFAULT_CHANNEL_WIDTH;
-
-        lowPassFilter = std::make_unique<LowPassFilter>(m_sampleRate, m_HiCutFreq, 10e3, decimation);
+        lowPassFilter = std::make_unique<LowPassFilter>(m_sampleRate, m_HiCutFreq, 10e3);
         rationalResampler = std::make_unique<RationalResampler>(2, 1);
         fmDemodulator = std::make_unique<FMDemodulator>(480e3, 14);
 
@@ -613,10 +648,13 @@ void MainWindow::onRxTxTypeChanged(int index)
 void MainWindow::onSampleRateChanged(int index)
 {
     m_sampleRate = sampleRateCombo->currentData().toInt();
-    if (m_isInitialized)
+    if(m_isProcessing)
     {
         m_hackTvLib->setSampleRate(m_sampleRate);
         lowPassFilter->designFilter(m_sampleRate, m_HiCutFreq, 10e3);
+        cPlotter->setSampleRate(m_sampleRate);
+        cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
+        cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
     }
     saveSettings();
 }
@@ -712,5 +750,7 @@ void MainWindow::onChannelChanged(int index)
     long long frequency = channelCombo->itemData(index).toLongLong();
     frequencyEdit->setText(QString::number(frequency));
     m_frequency = frequency;
+    if(m_isProcessing)
+        m_hackTvLib->setFrequency(m_frequency);
     freqCtrl->setFrequency(m_frequency);
 }

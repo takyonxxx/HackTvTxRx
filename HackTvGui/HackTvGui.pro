@@ -18,7 +18,8 @@ SOURCES += \
     main.cpp \
     mainwindow.cpp \
     meter.cpp \
-    rationalresampler.cpp
+    rationalresampler.cpp \
+    signalprocessor.cpp
 
 HEADERS += \
     audiooutput.h \
@@ -29,7 +30,8 @@ HEADERS += \
     lowpassfilter.h \
     mainwindow.h \
     meter.h \
-    rationalresampler.h
+    rationalresampler.h \
+    signalprocessor.h
 
 FORMS += \
     mainwindow.ui

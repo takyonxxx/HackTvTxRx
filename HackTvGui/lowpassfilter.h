@@ -5,7 +5,7 @@
 
 class LowPassFilter {
 public:
-    LowPassFilter(double sampleRate, double cutoffFreq, double transitionWidth, double decimation);
+    LowPassFilter(double sampleRate, double cutoffFreq, double transitionWidth);
     std::vector<std::complex<float>> apply(const std::vector<std::complex<float>>& input);
     void designFilter(double sampleRate, double cutoffFreq, double transitionWidth);
 
