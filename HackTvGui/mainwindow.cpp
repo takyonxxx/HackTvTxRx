@@ -673,6 +673,7 @@ void MainWindow::populateChannelCombo()
     };
 
     QVector<Channel> channels = {
+                                 {"Radio", 445900000},
                                  {"RadioTraffic", 88400000},
                                  {"PowerFm", 100000000},
                                  {"E2", 48250000},

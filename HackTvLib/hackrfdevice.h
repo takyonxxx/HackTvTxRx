@@ -43,6 +43,7 @@ public:
     using DataCallback = std::function<void(const int8_t*, size_t)>;
     void setDataCallback(DataCallback callback);
     int apply_fm_modulation(int8_t* buffer, uint32_t length);
+    std::vector<float> readStreamToSize(size_t size);
     int start(rf_mode mode);
     int stop();
     std::vector<std::string> listDevices();
@@ -91,6 +92,7 @@ private:
     bool m_ampEnable;
     uint32_t m_basebandFilterBandwidth;
     bool m_antennaEnable;
+    dsp::stream_tx<dsp::complex_tx> stream_tx;
 };
 
 #endif // HACKRFDEVICE_H

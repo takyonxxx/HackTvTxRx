@@ -97,7 +97,7 @@ int HackRfDevice::start(rf_mode _mode)
     }
     else if(mode == TX)
     {
-        m_audioInput = std::make_unique<PortAudioInput>(this);
+        m_audioInput = std::make_unique<PortAudioInput>(stream_tx);
 
         if (!m_audioInput->start()) {
             std::cerr << "Failed to start PortAudioInput" << std::endl;
@@ -160,6 +160,18 @@ int HackRfDevice::stop()
     return RF_OK;
 }
 
+std::vector<float> HackRfDevice::readStreamToSize(size_t size) {
+    std::vector<float> float_buffer;
+    float_buffer.reserve(size);
+    while (float_buffer.size() < size) {
+        std::vector<float> temp_buffer = stream_tx.readBufferToVector();
+        size_t elements_needed = size - float_buffer.size();
+        size_t elements_to_add = (elements_needed < temp_buffer.size()) ? elements_needed : temp_buffer.size();
+        float_buffer.insert(float_buffer.end(), temp_buffer.begin(), temp_buffer.begin() + elements_to_add);
+    }
+    return float_buffer;
+}
+
 int HackRfDevice::_tx_callback(hackrf_transfer *transfer)
 {
     HackRfDevice *device = reinterpret_cast<HackRfDevice *>(transfer->tx_ctx);
@@ -186,12 +198,12 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
 {
     float amplitude = 1.0;
     float filter_size = 0;
-    float modulation_index = 7.5;
+    float modulation_index = 5.0;
     float interpolation = 48;
     int decimation = 1;
 
     size_t desired_size = length / 2;
-    std::vector<float> float_buffer = m_audioInput->readStreamToSize(desired_size);
+    std::vector<float> float_buffer = readStreamToSize(desired_size);
 
     if (float_buffer.size() < desired_size) {
         return 0;
