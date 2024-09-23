@@ -114,14 +114,6 @@ public:
             output.push_back(interpolated_output[i]);
         }
 
-        // Ensure output size matches expected size
-        size_t expected_size = 1024; // Desired size
-        if (output.size() > expected_size) {
-            output.resize(expected_size); // Trim if too large
-        } else if (output.size() < expected_size) {
-            output.resize(expected_size, std::complex<float>(0.0f, 0.0f)); // Pad if too small
-        }
-
         return output;
     }
 

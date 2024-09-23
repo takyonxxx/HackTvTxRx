@@ -274,6 +274,9 @@ bool HackTvLib::start()
     s.raw_bb_white_level = INT16_MAX;
     m_rxTxMode = TX_MODE;
 
+    m_abort = false;
+    m_signal = 0;
+
     log("HackTvLib starting.");
 
     if(!parseArguments())
@@ -284,39 +287,43 @@ bool HackTvLib::start()
         s.samplerate / 1e6,
         s.gain,
         getBoolString(s.amp),
-        getRxTxModeString(m_rxTxMode));
-
-    if(m_rxTxMode != RX_MODE && micEnabled)
-    {
-        log("Mic not implemented.");
-        return false;
-    }
+        getRxTxModeString(m_rxTxMode));   
 
     if(m_rxTxMode == RX_MODE)
     {
-        m_abort = false;
-        m_signal = 0;        
-        // m_thread = std::thread(&HackTvLib::rfRxLoop, this);
-
         hackRfDevice = new HackRfDevice();
-        if(!micEnabled)
-        {
-            hackRfDevice->setDataCallback([this](const int8_t* data, size_t len) {
-                this->dataReceived(data, len);
-            });
-        }
-
         hackRfDevice->setSampleRate(s.samplerate);
         hackRfDevice->setFrequency(s.frequency);
         hackRfDevice->setAmpEnable(s.amp);
 
+        hackRfDevice->setDataCallback([this](const int8_t* data, size_t len) {
+            this->dataReceived(data, len);
+        });
+
         if(hackRfDevice->start(rf_mode::RX) != RF_OK)
         {
-            log("Could not open HackRF. Please check the device.");
+            log("Could not open HackRF ib RX. Please check the device.");
             return false;
         }
 
         log("HackTvLib started at RX mode.");
+        return true;
+    }
+
+    if(micEnabled && m_rxTxMode == TX_MODE)
+    {
+        hackRfDevice = new HackRfDevice();
+        hackRfDevice->setSampleRate(s.samplerate);
+        hackRfDevice->setFrequency(s.frequency);
+        hackRfDevice->setAmpEnable(s.amp);
+
+        if(hackRfDevice->start(rf_mode::TX) != RF_OK)
+        {
+            log("Could not open HackRF in TX. Please check the device.");
+            return false;
+        }
+
+        log("HackTvLib started at TX mode. Mic Enabled.");
         return true;
     }
 
@@ -1275,7 +1282,7 @@ void HackTvLib::rfRxLoop()
 
 bool HackTvLib::stop()
 {
-    if(m_rxTxMode == RX_MODE)
+    if(m_rxTxMode == RX_MODE || micEnabled)
     {
         if(hackRfDevice->stop() == 0)
         {

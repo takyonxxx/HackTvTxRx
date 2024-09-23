@@ -42,7 +42,7 @@ public:
 
     using DataCallback = std::function<void(const int8_t*, size_t)>;
     void setDataCallback(DataCallback callback);
-
+    int apply_fm_modulation(int8_t* buffer, uint32_t length);
     int start(rf_mode mode);
     int stop();
     std::vector<std::string> listDevices();
@@ -73,6 +73,8 @@ private slots:
 private:
     static int _tx_callback(hackrf_transfer *transfer);
     static int _rx_callback(hackrf_transfer *transfer);
+
+    std::unique_ptr<PortAudioInput> m_audioInput;
 
     std::vector<std::string> device_serials;
     std::vector<int> device_board_ids;

@@ -15,6 +15,7 @@
 #include "rationalresampler.h"
 #include "cplotter.h"
 #include "freqctrl.h"
+#include "meter.h"
 #include "signalprocessor.h"
 
 class QGroupBox;
@@ -35,6 +36,7 @@ private:
 
     QGroupBox *modeGroup;
     QGroupBox *inputTypeGroup;
+    QGroupBox *rxGroup;
 
     QLineEdit *frequencyEdit;
     QComboBox *sampleRateCombo;
@@ -70,6 +72,7 @@ private:
 
     CPlotter *cPlotter;
     CFreqCtrl *freqCtrl;
+    CMeter *cMeter;
 
     float audioGain = 0.5f;
     int m_LowCutFreq = -100e3;

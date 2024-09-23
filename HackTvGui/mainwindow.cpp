@@ -21,7 +21,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_LowCutFreq(-1*int(DEFAULT_CUT_OFF)),
     m_HiCutFreq(DEFAULT_CUT_OFF),
     m_frequency(DEFAULT_FREQUENCY),
-    m_sampleRate(DEFAULT_SAMPLE_RATE),
+    m_sampleRate(DEFAULT_SAMPLE_RATE),    
     m_isProcessing(false)
 {
     QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
@@ -39,7 +39,6 @@ MainWindow::MainWindow(QWidget *parent)
     setCurrentSampleRate(m_sampleRate);
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
     cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
-    cPlotter->setDemodRanges(m_LowCutFreq, -_KHZ(5), _KHZ(5),m_HiCutFreq, true);
     freqCtrl->setFrequency(m_frequency);
 
     try {        
@@ -105,7 +104,9 @@ void MainWindow::setCurrentSampleRate(int sampleRate)
 }
 
 void MainWindow::setupUi()
-{   
+{
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
     QWidget *centralWidget = new QWidget(this);
     QVBoxLayout *mainLayout = new QVBoxLayout(centralWidget);
 
@@ -227,8 +228,14 @@ void MainWindow::setupUi()
     connect(cPlotter, &CPlotter::newDemodFreq, this, &MainWindow::on_plotter_newDemodFreq);
     connect(cPlotter, &CPlotter::newFilterFreq, this, &MainWindow::on_plotter_newFilterFreq);
 
-    QGroupBox *rxGroup = new QGroupBox("Receiver", this);
+    cMeter = new CMeter(this);
+    cMeter->setMinimumHeight(50);
+
+    rxGroup = new QGroupBox("Receiver", this);
     QGridLayout *rxLayout = new QGridLayout(rxGroup);
+    rxLayout->setVerticalSpacing(15);
+    rxLayout->setHorizontalSpacing(15);
+    rxLayout->addWidget(cMeter);
     rxLayout->setVerticalSpacing(15);
     rxLayout->setHorizontalSpacing(15);
     rxLayout->addWidget(freqCtrl);
@@ -364,7 +371,7 @@ void MainWindow::handleSamples(const std::vector<std::complex<float>>& samples)
         this->processFft(samples);
     });
 
-    QFuture<void> audioFuture = QtConcurrent::run(&m_threadPool, [this, samples]() {
+    QFuture<void> demodFuture = QtConcurrent::run(&m_threadPool, [this, samples]() {
         this->processDemod(samples);
     });
 
@@ -375,7 +382,9 @@ void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
 {
     int fft_size = 2048;
     std::vector<float> fft_output(fft_size);
-    getFft(samples, fft_output, fft_size);
+    float signal_level_dbfs;
+    getFft(samples, fft_output, signal_level_dbfs, fft_size);
+    cMeter->setLevel(signal_level_dbfs);
 
     cPlotter->setNewFttData(fft_output.data(), fft_output.data(), fft_size);
 }
@@ -411,23 +420,14 @@ void MainWindow::processReceivedData(const int8_t *data, size_t len)
         return;
     }
 
-    try
-    {
-        std::vector<std::complex<float>> samples(len / 2);
-        for (size_t i = 0; i < len; i += 2) {
-            float i_sample = data[i] / 128.0f;
-            float q_sample = data[i + 1] / 128.0f;
-            samples[i/2] = std::complex<float>(i_sample, q_sample);
-        }
+    std::vector<std::complex<float>> samples(len / 2);
+    for (size_t i = 0; i < len; i += 2) {
+        float i_sample = data[i] / 128.0f;
+        float q_sample = data[i + 1] / 128.0f;
+        samples[i/2] = std::complex<float>(i_sample, q_sample);
+    }
 
-        m_signalProcessor->addSamples(samples.data());
-    }
-    catch (const std::exception& e) {
-        qDebug() << "Exception caught in processReceivedData:" << e.what();
-    }
-    catch (...) {
-        qDebug() << "Unknown exception caught in processReceivedData";
-    }
+    m_signalProcessor->addSamples(samples.data());
 }
 
 void MainWindow::handleReceivedData(const int8_t *data, size_t len)
@@ -462,7 +462,8 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
 {
     m_LowCutFreq = low;
     m_HiCutFreq = high;
-    lowPassFilter->designFilter(m_sampleRate, m_HiCutFreq, 10e3);
+    if (m_isProcessing)
+        lowPassFilter->designFilter(m_sampleRate, m_HiCutFreq, 10e3);
     saveSettings();
 }
 
@@ -643,6 +644,13 @@ void MainWindow::onRxTxTypeChanged(int index)
     bool isTx = (index == 0);
     inputTypeGroup->setVisible(isTx);
     modeGroup->setVisible(isTx);
+    rxGroup->setVisible(!isTx);
+
+    setMinimumSize(800, 600);  // Set a minimum size
+    setMaximumSize(QSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX));
+    resize(800, 600);
+    adjustSize();
+    update();
 }
 
 void MainWindow::onSampleRateChanged(int index)
@@ -666,7 +674,7 @@ void MainWindow::populateChannelCombo()
         long long frequency;
     };
 
-    QVector<Channel> channels = {       
+    QVector<Channel> channels = {                                 
                                  {"PowerFm", 100000000},
                                  {"E2", 48250000},
                                  {"E3", 55250000},
@@ -749,8 +757,11 @@ void MainWindow::onChannelChanged(int index)
 {
     long long frequency = channelCombo->itemData(index).toLongLong();
     frequencyEdit->setText(QString::number(frequency));
+    freqCtrl->setFrequency(frequency);
     m_frequency = frequency;
     if(m_isProcessing)
+    {        
         m_hackTvLib->setFrequency(m_frequency);
-    freqCtrl->setFrequency(m_frequency);
+        saveSettings();
+    }  
 }

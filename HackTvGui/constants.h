@@ -21,6 +21,8 @@
 #define HACKRF_RX_LNA_MAX_DB            40.0
 #define HACKRF_AMP_MAX_DB               14.0
 #define DEFAULT_FFT_SIZE                1024
+#define MIN_DB -60.0f
+#define MAX_DB +20.0f
 
 #define M_PI 3.14159265358979323846
 #define F_PI ((float)(M_PI))
@@ -60,7 +62,7 @@ inline void fft(std::vector<std::complex<float>>& x) {
     }
 }
 
-inline void getFft(const std::vector<std::complex<float>>& samples, std::vector<float>& fft_output, int fft_size)
+inline void getFft(const std::vector<std::complex<float>>& samples, std::vector<float>& fft_output, float& signal_level_dbfs, int fft_size)
 {
     if (samples.size() < fft_size) {
         throw std::runtime_error("Input samples size is smaller than FFT size");
@@ -83,12 +85,16 @@ inline void getFft(const std::vector<std::complex<float>>& samples, std::vector<
     float minDisplayPower = maxPower / 1e4; // Dinamik aralığı koruyoruz (-40 dB)
     float refLevel = 10.0f; // Referans seviyesini daha da yukarı çektik, bu sinyali daha aşağı kaydıracak
     fft_output.resize(fft_size);
+    float totalDb = 0.0f;
     for (int i = 0; i < fft_size; ++i) {
         float power = std::norm(fft_data[i]);
         float db = 10.0f * std::log10(std::max(power, minDisplayPower) / maxPower);
         // dB değerini referans seviyesine göre ayarla ve ölçeklendir
         fft_output[i] = (db - refLevel) * amplificationFactor;
+        totalDb += fft_output[i];
     }
+
+    signal_level_dbfs = totalDb / fft_size;;
 }
 
 #endif // CONSTANTS_H

@@ -12,15 +12,14 @@
 #include <chrono>  // For std::chrono::milliseconds
 #include "types.h"
 #include "stream_tx.h"
-#include "modulation.h"
 
 class PortAudioInput : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit PortAudioInput(QObject *parent = nullptr, rf_t* rf = nullptr)
-        : QObject(parent), stream(nullptr), isRunning(false), rf_ptr(rf)
+    explicit PortAudioInput(QObject *parent = nullptr)
+        : QObject(parent), stream(nullptr), isRunning(false)
     {
         PaError err = Pa_Initialize();
         if (err != paNoError) {
@@ -96,40 +95,7 @@ public:
         return float_buffer;
     }
 
-    int apply_modulation(int8_t* buffer, uint32_t length)
-    {
-        int decimation = 1;
-        float amplitude = 1.0;
-        float modulation_index = 5.0;
-        float interpolation = 48;
-        float filter_size = 0.0;
 
-        size_t desired_size = length / 2;
-        std::vector<float> float_buffer = readStreamToSize(desired_size);
-
-        if (float_buffer.size() < desired_size) {
-            return 0;
-        }
-
-        int noutput_items = float_buffer.size();
-        for (int i = 0; i < noutput_items; ++i) {
-            float_buffer[i] *= amplitude;
-        }
-
-        std::vector<std::complex<float>> modulated_signal(noutput_items);
-        float sensitivity = modulation_index;
-        FrequencyModulator modulator(sensitivity);
-        modulator.work(noutput_items, float_buffer, modulated_signal);
-
-        RationalResampler resampler(interpolation, decimation, filter_size);
-        std::vector<std::complex<float>> resampled_signal = resampler.resample(modulated_signal);
-
-        for (int i = 0; i < noutput_items; ++i) {
-            buffer[2 * i] = static_cast<int8_t>(std::real(resampled_signal[i]) * 127.0f);
-            buffer[2 * i + 1] = static_cast<int8_t>(std::imag(resampled_signal[i]) * 127.0f);
-        }
-        return 0;
-    }
 
 private:
     static int audioCallback(const void *inputBuffer, void *outputBuffer, unsigned long framesPerBuffer,
