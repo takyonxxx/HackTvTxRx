@@ -37,7 +37,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     frequencyEdit->setText(QString::number(m_frequency));
     setCurrentSampleRate(m_sampleRate);
-    cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
+    cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));    
     cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
     freqCtrl->setFrequency(m_frequency);
 
@@ -58,6 +58,7 @@ MainWindow::MainWindow(QWidget *parent)
         m_signalProcessor = new SignalProcessor(this);
         connect(m_signalProcessor, &SignalProcessor::samplesReady, this, &MainWindow::handleSamples);
         m_signalProcessor->start();
+        qDebug() << m_LowCutFreq << m_HiCutFreq;
     }
     catch (const std::exception& e) {
         qDebug() << "Exception in createHackTvLib:" << e.what();
@@ -361,7 +362,7 @@ void MainWindow::loadSettings()
     m_frequency = settings.value("frequency").toInt();
     m_sampleRate = settings.value("samplerate").toInt();
     m_LowCutFreq = settings.value("lowcutfreq").toInt();
-    m_HiCutFreq = settings.value("hicutfreq").toInt();
+    m_HiCutFreq = settings.value("hicutfreq").toInt();    
     settings.endGroup();
 }
 
@@ -444,7 +445,6 @@ void MainWindow::onFreqCtrl_setFrequency(qint64 freq)
     if (m_isProcessing)
         m_hackTvLib->setFrequency(m_frequency);
     frequencyEdit->setText(QString::number(m_frequency));
-    saveSettings();
 }
 
 void MainWindow::on_plotter_newDemodFreq(qint64 freq, qint64 delta)
@@ -463,7 +463,7 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
     m_LowCutFreq = low;
     m_HiCutFreq = high;
     if (m_isProcessing)
-        lowPassFilter->designFilter(m_sampleRate, m_HiCutFreq, 10e3);
+        lowPassFilter->designFilter(m_sampleRate, m_HiCutFreq, transitionWidth);
     saveSettings();
 }
 
@@ -473,15 +473,13 @@ void MainWindow::executeCommand()
     {
         QStringList args = buildCommand();        
 
-        lowPassFilter = std::make_unique<LowPassFilter>(m_sampleRate, m_HiCutFreq, 10e3);
-        rationalResampler = std::make_unique<RationalResampler>(2, 1);
-        fmDemodulator = std::make_unique<FMDemodulator>(480e3, 14);
+        lowPassFilter = std::make_unique<LowPassFilter>(m_sampleRate, m_HiCutFreq, transitionWidth);
+        rationalResampler = std::make_unique<RationalResampler>(interpolation, decimation);
+        fmDemodulator = std::make_unique<FMDemodulator>(quadratureRate, audioDecimation);
 
         cPlotter->setSampleRate(m_sampleRate);
         cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
         cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
-
-        saveSettings();
 
         // Convert QStringList to std::vector<std::string>
         std::vector<std::string> stdArgs;
@@ -674,7 +672,8 @@ void MainWindow::populateChannelCombo()
         long long frequency;
     };
 
-    QVector<Channel> channels = {                                 
+    QVector<Channel> channels = {
+                                 {"RadioTraffic", 88400000},
                                  {"PowerFm", 100000000},
                                  {"E2", 48250000},
                                  {"E3", 55250000},
@@ -763,5 +762,5 @@ void MainWindow::onChannelChanged(int index)
     {        
         m_hackTvLib->setFrequency(m_frequency);
         saveSettings();
-    }  
+    }
 }

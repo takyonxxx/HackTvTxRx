@@ -81,10 +81,14 @@ private:
     int fhi = 5000;
     int click_res = 100;
     int fftrate = 50;
+    double transitionWidth = 10e3;
+    double quadratureRate = 480e3;
+    int audioDecimation = 12;
+    int interpolation = 4;
+    int decimation = 2;
 
     uint64_t m_frequency;
     uint32_t m_sampleRate;
-    float decimation;
     QString mode;
     std::atomic<bool> m_isProcessing;
 
