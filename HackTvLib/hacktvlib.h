@@ -112,6 +112,7 @@ public:
     void setFilter_size(float newFilter_size);
     void setModulation_index(float newModulation_index);
     void setDecimation(int newDecimation);
+    void setInterpolation(float newInterpolation);
 
 private slots:
     void emitReceivedData(const int8_t *data, size_t data_len);

@@ -1,99 +1,99 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
-
 #include <QMainWindow>
-#include <QTextBrowser>
-#include <QDoubleSpinBox>
-#include <QCheckBox>
+#include <QGroupBox>
+#include <QGridLayout>
 #include <QLineEdit>
 #include <QComboBox>
 #include <QPushButton>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QGroupBox>
+#include <QCheckBox>
+#include <QSlider>
+#include <QDoubleSpinBox>
+#include <QTextBrowser>
 #include <QFileDialog>
-#include <QMessageBox>
-#include <QDockWidget>
 #include <QThreadPool>
 #include <QTimer>
+#include <QMessageBox>
 
+#include <memory>
+#include <vector>
+#include <complex>
 #include "hacktvlib.h"
-#include "audiooutput.h"
-#include "fmdemodulator.h"
-#include "audiooutput.h"
-#include "lowpassfilter.h"
-#include "rationalresampler.h"
-#include "cplotter.h"
 #include "freqctrl.h"
+#include "cplotter.h"
 #include "meter.h"
+#include "audiooutput.h"
 #include "signalprocessor.h"
-
-class QGroupBox;
-class QLineEdit;
-class QComboBox;
-class QPushButton;
-class QFileDialog;
+#include "lowpassfilter.h"
+#include "fmdemodulator.h"
+#include "rationalresampler.h"
 
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
 public:
-    MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
+
+private slots:
+    void executeCommand();
+    void chooseFile();
+    void onInputTypeChanged(int index);
+    void onRxTxTypeChanged(int index);
+    void onSampleRateChanged(int index);
+    void onChannelChanged(int index);
+    void onFreqCtrl_setFrequency(qint64 freq);
+    void on_plotter_newDemodFreq(qint64 freq, qint64 delta);
+    void on_plotter_newFilterFreq(int low, int high);
+    void handleSamples(const std::vector<std::complex<float>>& samples);
+    void updateLogDisplay();
+    void processReceivedData(const int8_t *data, size_t len);
+    void processAudio(const std::vector<float>& demodulatedSamples);
+
 private:
-    QThreadPool m_threadPool;
+    void setupUi();
+    void saveSettings();
+    void loadSettings();
+    void populateChannelCombo();
+    QStringList buildCommand();
+    void setCurrentSampleRate(int sampleRate);
+    void processFft(const std::vector<std::complex<float>>& samples);
+    void processDemod(const std::vector<std::complex<float>>& samples);
+    void handleLog(const std::string& logMessage);
+    void handleReceivedData(const int8_t *data, size_t len);
 
-    QGroupBox *modeGroup;
-    QGroupBox *inputTypeGroup;
-    QGroupBox *rxGroup;
-    QGridLayout *txControlsLayout;
-
-    QLineEdit *frequencyEdit;
-    QComboBox *sampleRateCombo;
-    QComboBox *outputCombo;
-    QComboBox *modeCombo;
-    QComboBox *rxtxCombo;
-    QComboBox *channelCombo;
-    QLineEdit *inputFileEdit;
-    QPushButton *chooseFileButton;
-    QPushButton *executeButton;
-    QPushButton *exitButton;
-    QFileDialog *fileDialog;
-    QComboBox *inputTypeCombo;
-    QLineEdit *ffmpegOptionsEdit;
-    QCheckBox *ampEnabled;
-    QCheckBox *a2Stereo;
-    QCheckBox *repeat;
-    QCheckBox *acp;
-    QCheckBox *filter;
-    QCheckBox *colorDisabled;
-
-    QSlider *txAmplitudeSlider;
-    QDoubleSpinBox *txAmplitudeSpinBox;
-    QSlider *txFilterSizeSlider;
-    QDoubleSpinBox *txFilterSizeSpinBox;
-    QSlider *txModulationIndexSlider;
-    QDoubleSpinBox *txModulationIndexSpinBox;
-    QSlider *txInterpolationSlider;
-    QDoubleSpinBox *txInterpolationSpinBox;
-
-    std::unique_ptr<HackTvLib> m_hackTvLib;
-
-    QString m_sSettingsFile;
-
+    // UI Elements
+    QComboBox *outputCombo, *channelCombo, *sampleRateCombo, *rxtxCombo, *inputTypeCombo, *modeCombo;
+    QCheckBox *ampEnabled, *colorDisabled, *a2Stereo, *repeat, *acp, *filter;
+    QLineEdit *frequencyEdit, *inputFileEdit, *ffmpegOptionsEdit;
+    QPushButton *chooseFileButton, *executeButton, *exitButton;
+    QSlider *txAmplitudeSlider, *txFilterSizeSlider, *txModulationIndexSlider, *txInterpolationSlider;
+    QDoubleSpinBox *txAmplitudeSpinBox, *txFilterSizeSpinBox, *txModulationIndexSpinBox, *txInterpolationSpinBox;
     QTextBrowser *logBrowser;
+    QFileDialog *fileDialog;
+    CFreqCtrl *freqCtrl;
+    CPlotter *cPlotter;
+    CMeter *cMeter;
+
+    // Layouts and Groups
+    QGridLayout *txControlsLayout;
+    QGroupBox *inputTypeGroup, *modeGroup, *rxGroup;
+
+    // Member variables
+    std::unique_ptr<HackTvLib> m_hackTvLib;
+    std::unique_ptr<AudioOutput> audioOutput;
+    SignalProcessor *m_signalProcessor;
+    QThreadPool m_threadPool;
     QTimer *logTimer;
+    QString m_sSettingsFile;
     QStringList pendingLogs;
 
-    std::unique_ptr<LowPassFilter> lowPassFilter;
-    std::unique_ptr<FMDemodulator> fmDemodulator;
-    std::unique_ptr<AudioOutput> audioOutput;
-    std::unique_ptr<RationalResampler> rationalResampler;
+    qint64 m_frequency;
+    int m_sampleRate;    
 
-    CPlotter *cPlotter;
-    CFreqCtrl *freqCtrl;
-    CMeter *cMeter;
+    QString mode;
+    bool isTx, isFmTransmit, isFile, isTest, isFFmpeg;
 
     float audioGain = 0.5f;
     int m_LowCutFreq = -100e3;
@@ -102,57 +102,24 @@ private:
     int fhi = 5000;
     int click_res = 100;
     int fftrate = 50;
+
+    QFrame* tx_line;
+    float tx_amplitude = 1.0;
+    float tx_filter_size = 0;
+    float tx_modulation_index = 5.0;
+    float tx_interpolation = 48;
     double transitionWidth = 10e3;
     double quadratureRate = 480e3;
     int audioDecimation = 12;
     int interpolation = 4;
     int decimation = 2;
 
-    uint64_t m_frequency;
-    uint32_t m_sampleRate;
-    float tx_amplitude = 1.0;
-    float tx_filter_size = 0;
-    float tx_modulation_index = 5.0;
-    float tx_interpolation = 48;
-
-    QString mode;
     std::atomic<bool> m_isProcessing;
 
-    SignalProcessor* m_signalProcessor;
-    static const int MAX_FFT_SIZE = 2048;
-    static const int BUFFER_SIZE = 1048576; // 1 MB
-
-    bool isFmTransmit = false;
-    bool isFile = false;
-    bool isTest = false;
-    bool isFFmpeg = false;
-    bool isTx = false;
-
-    void setupUi();
-    QStringList buildCommand();
-    void handleLog(const std::string& logMessage);
-    void handleReceivedData(const int8_t *data, size_t len);
-    void loadSettings();
-    void saveSettings();
-    void setCurrentSampleRate(int sampleRate);
-
-private slots:
-    void executeCommand();
-    void chooseFile();
-    void updateLogDisplay();
-    void onInputTypeChanged(int index);
-    void onRxTxTypeChanged(int index);
-    void onSampleRateChanged(int index);
-    void populateChannelCombo();
-    void onChannelChanged(int index);
-    void processReceivedData(const int8_t *data, size_t len);
-    void on_plotter_newDemodFreq(qint64 freq, qint64 delta);
-    void on_plotter_newFilterFreq(int low, int high);
-    void onFreqCtrl_setFrequency(qint64 freq);
-    void handleSamples(const std::vector<std::complex<float>>& samples);
-    void processFft(const std::vector<std::complex<float>>& samples);
-    void processDemod(const std::vector<std::complex<float>>& samples);
-    void processAudio(const std::vector<float>& demodulatedSamples);
+    // Signal processing components
+    std::unique_ptr<LowPassFilter> lowPassFilter;
+    std::unique_ptr<RationalResampler> rationalResampler;
+    std::unique_ptr<FMDemodulator> fmDemodulator;
 };
 
 #endif // MAINWINDOW_H

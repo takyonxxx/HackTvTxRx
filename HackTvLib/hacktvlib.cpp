@@ -396,6 +396,13 @@ void HackTvLib::setDecimation(int newDecimation)
     }
 }
 
+void HackTvLib::setInterpolation(float newInterpolation)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setInterpolation(newInterpolation);
+    }
+}
+
 void HackTvLib::dataReceived(const int8_t *data, size_t len)
 {
     emitReceivedData(data, len);

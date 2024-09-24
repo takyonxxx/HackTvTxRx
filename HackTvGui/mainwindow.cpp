@@ -8,14 +8,15 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
     m_hackTvLib(std::make_unique<HackTvLib>()),
+
+    m_frequency(DEFAULT_FREQUENCY),
+    m_sampleRate(DEFAULT_SAMPLE_RATE),
     m_LowCutFreq(-1*int(DEFAULT_CUT_OFF)),
     m_HiCutFreq(DEFAULT_CUT_OFF),
-    m_frequency(DEFAULT_FREQUENCY),
-    m_sampleRate(DEFAULT_SAMPLE_RATE),    
     m_isProcessing(false)
 {
     QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
-    m_sSettingsFile = homePath + "/settings.ini";
+    m_sSettingsFile = homePath + "/hacktv_settings.ini";
     m_threadPool.setMaxThreadCount(QThread::idealThreadCount());
 
     if (QFile(m_sSettingsFile).exists())
@@ -161,8 +162,6 @@ void MainWindow::setupUi()
     rxtxCombo->addItem("TX", "tx");
 
     txControlsLayout = new QGridLayout();
-    outputLayout->addLayout(txControlsLayout, 4, 0, 1, 6);  // Span all 6 columns
-
     // Amplitude
     txAmplitudeSlider = new QSlider(Qt::Horizontal);
     txAmplitudeSlider->setRange(0, 500);  // 0.0 to 1.0 in 100 steps
@@ -228,11 +227,19 @@ void MainWindow::setupUi()
         float amplitude = value / 100.0f;
         this->txAmplitudeSpinBox->setValue(amplitude);
         tx_amplitude = amplitude;
+        if(m_isProcessing)
+        {
+            m_hackTvLib->setAmplitude(tx_amplitude);
+        }
         saveSettings();
     });
     connect(txAmplitudeSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), [this](double value) {
         txAmplitudeSlider->setValue(static_cast<int>(value * 100));
         tx_amplitude = value;
+        if(m_isProcessing)
+        {
+            m_hackTvLib->setAmplitude(tx_amplitude);
+        }
         saveSettings();
     });
 
@@ -240,11 +247,19 @@ void MainWindow::setupUi()
         float filterSize = value / 100.0f;
         txFilterSizeSpinBox->setValue(filterSize);        
         tx_filter_size = filterSize;
+        if(m_isProcessing)
+        {
+            m_hackTvLib->setFilter_size(tx_filter_size);
+        }
         saveSettings();
     });
     connect(txFilterSizeSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), [this](double value) {
         txFilterSizeSlider->setValue(static_cast<int>(value * 100));
         tx_filter_size = value;
+        if(m_isProcessing)
+        {
+            m_hackTvLib->setFilter_size(tx_filter_size);
+        }
         saveSettings();
     });
 
@@ -252,41 +267,40 @@ void MainWindow::setupUi()
         float modulationIndex = value / 100.0f;
         txModulationIndexSpinBox->setValue(modulationIndex);        
         tx_modulation_index = modulationIndex;
+        if(m_isProcessing)
+        {
+            m_hackTvLib->setModulation_index(tx_modulation_index);
+        }
         saveSettings();
     });
     connect(txModulationIndexSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), [this](double value) {
         txModulationIndexSlider->setValue(static_cast<int>(value * 100));       
         tx_modulation_index = value;
+        if(m_isProcessing)
+        {
+            m_hackTvLib->setModulation_index(tx_modulation_index);
+        }
         saveSettings();
     });
 
     connect(txInterpolationSlider, &QSlider::valueChanged, [this](int value) {
         txInterpolationSpinBox->setValue(value);        
         tx_interpolation = value;
+        if(m_isProcessing)
+        {
+            m_hackTvLib->setInterpolation(tx_interpolation);
+        }
         saveSettings();
     });
     connect(txInterpolationSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), [this](double value) {
         txInterpolationSlider->setValue(static_cast<int>(value));        
         tx_interpolation = value;
-        saveSettings();
-    });
-
-    txAmplitudeSlider->setVisible(isFmTransmit);
-    txAmplitudeSpinBox->setVisible(isFmTransmit);
-    txFilterSizeSlider->setVisible(isFmTransmit);
-    txFilterSizeSpinBox->setVisible(isFmTransmit);
-    txModulationIndexSlider->setVisible(isFmTransmit);
-    txModulationIndexSpinBox->setVisible(isFmTransmit);
-    txInterpolationSlider->setVisible(isFmTransmit);
-    txInterpolationSpinBox->setVisible(isFmTransmit);
-
-    // Also hide/show labels
-    for (int i = 0; i < txControlsLayout->rowCount(); ++i) {
-        QLayoutItem* item = txControlsLayout->itemAtPosition(i, 0);
-        if (item && item->widget()) {
-            item->widget()->setVisible(isFmTransmit);
+        if(m_isProcessing)
+        {
+            m_hackTvLib->setInterpolation(tx_interpolation);
         }
-    }
+        saveSettings();
+    });   
 
     outputLayout->addWidget(outputLabel, 0, 0);
     outputLayout->addWidget(outputCombo, 0, 1);
@@ -308,6 +322,13 @@ void MainWindow::setupUi()
     outputLayout->addWidget(rxtxLabel, 3, 2);
     outputLayout->addWidget(rxtxCombo, 3, 3);
 
+    tx_line = new QFrame();
+    tx_line->setFrameShape(QFrame::HLine);
+    tx_line->setFrameShadow(QFrame::Sunken);
+    outputLayout->addWidget(tx_line, 4, 0, 1, 6);  // Span all 6 columns
+
+    outputLayout->addLayout(txControlsLayout, 5, 0, 1, 6);  // Span all 6 columns
+
     mainLayout->addWidget(outputGroup);
 
     freqCtrl = new CFreqCtrl();
@@ -325,7 +346,6 @@ void MainWindow::setupUi()
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
 
     cPlotter->setFftRange(-140.0f, 20.0f);
-    cPlotter->setFftRate(fftrate);
     cPlotter->setPandapterRange(-140.f, 20.f);
     cPlotter->setDemodRanges(-1*DEFAULT_CUT_OFF, -_KHZ(5), _KHZ(5), DEFAULT_CUT_OFF, true);
 
@@ -391,7 +411,6 @@ void MainWindow::setupUi()
     }
 
     modeLayout->addWidget(modeCombo);
-    mainLayout->addWidget(modeGroup);
 
     // Input type group
     inputTypeGroup = new QGroupBox("Input Type", this);
@@ -415,7 +434,8 @@ void MainWindow::setupUi()
     ffmpegOptionsEdit->setVisible(false);  // Initially hidden
     inputTypeLayout->addWidget(ffmpegOptionsEdit);
 
-    mainLayout->addWidget(inputTypeGroup);
+    mainLayout->addWidget(inputTypeGroup);    
+    mainLayout->addWidget(modeGroup);
 
     logBrowser = new QTextBrowser(this);
     mainLayout->addWidget(logBrowser);
@@ -445,11 +465,7 @@ void MainWindow::setupUi()
     if (!QDir(initialDir).exists()) {
         initialDir = QDir::homePath() + "/Videos";
     }
-    fileDialog->setDirectory(initialDir);
-
-    inputTypeGroup->setVisible(isTx);
-    modeGroup->setVisible(isTx);
-    rxGroup->setVisible(!isTx);
+    fileDialog->setDirectory(initialDir);   
 
     // Connect signals and slots
     connect(executeButton, &QPushButton::clicked, this, &MainWindow::executeCommand);
@@ -461,6 +477,30 @@ void MainWindow::setupUi()
     connect(sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onSampleRateChanged);
 
+    inputTypeGroup->setVisible(false);
+    modeGroup->setVisible(false);
+    rxGroup->setVisible(true);
+
+    // Hide TX controls initially
+    txAmplitudeSlider->setVisible(false);
+    txAmplitudeSpinBox->setVisible(false);
+    txFilterSizeSlider->setVisible(false);
+    txFilterSizeSpinBox->setVisible(false);
+    txModulationIndexSlider->setVisible(false);
+    txModulationIndexSpinBox->setVisible(false);
+    txInterpolationSlider->setVisible(false);
+    txInterpolationSpinBox->setVisible(false);
+    tx_line->setVisible(false);
+
+    for (int i = 0; i < txControlsLayout->rowCount(); ++i) {
+        QLayoutItem* item = txControlsLayout->itemAtPosition(i, 0);
+        if (item && item->widget()) {
+            item->widget()->setVisible(false);
+        }
+    }
+
+    rxtxCombo->setCurrentIndex(0);  // Start in RX mode
+    onRxTxTypeChanged(0);
 }
 
 void MainWindow::saveSettings()
@@ -778,6 +818,7 @@ void MainWindow::onInputTypeChanged(int index)
     txModulationIndexSpinBox->setVisible(isFmTransmit);
     txInterpolationSlider->setVisible(isFmTransmit);
     txInterpolationSpinBox->setVisible(isFmTransmit);
+    tx_line->setVisible(isFmTransmit);
 
     // Also hide/show labels
     for (int i = 0; i < txControlsLayout->rowCount(); ++i) {
@@ -794,16 +835,29 @@ void MainWindow::onRxTxTypeChanged(int index)
     inputTypeGroup->setVisible(isTx);
     modeGroup->setVisible(isTx);
     rxGroup->setVisible(!isTx);
+
     if(isTx)
     {
-        inputTypeCombo->setCurrentIndex(1);
-        inputTypeCombo->setCurrentIndex(0);
+        inputTypeCombo->setCurrentIndex(0);  // Start in Tx mode
+        onInputTypeChanged(0);
     }
-    else
-    {
-        inputTypeCombo->setCurrentIndex(0);
-        inputTypeCombo->setCurrentIndex(1);
-        modeGroup->setVisible(false);
+
+    txAmplitudeSlider->setVisible(isTx);
+    txAmplitudeSpinBox->setVisible(isTx);
+    txFilterSizeSlider->setVisible(isTx);
+    txFilterSizeSpinBox->setVisible(isTx);
+    txModulationIndexSlider->setVisible(isTx);
+    txModulationIndexSpinBox->setVisible(isTx);
+    txInterpolationSlider->setVisible(isTx);
+    txInterpolationSpinBox->setVisible(isTx);
+    tx_line->setVisible(isTx);
+
+    // Also hide/show labels
+    for (int i = 0; i < txControlsLayout->rowCount(); ++i) {
+        QLayoutItem* item = txControlsLayout->itemAtPosition(i, 0);
+        if (item && item->widget()) {
+            item->widget()->setVisible(isTx);
+        }
     }
 
     setMinimumSize(800, 600);  // Set a minimum size

@@ -194,6 +194,11 @@ int HackRfDevice::_rx_callback(hackrf_transfer *transfer)
     return 0;
 }
 
+void HackRfDevice::setInterpolation(float newInterpolation)
+{
+    interpolation = newInterpolation;
+}
+
 int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
 {
     size_t desired_size = length / 2;
