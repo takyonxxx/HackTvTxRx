@@ -9,7 +9,6 @@
 #include <stdint.h>
 #include <vector>
 #include <mutex>
-#include <complex>
 
 class HackTvLib{
 public:
@@ -26,9 +25,14 @@ public:
     void setMicEnabled(bool newMicEnabled);
     void setFrequency(uint64_t frequency_hz);
     void setSampleRate(uint32_t sample_rate);
+    void setAmplitude(float newAmplitude);
+    void setFilter_size(float newFilter_size);
+    void setModulation_index(float newModulation_index);
+    void setDecimation(int newDecimation);
 
 private slots:
-    void emitReceivedData(const int16_t* data, size_t samples);
+    void emitReceivedData(const int8_t *data, size_t data_len);
+    void dataReceived(const int8_t* data, size_t data_len);
 private:
     LogCallback m_logCallback;
     DataCallback m_dataCallback;
@@ -46,7 +50,6 @@ private:
     void cleanupArgv();
     void rfTxLoop();
     void rfRxLoop();
-    std::vector<std::complex<float>> apply_modulation(std::vector<float> buffer);
 };
 
 #endif // HACKTVLIB_H

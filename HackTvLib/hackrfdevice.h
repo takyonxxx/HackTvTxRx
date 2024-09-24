@@ -68,6 +68,11 @@ public:
     uint32_t getBasebandFilterBandwidth() const;
     bool getAntennaEnable() const;
 
+    void setAmplitude(float newAmplitude);
+    void setFilter_size(float newFilter_size);
+    void setModulation_index(float newModulation_index);
+    void setDecimation(int newDecimation);
+
 private slots:
     void emitReceivedData(const int8_t *data, size_t len);
 
@@ -82,6 +87,12 @@ private:
     rf_mode mode;
     hackrf_device *h_device;
     DataCallback m_dataCallback;
+
+    float amplitude = 1.0;
+    float filter_size = 0;
+    float modulation_index = 5.0;
+    float interpolation = 48;
+    int decimation = 1;
 
     // Parameters
     uint64_t m_frequency;

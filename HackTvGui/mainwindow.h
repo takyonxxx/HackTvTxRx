@@ -3,10 +3,20 @@
 
 #include <QMainWindow>
 #include <QTextBrowser>
+#include <QDoubleSpinBox>
 #include <QCheckBox>
+#include <QLineEdit>
+#include <QComboBox>
+#include <QPushButton>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QGroupBox>
+#include <QFileDialog>
+#include <QMessageBox>
 #include <QDockWidget>
 #include <QThreadPool>
 #include <QTimer>
+
 #include "hacktvlib.h"
 #include "audiooutput.h"
 #include "fmdemodulator.h"
@@ -37,6 +47,7 @@ private:
     QGroupBox *modeGroup;
     QGroupBox *inputTypeGroup;
     QGroupBox *rxGroup;
+    QGridLayout *txControlsLayout;
 
     QLineEdit *frequencyEdit;
     QComboBox *sampleRateCombo;
@@ -56,7 +67,17 @@ private:
     QCheckBox *repeat;
     QCheckBox *acp;
     QCheckBox *filter;
-    QCheckBox *colorDisabled;    
+    QCheckBox *colorDisabled;
+
+    QSlider *txAmplitudeSlider;
+    QDoubleSpinBox *txAmplitudeSpinBox;
+    QSlider *txFilterSizeSlider;
+    QDoubleSpinBox *txFilterSizeSpinBox;
+    QSlider *txModulationIndexSlider;
+    QDoubleSpinBox *txModulationIndexSpinBox;
+    QSlider *txInterpolationSlider;
+    QDoubleSpinBox *txInterpolationSpinBox;
+
     std::unique_ptr<HackTvLib> m_hackTvLib;
 
     QString m_sSettingsFile;
@@ -89,12 +110,23 @@ private:
 
     uint64_t m_frequency;
     uint32_t m_sampleRate;
+    float tx_amplitude = 1.0;
+    float tx_filter_size = 0;
+    float tx_modulation_index = 5.0;
+    float tx_interpolation = 48;
+
     QString mode;
     std::atomic<bool> m_isProcessing;
 
     SignalProcessor* m_signalProcessor;
     static const int MAX_FFT_SIZE = 2048;
     static const int BUFFER_SIZE = 1048576; // 1 MB
+
+    bool isFmTransmit = false;
+    bool isFile = false;
+    bool isTest = false;
+    bool isFFmpeg = false;
+    bool isTx = false;
 
     void setupUi();
     QStringList buildCommand();

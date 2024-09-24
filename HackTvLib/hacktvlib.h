@@ -108,6 +108,10 @@ public:
     void setMicEnabled(bool newMicEnabled);
     void setFrequency(uint64_t frequency_hz);
     void setSampleRate(uint32_t sample_rate);
+    void setAmplitude(float newAmplitude);
+    void setFilter_size(float newFilter_size);
+    void setModulation_index(float newModulation_index);
+    void setDecimation(int newDecimation);
 
 private slots:
     void emitReceivedData(const int8_t *data, size_t data_len);

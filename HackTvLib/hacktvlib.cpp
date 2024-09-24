@@ -368,6 +368,34 @@ void HackTvLib::setSampleRate(uint32_t sample_rate)
     }
 }
 
+void HackTvLib::setAmplitude(float newAmplitude)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setAmplitude(newAmplitude);
+    }
+}
+
+void HackTvLib::setFilter_size(float newFilter_size)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setFilter_size(newFilter_size);
+    }
+}
+
+void HackTvLib::setModulation_index(float newModulation_index)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setModulation_index(newModulation_index);
+    }
+}
+
+void HackTvLib::setDecimation(int newDecimation)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setDecimation(newDecimation);
+    }
+}
+
 void HackTvLib::dataReceived(const int8_t *data, size_t len)
 {
     emitReceivedData(data, len);

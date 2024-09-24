@@ -196,12 +196,6 @@ int HackRfDevice::_rx_callback(hackrf_transfer *transfer)
 
 int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
 {
-    float amplitude = 1.0;
-    float filter_size = 0;
-    float modulation_index = 5.0;
-    float interpolation = 48;
-    int decimation = 1;
-
     size_t desired_size = length / 2;
     std::vector<float> float_buffer = readStreamToSize(desired_size);
 
@@ -228,6 +222,26 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
     }
 
     return 0;
+}
+
+void HackRfDevice::setDecimation(int newDecimation)
+{
+    decimation = newDecimation;
+}
+
+void HackRfDevice::setModulation_index(float newModulation_index)
+{
+    modulation_index = newModulation_index;
+}
+
+void HackRfDevice::setFilter_size(float newFilter_size)
+{
+    filter_size = newFilter_size;
+}
+
+void HackRfDevice::setAmplitude(float newAmplitude)
+{
+    amplitude = newAmplitude;
 }
 
 void HackRfDevice::setDataCallback(DataCallback callback)
