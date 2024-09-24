@@ -164,14 +164,14 @@ void MainWindow::setupUi()
     txControlsLayout = new QGridLayout();
     // Amplitude
     txAmplitudeSlider = new QSlider(Qt::Horizontal);
-    txAmplitudeSlider->setRange(0, 500);  // 0.0 to 1.0 in 100 steps
-    txAmplitudeSlider->setValue(75);  // Default to 1.0
+    txAmplitudeSlider->setRange(0, 100);  // 0.0 to 1.0 in 100 steps
+    txAmplitudeSlider->setValue(tx_amplitude*100);  // Default to 1.0
     txAmplitudeSpinBox = new QDoubleSpinBox();
     txAmplitudeSlider->setMinimumHeight(30);
     txAmplitudeSpinBox->setMinimumHeight(30);
     txAmplitudeSpinBox->setMinimumWidth(60);
     txAmplitudeSpinBox->setRange(0.0, 5.0);
-    txAmplitudeSpinBox->setValue(0.75);
+    txAmplitudeSpinBox->setValue(tx_amplitude);
     txAmplitudeSpinBox->setSingleStep(0.01);
     txControlsLayout->addWidget(new QLabel("TX Amplitude:"), 0, 0);
     txControlsLayout->addWidget(txAmplitudeSlider, 0, 1);
@@ -180,14 +180,14 @@ void MainWindow::setupUi()
     // Filter Size
     txFilterSizeSlider = new QSlider(Qt::Horizontal);
     txFilterSizeSlider->setRange(0, 500);  // 0.0 to 10.0 in 1000 steps
-    txFilterSizeSlider->setValue(0);  // Default to 0.0
+    txFilterSizeSlider->setValue(tx_filter_size*100);  // Default to 0.0
     txFilterSizeSpinBox = new QDoubleSpinBox();
     txFilterSizeSlider->setMinimumHeight(30);
     txFilterSizeSpinBox->setMinimumHeight(30);
     txFilterSizeSpinBox->setMinimumWidth(60);
     txFilterSizeSpinBox->setRange(0.0, 5.0);
-    txFilterSizeSpinBox->setValue(0.0);
-    txFilterSizeSpinBox->setSingleStep(0.1);
+    txFilterSizeSpinBox->setValue(tx_filter_size);
+    txFilterSizeSpinBox->setSingleStep(0.01);
     txControlsLayout->addWidget(new QLabel("TX Filter Size:"), 1, 0);
     txControlsLayout->addWidget(txFilterSizeSlider, 1, 1);
     txControlsLayout->addWidget(txFilterSizeSpinBox, 1, 2);
@@ -195,14 +195,14 @@ void MainWindow::setupUi()
     // Modulation Index
     txModulationIndexSlider = new QSlider(Qt::Horizontal);
     txModulationIndexSlider->setRange(0, 1000);  // 0.0 to 10.0 in 1000 steps
-    txModulationIndexSlider->setValue(500);  // Default to 5.0
+    txModulationIndexSlider->setValue(tx_modulation_index*100);  // Default to 5.0
     txModulationIndexSpinBox = new QDoubleSpinBox();
     txModulationIndexSlider->setMinimumHeight(30);
     txModulationIndexSpinBox->setMinimumHeight(30);
     txModulationIndexSpinBox->setMinimumWidth(60);
     txModulationIndexSpinBox->setRange(0.0, 10.0);
-    txModulationIndexSpinBox->setValue(5.0);
-    txModulationIndexSpinBox->setSingleStep(0.1);
+    txModulationIndexSpinBox->setValue(tx_modulation_index);
+    txModulationIndexSpinBox->setSingleStep(0.01);
     txControlsLayout->addWidget(new QLabel("TX Modulation Index:"), 2, 0);
     txControlsLayout->addWidget(txModulationIndexSlider, 2, 1);
     txControlsLayout->addWidget(txModulationIndexSpinBox, 2, 2);
@@ -210,13 +210,13 @@ void MainWindow::setupUi()
     // Interpolation
     txInterpolationSlider = new QSlider(Qt::Horizontal);
     txInterpolationSlider->setRange(0, 100);  // 0.0 to 100.0 in 100 steps
-    txInterpolationSlider->setValue(48);  // Default to 48.0
+    txInterpolationSlider->setValue(tx_interpolation);  // Default to 48.0
     txInterpolationSpinBox = new QDoubleSpinBox();
     txInterpolationSlider->setMinimumHeight(30);
     txInterpolationSpinBox->setMinimumHeight(30);
     txInterpolationSpinBox->setMinimumWidth(60);
     txInterpolationSpinBox->setRange(0.0, 100.0);
-    txInterpolationSpinBox->setValue(48.0);
+    txInterpolationSpinBox->setValue(tx_interpolation);
     txInterpolationSpinBox->setSingleStep(1.0);
     txControlsLayout->addWidget(new QLabel("TX Interpolation:"), 3, 0);
     txControlsLayout->addWidget(txInterpolationSlider, 3, 1);
@@ -527,10 +527,10 @@ void MainWindow::loadSettings()
     m_sampleRate = settings.value("samplerate").toInt();
     m_LowCutFreq = settings.value("lowcutfreq").toInt();
     m_HiCutFreq = settings.value("hicutfreq").toInt();
-    tx_amplitude = settings.value("tx_amplitude").toInt();
-    tx_filter_size = settings.value("tx_filter_size").toInt();
-    tx_modulation_index = settings.value("tx_modulation_index").toInt();
-    tx_interpolation = settings.value("tx_interpolation").toInt();
+    tx_amplitude = settings.value("tx_amplitude").toDouble();
+    tx_filter_size = settings.value("tx_filter_size").toDouble();
+    tx_modulation_index = settings.value("tx_modulation_index").toDouble();
+    tx_interpolation = settings.value("tx_interpolation").toDouble();
     settings.endGroup();
 }
 
@@ -730,31 +730,20 @@ QStringList MainWindow::buildCommand()
         args << "--acp";
     }
 
-    m_sampleRate =  sampleRateCombo->currentData().toInt();
-    m_frequency = frequencyEdit->text().toInt();
-
-    auto sample_rate = QString::number(m_sampleRate);
-
-    args << "-f" << frequencyEdit->text()
-         << "-s" << sample_rate
-         << "-m" << modeCombo->currentData().toString();
-
-    if(mode == "rx")
-        return args;
-
     switch(inputTypeCombo->currentIndex())
     {
     case 0: // fmtransmitter
         args << "fmtransmitter";
         m_hackTvLib->setMicEnabled(true);
+        sampleRateCombo->setCurrentIndex(0);
         break;
     case 1: // File
         if (!inputFileEdit->text().isEmpty()) {
-            args << inputFileEdit->text();
+            args << inputFileEdit->text();            
         }
         break;
     case 2: // Test
-        args << "test";        
+        args << "test";
         break;
     case 3: // FFmpeg
     {
@@ -769,6 +758,16 @@ QStringList MainWindow::buildCommand()
         args << "test";
         break;
     }
+
+    m_sampleRate =  sampleRateCombo->currentData().toInt();
+    m_frequency = frequencyEdit->text().toInt();
+
+    auto sample_rate = QString::number(m_sampleRate);
+
+    args << "-f" << frequencyEdit->text()
+         << "-s" << sample_rate
+         << "-m" << modeCombo->currentData().toString();
+
     return args;
 }
 
@@ -800,10 +799,21 @@ void MainWindow::updateLogDisplay()
 
 void MainWindow::onInputTypeChanged(int index)
 {
+    if(m_isProcessing && m_hackTvLib->stop())
+    {
+        m_isProcessing.store(false);
+        executeButton->setText("Start");
+    }
+
     isFmTransmit = (index == 0);
     isFile = (index == 1);
     isTest = (index == 2);
     isFFmpeg = (index == 3);
+
+    if(!isFmTransmit)
+        sampleRateCombo->setCurrentIndex(6);
+    else
+        sampleRateCombo->setCurrentIndex(0);
 
     inputFileEdit->setVisible(isFile);
     chooseFileButton->setVisible(isFile);
@@ -831,6 +841,12 @@ void MainWindow::onInputTypeChanged(int index)
 
 void MainWindow::onRxTxTypeChanged(int index)
 {
+    if(m_isProcessing && m_hackTvLib->stop())
+    {
+        m_isProcessing.store(false);
+        executeButton->setText("Start");
+    }
+
     isTx = (index == 1);
     inputTypeGroup->setVisible(isTx);
     modeGroup->setVisible(isTx);
@@ -872,7 +888,24 @@ void MainWindow::onSampleRateChanged(int index)
     m_sampleRate = sampleRateCombo->currentData().toInt();
     if(m_isProcessing)
     {
-        m_hackTvLib->setSampleRate(m_sampleRate);
+        if(mode == "tx")
+        {
+            if(!m_hackTvLib->stop())
+                m_isProcessing.store(false);
+            else
+                logBrowser->append("Failed to stop HackTvLib.");
+
+            m_hackTvLib->setSampleRate(m_sampleRate);
+
+            if(m_hackTvLib->start()) {
+                m_isProcessing.store(true);
+            } else {
+                logBrowser->append("Failed to start HackTvLib.");
+            }
+        }
+        else
+             m_hackTvLib->setSampleRate(m_sampleRate);
+
         lowPassFilter->designFilter(m_sampleRate, m_HiCutFreq, 10e3);
         cPlotter->setSampleRate(m_sampleRate);
         cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
