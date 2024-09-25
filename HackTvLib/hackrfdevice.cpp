@@ -17,7 +17,8 @@ HackRfDevice::HackRfDevice(QObject *parent):
     m_sampleRate(DEFAULT_SAMPLE_RATE),
     m_lnaGain(HACKRF_RX_LNA_MAX_DB),
     m_vgaGain(HACKRF_RX_VGA_MAX_DB),
-    m_txVgaGain(HACKRF_TX_VGA_MAX_DB),
+    m_txAmpGain(HACKRF_TX_AMP_MAX_DB),
+    m_rxAmpGain(HACKRF_RX_AMP_MAX_DB),
     m_ampEnable(false),    
     m_antennaEnable(false)
 {
@@ -80,7 +81,8 @@ int HackRfDevice::start(rf_mode _mode)
     setSampleRate(m_sampleRate);
     setLnaGain(m_lnaGain);
     setVgaGain(m_vgaGain);
-    setTxVgaGain(m_txVgaGain);
+    setTxAmpGain(m_txAmpGain);
+    setRxAmpGain(m_rxAmpGain);
     setAmpEnable(m_ampEnable);
     setBasebandFilterBandwidth(hackrf_compute_baseband_filter_bw(m_sampleRate));
     setAntennaEnable(m_antennaEnable);
@@ -306,15 +308,20 @@ void HackRfDevice::setVgaGain(unsigned int vga_gain)
     }
 }
 
-void HackRfDevice::setTxVgaGain(unsigned int tx_vga_gain)
+void HackRfDevice::setTxAmpGain(unsigned int tx_amp_gain)
 {
-    m_txVgaGain = tx_vga_gain;
+    m_txAmpGain = tx_amp_gain;
     if (h_device) {
-        int r = hackrf_set_txvga_gain(h_device, m_txVgaGain);
+        int r = hackrf_set_txvga_gain(h_device, m_txAmpGain);
         if (r != HACKRF_SUCCESS) {
             fprintf(stderr, "hackrf_set_txvga_gain() failed: %s (%d)\n", hackrf_error_name(static_cast<hackrf_error>(r)), r);
         }
     }
+}
+
+void HackRfDevice::setRxAmpGain(unsigned int rx_amp_gain)
+{
+    m_rxAmpGain = rx_amp_gain;
 }
 
 void HackRfDevice::setAmpEnable(bool enable)
@@ -371,9 +378,9 @@ unsigned int HackRfDevice::getVgaGain() const
     return m_vgaGain;
 }
 
-unsigned int HackRfDevice::getTxVgaGain() const
+unsigned int HackRfDevice::getTxAmpGain() const
 {
-    return m_txVgaGain;
+    return m_txAmpGain;
 }
 
 bool HackRfDevice::getAmpEnable() const

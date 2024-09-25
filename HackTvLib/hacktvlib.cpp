@@ -403,6 +403,34 @@ void HackTvLib::setInterpolation(float newInterpolation)
     }
 }
 
+void HackTvLib::setLnaGain(unsigned int lna_gain)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setLnaGain(lna_gain);
+    }
+}
+
+void HackTvLib::setVgaGain(unsigned int vga_gain)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setVgaGain(vga_gain);
+    }
+}
+
+void HackTvLib::setTxAmpGain(unsigned int tx_amp_gain)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setTxAmpGain(tx_amp_gain);
+    }
+}
+
+void HackTvLib::setRxAmpGain(unsigned int rx_amp_gain)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setRxAmpGain(rx_amp_gain);
+    }
+}
+
 void HackTvLib::dataReceived(const int8_t *data, size_t len)
 {
     emitReceivedData(data, len);

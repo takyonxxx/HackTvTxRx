@@ -113,6 +113,10 @@ public:
     void setModulation_index(float newModulation_index);
     void setDecimation(int newDecimation);
     void setInterpolation(float newInterpolation);
+    void setLnaGain(unsigned int lna_gain);
+    void setVgaGain(unsigned int vga_gain);
+    void setTxAmpGain(unsigned int tx_amp_gain);
+    void setRxAmpGain(unsigned int rx_amp_gain);
 
 private slots:
     void emitReceivedData(const int8_t *data, size_t data_len);

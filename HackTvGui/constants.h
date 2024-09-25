@@ -16,10 +16,12 @@
 #define DEFAULT_SAMPLE_RATE            _MHZ(2)
 #define DEFAULT_AUDIO_SAMPLE_RATE      _KHZ(48)
 #define DEFAULT_CUT_OFF                _KHZ(100)
-#define HACKRF_TX_VGA_MAX_DB            47.0
-#define HACKRF_RX_VGA_MAX_DB            40.0
+
+#define HACKRF_RX_VGA_MAX_DB            62.0
 #define HACKRF_RX_LNA_MAX_DB            40.0
-#define HACKRF_AMP_MAX_DB               14.0
+#define HACKRF_RX_AMP_MAX_DB            11.0
+#define HACKRF_TX_AMP_MAX_DB            47.0
+
 #define DEFAULT_FFT_SIZE                1024
 #define MIN_DB -60.0f
 #define MAX_DB +20.0f

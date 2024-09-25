@@ -50,6 +50,11 @@ private slots:
     void updateLogDisplay();
     void processReceivedData(const int8_t *data, size_t len);
     void processAudio(const std::vector<float>& demodulatedSamples);
+    void onVolumeSliderValueChanged(int value);
+    void onLnaSliderValueChanged(int value);
+    void onVgaSliderValueChanged(int value);
+    void onTxAmpSliderValueChanged(int value);
+    void onRxAmpSliderValueChanged(int value);
 
 private:
     void setupUi();
@@ -71,6 +76,9 @@ private:
     QSlider *txAmplitudeSlider, *txFilterSizeSlider, *txModulationIndexSlider, *txInterpolationSlider;
     QDoubleSpinBox *txAmplitudeSpinBox, *txFilterSizeSpinBox, *txModulationIndexSpinBox, *txInterpolationSpinBox;
     QTextBrowser *logBrowser;
+    QLabel *volumeLabel, *volumeLevelLabel, *lnaLabel, *lnaLevelLabel, *vgaLabel, *vgaLevelLabel,
+        *txAmpLabel, *txAmpLevelLabel, *rxAmpLabel, *rxAmpLevelLabel;
+    QSlider *volumeSlider, *lnaSlider, *vgaSlider, *txAmpSlider, *rxAmpSlider;
     QFileDialog *fileDialog;
     CFreqCtrl *freqCtrl;
     CPlotter *cPlotter;
@@ -90,7 +98,12 @@ private:
     QStringList pendingLogs;
 
     qint64 m_frequency;
-    int m_sampleRate;    
+    int m_sampleRate;
+    int m_volumeLevel = 50;
+    int m_lnaGain = 40;
+    int m_vgaGain = 40;
+    int m_txAmpGain = 40;
+    int m_rxAmpGain = 0;
 
     QString mode;
     bool isTx, isFmTransmit, isFile, isTest, isFFmpeg;

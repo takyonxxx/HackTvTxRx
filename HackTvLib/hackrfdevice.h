@@ -21,10 +21,12 @@
 #define DEFAULT_SAMPLE_RATE            _MHZ(20)
 #define DEFAULT_AUDIO_SAMPLE_RATE      _KHZ(48)
 #define DEFAULT_CUT_OFF                _KHZ(75)
-#define HACKRF_TX_VGA_MAX_DB            47.0
-#define HACKRF_RX_VGA_MAX_DB            40.0
+
+#define HACKRF_RX_VGA_MAX_DB            62.0
 #define HACKRF_RX_LNA_MAX_DB            40.0
-#define HACKRF_AMP_MAX_DB               14.0
+#define HACKRF_RX_AMP_MAX_DB            11.0
+#define HACKRF_TX_AMP_MAX_DB            47.0
+
 #define DEFAULT_FFT_SIZE                1024
 
 typedef enum RfMode {
@@ -53,7 +55,8 @@ public:
     void setSampleRate(uint32_t sample_rate);
     void setLnaGain(unsigned int lna_gain);
     void setVgaGain(unsigned int vga_gain);
-    void setTxVgaGain(unsigned int tx_vga_gain);
+    void setTxAmpGain(unsigned int tx_vga_gain);
+    void setRxAmpGain(unsigned int rx_amp_gain);
     void setAmpEnable(bool enable);
     void setBasebandFilterBandwidth(uint32_t bandwidth);
     void setAntennaEnable(bool enable);
@@ -63,7 +66,7 @@ public:
     uint32_t getSampleRate() const;
     unsigned int getLnaGain() const;
     unsigned int getVgaGain() const;
-    unsigned int getTxVgaGain() const;
+    unsigned int getTxAmpGain() const;
     bool getAmpEnable() const;
     uint32_t getBasebandFilterBandwidth() const;
     bool getAntennaEnable() const;
@@ -100,7 +103,8 @@ private:
     uint32_t m_sampleRate;
     unsigned int m_lnaGain;
     unsigned int m_vgaGain;
-    unsigned int m_txVgaGain;
+    unsigned int m_txAmpGain;
+    unsigned int m_rxAmpGain;
     bool m_ampEnable;
     uint32_t m_basebandFilterBandwidth;
     bool m_antennaEnable;

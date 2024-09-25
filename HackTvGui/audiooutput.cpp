@@ -84,3 +84,15 @@ void AudioOutput::writeBuffer(const QByteArray &buffer)
         audioDevice->write(buffer);
     }
 }
+
+void AudioOutput::setVolume(int value)
+{
+    if (m_audioOutput) {
+        qreal linearVolume = value / 100.0;
+        qreal volume = QAudio::convertVolume(linearVolume,
+                                             QAudio::LinearVolumeScale,
+                                             QAudio::LogarithmicVolumeScale);
+
+        m_audioOutput->setVolume(volume);
+    }
+}

@@ -19,12 +19,13 @@ public:
     explicit AudioOutput(QObject *parent = nullptr);
     ~AudioOutput();
     void stop();
-    void writeBuffer(const QByteArray &buffer);
-    void setVolume(float volume);
-
+    void writeBuffer(const QByteArray &buffer);    
 public slots:
+    void setVolume(int value);
     void handleAudioOutputStateChanged(QAudio::State newState);
     void processAudio(const std::vector<float>& audioData);
+signals:
+    void volumeChanged(int value);
 private:
 
     static constexpr int SAMPLE_RATE = 48000;

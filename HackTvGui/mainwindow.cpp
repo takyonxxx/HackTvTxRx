@@ -101,7 +101,7 @@ void MainWindow::setupUi()
     QWidget *centralWidget = new QWidget(this);
     QVBoxLayout *mainLayout = new QVBoxLayout(centralWidget);
 
-    resize(800, 600);
+    resize(800, 800);
 
     // Output device group
     QGroupBox *outputGroup = new QGroupBox("Output Device", this);
@@ -115,6 +115,21 @@ void MainWindow::setupUi()
         {"FL2000", "fl2k"},
         //{"File", "C:\\test.mp4"}
     };
+
+    QString sliderStyle = "QSlider::groove:horizontal { "
+                          "border: 1px solid #999999; "
+                          "height: 8px; "
+                          "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #B1B1B1, stop:1 #c4c4c4); "
+                          "margin: 2px 0; "
+                          "} "
+                          "QSlider::handle:horizontal { "
+                          "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2980b9, stop:1 #3498db); "
+                          "border: 1px solid #5c5c5c; "
+                          "width: 18px; "
+                          "margin: -2px 0; "
+                          "border-radius: 3px; "
+                          "}";
+    QString labelStyle = "QLabel { background-color: #DAA520; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }";
 
     QLabel *outputLabel = new QLabel("Device:", this);
     outputCombo = new QComboBox(this);
@@ -162,6 +177,7 @@ void MainWindow::setupUi()
     rxtxCombo->addItem("TX", "tx");
 
     txControlsLayout = new QGridLayout();
+
     // Amplitude
     txAmplitudeSlider = new QSlider(Qt::Horizontal);
     txAmplitudeSlider->setRange(0, 100);  // 0.0 to 1.0 in 100 steps
@@ -221,6 +237,27 @@ void MainWindow::setupUi()
     txControlsLayout->addWidget(new QLabel("TX Interpolation:"), 3, 0);
     txControlsLayout->addWidget(txInterpolationSlider, 3, 1);
     txControlsLayout->addWidget(txInterpolationSpinBox, 3, 2);
+
+    txAmpLabel = new QLabel("TX Amplifier : ", this);
+    txAmpLabel->setStyleSheet(labelStyle);
+    txAmpLabel->setMinimumWidth(100);  // Minimum genişlik ayarı
+    txAmpSlider = new QSlider(Qt::Horizontal, this);
+    txAmpSlider->setRange(0, HACKRF_TX_AMP_MAX_DB);
+    txAmpSlider->setValue(m_txAmpGain);
+    txAmpSlider->setTickPosition(QSlider::TicksBelow);
+    txAmpSlider->setTickInterval(10);
+    txAmpSlider->setMinimumHeight(30);
+    txAmpLevelLabel = new QLabel(QString::number(m_txAmpGain), this);
+    txAmpLevelLabel->setAlignment(Qt::AlignCenter);
+    txAmpLevelLabel->setStyleSheet("QLabel { background-color: #DAA520; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }");
+    txControlsLayout->addWidget(txAmpLabel, 4, 0);
+    txControlsLayout->addWidget(txAmpSlider, 4, 1);
+    txControlsLayout->addWidget(txAmpLevelLabel, 4, 2);
+
+    txAmpSlider->setStyleSheet(sliderStyle);
+
+    // Connect new sliders to their respective slots
+    connect(txAmpSlider, &QSlider::valueChanged, this, &MainWindow::onTxAmpSliderValueChanged);
 
     // Connect signals and slots
     connect(txAmplitudeSlider, &QSlider::valueChanged, [this](int value) {
@@ -336,7 +373,7 @@ void MainWindow::setupUi()
     freqCtrl->setDigitColor(QColor("#FFC300"));
     freqCtrl->setFrequency(DEFAULT_FREQUENCY);
     connect(freqCtrl, &CFreqCtrl::newFrequency, this, &MainWindow::onFreqCtrl_setFrequency);
-    freqCtrl->setMinimumHeight(50);
+    freqCtrl->setMinimumHeight(40);
 
     cPlotter = new CPlotter(this);
     cPlotter->setTooltipsEnabled(true);
@@ -369,14 +406,135 @@ void MainWindow::setupUi()
     cMeter->setMinimumHeight(50);
 
     rxGroup = new QGroupBox("Receiver", this);
-    QGridLayout *rxLayout = new QGridLayout(rxGroup);
-    rxLayout->setVerticalSpacing(15);
-    rxLayout->setHorizontalSpacing(15);
-    rxLayout->addWidget(cMeter);
-    rxLayout->setVerticalSpacing(15);
-    rxLayout->setHorizontalSpacing(15);
-    rxLayout->addWidget(freqCtrl);
-    rxLayout->addWidget(cPlotter);
+    rxGroup->setStyleSheet("QGroupBox { font-weight: bold; border: 2px solid #3498db; border-radius: 5px; margin-top: 1ex; } "
+                           "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top center; padding: 0 10px; }");
+
+    QVBoxLayout *rxLayout = new QVBoxLayout(rxGroup);
+    rxLayout->setSpacing(15);
+    rxLayout->setContentsMargins(15, 25, 15, 15);
+
+    // Add cMeter and freqCtrl (assuming they should be at the top)
+    QHBoxLayout *topLayout = new QHBoxLayout();
+    topLayout->addWidget(cMeter);
+    topLayout->addWidget(freqCtrl);
+    rxLayout->addLayout(topLayout);
+
+    // Add cPlotter
+    rxLayout->addWidget(cPlotter, 1);
+
+    // Controls layout
+    QHBoxLayout *controlsLayout = new QHBoxLayout();
+    controlsLayout->setSpacing(20);
+
+    // Volume controls
+    QVBoxLayout *volumeLayout = new QVBoxLayout();
+    volumeLayout->setSpacing(5);
+
+    volumeLabel = new QLabel("Volume:", rxGroup);
+    volumeLabel->setStyleSheet("QLabel { color: white; font-weight: bold; }");
+
+    volumeSlider = new QSlider(Qt::Horizontal, rxGroup);
+    volumeSlider->setRange(0, 100);
+    volumeSlider->setValue(m_volumeLevel);
+    volumeSlider->setTickPosition(QSlider::TicksBelow);
+    volumeSlider->setTickInterval(1);
+
+    volumeLevelLabel = new QLabel(QString::number(m_volumeLevel), rxGroup);
+    volumeLevelLabel->setAlignment(Qt::AlignCenter);
+    volumeLevelLabel->setMinimumWidth(40);
+
+    volumeLayout->addWidget(volumeLabel);
+    volumeLayout->addWidget(volumeSlider);
+    volumeLayout->addWidget(volumeLevelLabel);
+
+    // LNA Gain controls
+    QVBoxLayout *lnaLayout = new QVBoxLayout();
+    lnaLayout->setSpacing(5);
+
+    lnaLabel = new QLabel("LNA Gain:", rxGroup);
+    lnaLabel->setStyleSheet("QLabel { color: white; font-weight: bold; }");
+
+    lnaSlider = new QSlider(Qt::Horizontal, rxGroup);
+    lnaSlider->setRange(0, HACKRF_RX_LNA_MAX_DB);
+    lnaSlider->setValue(m_lnaGain);  // Default value, adjust as needed
+    lnaSlider->setTickPosition(QSlider::TicksBelow);
+    lnaSlider->setTickInterval(1);
+
+    lnaLevelLabel = new QLabel(QString::number(m_lnaGain), rxGroup);
+    lnaLevelLabel->setAlignment(Qt::AlignCenter);
+    lnaLevelLabel->setMinimumWidth(40);
+
+    lnaLayout->addWidget(lnaLabel);
+    lnaLayout->addWidget(lnaSlider);
+    lnaLayout->addWidget(lnaLevelLabel);
+
+    // VGA Gain controls
+    QVBoxLayout *vgaLayout = new QVBoxLayout();
+    vgaLayout->setSpacing(5);
+
+    vgaLabel = new QLabel("VGA Gain:", rxGroup);
+    vgaLabel->setStyleSheet("QLabel { color: white; font-weight: bold; }");
+
+    vgaSlider = new QSlider(Qt::Horizontal, rxGroup);
+    vgaSlider->setRange(0, HACKRF_RX_VGA_MAX_DB);
+    vgaSlider->setValue(m_vgaGain);  // Default value, adjust as needed
+    vgaSlider->setTickPosition(QSlider::TicksBelow);
+    vgaSlider->setTickInterval(1);
+
+    vgaLevelLabel = new QLabel(QString::number(m_vgaGain), rxGroup);
+    vgaLevelLabel->setAlignment(Qt::AlignCenter);
+    vgaLevelLabel->setMinimumWidth(40);
+
+    vgaLayout->addWidget(vgaLabel);
+    vgaLayout->addWidget(vgaSlider);
+    vgaLayout->addWidget(vgaLevelLabel);
+
+    // Rx Amp Gain controls
+    QVBoxLayout *rxAmpLayout = new QVBoxLayout();
+    rxAmpLayout->setSpacing(5);
+
+    rxAmpLabel  = new QLabel("Amp Gain:", rxGroup);
+    rxAmpLabel ->setStyleSheet("QLabel { color: white; font-weight: bold; }");
+
+    rxAmpSlider  = new QSlider(Qt::Horizontal, rxGroup);
+    rxAmpSlider ->setRange(0, HACKRF_RX_AMP_MAX_DB);
+    rxAmpSlider ->setValue(m_rxAmpGain);  // Default value, adjust as needed
+    rxAmpSlider ->setTickPosition(QSlider::TicksBelow);
+    rxAmpSlider ->setTickInterval(1);
+
+    rxAmpLevelLabel  = new QLabel(QString::number(m_rxAmpGain), rxGroup);
+    rxAmpLevelLabel ->setAlignment(Qt::AlignCenter);
+    rxAmpLevelLabel ->setMinimumWidth(40);
+
+    rxAmpLayout->addWidget(rxAmpLabel);
+    rxAmpLayout->addWidget(rxAmpSlider );
+    rxAmpLayout->addWidget(rxAmpLevelLabel );
+    rxAmpSlider->setStyleSheet(sliderStyle);
+
+    // Add all controls to the main controls layout
+    controlsLayout->addLayout(volumeLayout);
+    controlsLayout->addLayout(lnaLayout);
+    controlsLayout->addLayout(vgaLayout);
+    controlsLayout->addLayout(rxAmpLayout);    
+
+    volumeSlider->setStyleSheet(sliderStyle);
+    lnaSlider->setStyleSheet(sliderStyle);
+    vgaSlider->setStyleSheet(sliderStyle);
+    rxAmpSlider->setStyleSheet(sliderStyle);
+
+    volumeLevelLabel->setStyleSheet(labelStyle);
+    lnaLevelLabel->setStyleSheet(labelStyle);
+    vgaLevelLabel->setStyleSheet(labelStyle);
+    rxAmpLevelLabel->setStyleSheet(labelStyle);
+
+    // Connect sliders to their respective slots
+    connect(volumeSlider, &QSlider::valueChanged, this, &MainWindow::onVolumeSliderValueChanged);
+    connect(lnaSlider, &QSlider::valueChanged, this, &MainWindow::onLnaSliderValueChanged);
+    connect(vgaSlider, &QSlider::valueChanged, this, &MainWindow::onVgaSliderValueChanged);
+    connect(rxAmpSlider, &QSlider::valueChanged, this, &MainWindow::onRxAmpSliderValueChanged);
+
+    rxLayout->addLayout(controlsLayout);
+
     mainLayout->addWidget(rxGroup);
 
     // Mode group
@@ -503,6 +661,58 @@ void MainWindow::setupUi()
     onRxTxTypeChanged(0);
 }
 
+void MainWindow::onVolumeSliderValueChanged(int value)
+{
+    if (audioOutput) {
+        audioOutput->setVolume(value);
+    } else {
+        qDebug() << "audioOutput is null in onVolumeSliderValueChanged";
+    }
+    volumeLevelLabel->setText(QString::number(value));
+    m_volumeLevel = value;
+    saveSettings();
+}
+
+void MainWindow::onLnaSliderValueChanged(int value)
+{
+    lnaLevelLabel->setText(QString::number(value));
+    m_lnaGain = value;
+    if (m_isProcessing)
+        m_hackTvLib->setLnaGain(m_lnaGain);
+
+    saveSettings();
+}
+
+void MainWindow::onVgaSliderValueChanged(int value)
+{
+    vgaLevelLabel->setText(QString::number(value));
+    m_vgaGain = value;
+    if (m_isProcessing)
+        m_hackTvLib->setVgaGain(m_vgaGain);
+
+    saveSettings();
+}
+
+void MainWindow::onTxAmpSliderValueChanged(int value)
+{
+    txAmpLevelLabel->setText(QString::number(value));
+    m_txAmpGain = value;
+    if (m_isProcessing)
+        m_hackTvLib->setTxAmpGain(m_txAmpGain);
+
+    saveSettings();
+}
+
+void MainWindow::onRxAmpSliderValueChanged(int value)
+{
+    rxAmpLevelLabel->setText(QString::number(value));
+    m_rxAmpGain = value;
+    if (m_isProcessing)
+        m_hackTvLib->setRxAmpGain(m_rxAmpGain);
+
+    saveSettings();
+}
+
 void MainWindow::saveSettings()
 {
     QSettings settings(m_sSettingsFile, QSettings::IniFormat);
@@ -516,6 +726,11 @@ void MainWindow::saveSettings()
     settings.setValue("tx_filter_size", tx_filter_size);
     settings.setValue("tx_modulation_index", tx_modulation_index);
     settings.setValue("tx_interpolation", tx_interpolation);
+    settings.setValue("m_volumeLevel", m_volumeLevel);
+    settings.setValue("m_txAmpGain", m_txAmpGain);
+    settings.setValue("m_rxAmpGain", m_rxAmpGain);
+    settings.setValue("m_lnaGain", m_lnaGain);
+    settings.setValue("m_vgaGain", m_vgaGain);
     settings.endGroup();
 }
 
@@ -531,6 +746,11 @@ void MainWindow::loadSettings()
     tx_filter_size = settings.value("tx_filter_size").toDouble();
     tx_modulation_index = settings.value("tx_modulation_index").toDouble();
     tx_interpolation = settings.value("tx_interpolation").toDouble();
+    m_volumeLevel = settings.value("m_volumeLevel").toInt();
+    m_txAmpGain = settings.value("m_txAmpGain").toInt();
+    m_rxAmpGain = settings.value("m_rxAmpGain").toInt();
+    m_lnaGain = settings.value("m_lnaGain").toInt();
+    m_vgaGain = settings.value("m_vgaGain").toInt();
     settings.endGroup();
 }
 
