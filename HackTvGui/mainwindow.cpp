@@ -13,11 +13,28 @@ MainWindow::MainWindow(QWidget *parent)
     m_sampleRate(DEFAULT_SAMPLE_RATE),
     m_LowCutFreq(-1*int(DEFAULT_CUT_OFF)),
     m_HiCutFreq(DEFAULT_CUT_OFF),
+    defaultWidth(800),
+    defaultHeight(600),
     m_isProcessing(false)
 {
     QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
     m_sSettingsFile = homePath + "/hacktv_settings.ini";
     m_threadPool.setMaxThreadCount(QThread::idealThreadCount());
+
+    sliderStyle = "QSlider::groove:horizontal { "
+                          "border: 1px solid #999999; "
+                          "height: 8px; "
+                          "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #B1B1B1, stop:1 #c4c4c4); "
+                          "margin: 2px 0; "
+                          "} "
+                          "QSlider::handle:horizontal { "
+                          "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2980b9, stop:1 #3498db); "
+                          "border: 1px solid #5c5c5c; "
+                          "width: 18px; "
+                          "margin: -2px 0; "
+                          "border-radius: 3px; "
+                          "}";
+    labelStyle = "QLabel { background-color: #113e47 ; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }";
 
     if (QFile(m_sSettingsFile).exists())
         loadSettings();
@@ -32,7 +49,7 @@ MainWindow::MainWindow(QWidget *parent)
     cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
     freqCtrl->setFrequency(m_frequency);
 
-    try {        
+    try {
         m_hackTvLib->setLogCallback([this](const std::string& msg) {
             handleLog(msg);
         });
@@ -74,6 +91,34 @@ MainWindow::~MainWindow()
     lowPassFilter.reset();
 }
 
+void MainWindow::setupUi()
+{
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    QWidget *centralWidget = new QWidget(this);
+    mainLayout = new QVBoxLayout(centralWidget);
+    resize(defaultWidth, defaultHeight);
+
+    addOutputGroup();
+    addRxGroup();
+    addModeGroup();
+    addinputTypeGroup();
+    setCentralWidget(centralWidget);
+
+    // Connect signals and slots
+    connect(executeButton, &QPushButton::clicked, this, &MainWindow::executeCommand);
+    connect(chooseFileButton, &QPushButton::clicked, this, &MainWindow::chooseFile);
+    connect(inputTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onInputTypeChanged);
+    connect(rxtxCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onRxTxTypeChanged);
+    connect(sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onSampleRateChanged);
+
+    //rxtxCombo->setCurrentIndex(0);
+    onRxTxTypeChanged(0);
+}
+
 void MainWindow::setCurrentSampleRate(int sampleRate)
 {
     int index = sampleRateCombo->findData(sampleRate);
@@ -94,17 +139,10 @@ void MainWindow::setCurrentSampleRate(int sampleRate)
     }
 }
 
-void MainWindow::setupUi()
+void MainWindow::addOutputGroup()
 {
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-
-    QWidget *centralWidget = new QWidget(this);
-    QVBoxLayout *mainLayout = new QVBoxLayout(centralWidget);
-
-    resize(800, 800);
-
     // Output device group
-    QGroupBox *outputGroup = new QGroupBox("Output Device", this);
+    outputGroup = new QGroupBox("Output Device", this);
     QGridLayout *outputLayout = new QGridLayout(outputGroup);
     outputLayout->setVerticalSpacing(15);
     outputLayout->setHorizontalSpacing(15);
@@ -113,23 +151,7 @@ void MainWindow::setupUi()
         {"HackRF", "hackrf"},
         {"SoapySDR", "soapysdr"},
         {"FL2000", "fl2k"},
-        //{"File", "C:\\test.mp4"}
     };
-
-    QString sliderStyle = "QSlider::groove:horizontal { "
-                          "border: 1px solid #999999; "
-                          "height: 8px; "
-                          "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #B1B1B1, stop:1 #c4c4c4); "
-                          "margin: 2px 0; "
-                          "} "
-                          "QSlider::handle:horizontal { "
-                          "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2980b9, stop:1 #3498db); "
-                          "border: 1px solid #5c5c5c; "
-                          "width: 18px; "
-                          "margin: -2px 0; "
-                          "border-radius: 3px; "
-                          "}";
-    QString labelStyle = "QLabel { background-color: #DAA520; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }";
 
     QLabel *outputLabel = new QLabel("Device:", this);
     outputCombo = new QComboBox(this);
@@ -140,14 +162,6 @@ void MainWindow::setupUi()
     ampEnabled->setChecked(true);
     colorDisabled = new QCheckBox("Disable colour", this);
     colorDisabled->setChecked(false);
-    a2Stereo = new QCheckBox("A2 Stereo", this);
-    a2Stereo->setChecked(true);
-    repeat = new QCheckBox("Repeat", this);
-    repeat->setChecked(true);
-    acp = new QCheckBox("Acp", this);
-    acp->setChecked(true);
-    filter = new QCheckBox("Filter", this);
-    filter->setChecked(true);  
     QLabel *freqLabel = new QLabel("Frequency (Hz):", this);
     frequencyEdit = new QLineEdit(this);
     frequencyEdit->setFixedWidth(75);
@@ -166,15 +180,28 @@ void MainWindow::setupUi()
         {16000000, "16"},
         {20000000, "20"}
     };
-
     for (const auto& [rate, displayText] : sortedSampleRates) {
         sampleRateCombo->addItem(displayText + " MHz", rate);
     }
 
     QLabel *rxtxLabel = new QLabel("RxTx Mode:", this);
-    rxtxCombo = new QComboBox(this);   
+    rxtxCombo = new QComboBox(this);
     rxtxCombo->addItem("RX", "rx");
     rxtxCombo->addItem("TX", "tx");
+
+    outputLayout->addWidget(outputLabel, 0, 0);
+    outputLayout->addWidget(outputCombo, 0, 1);
+    outputLayout->addWidget(rxtxLabel, 0, 2);
+    outputLayout->addWidget(rxtxCombo, 0, 3);
+    outputLayout->addWidget(ampEnabled, 0, 4);
+    outputLayout->addWidget(colorDisabled, 0, 5);
+
+    outputLayout->addWidget(channelLabel, 1, 0);
+    outputLayout->addWidget(channelCombo, 1, 1);
+    outputLayout->addWidget(freqLabel, 1, 2);
+    outputLayout->addWidget(frequencyEdit, 1, 3);
+    outputLayout->addWidget(sampleRateLabel, 1, 4);
+    outputLayout->addWidget(sampleRateCombo, 1, 5);
 
     txControlsLayout = new QGridLayout();
 
@@ -189,7 +216,9 @@ void MainWindow::setupUi()
     txAmplitudeSpinBox->setRange(0.0, 5.0);
     txAmplitudeSpinBox->setValue(tx_amplitude);
     txAmplitudeSpinBox->setSingleStep(0.01);
-    txControlsLayout->addWidget(new QLabel("TX Amplitude:"), 0, 0);
+    QLabel *txAmplitudeLabel = new QLabel("Amplitude : ");
+    txAmplitudeLabel->setStyleSheet(labelStyle);
+    txControlsLayout->addWidget(txAmplitudeLabel, 0, 0);
     txControlsLayout->addWidget(txAmplitudeSlider, 0, 1);
     txControlsLayout->addWidget(txAmplitudeSpinBox, 0, 2);
 
@@ -204,7 +233,9 @@ void MainWindow::setupUi()
     txFilterSizeSpinBox->setRange(0.0, 5.0);
     txFilterSizeSpinBox->setValue(tx_filter_size);
     txFilterSizeSpinBox->setSingleStep(0.01);
-    txControlsLayout->addWidget(new QLabel("TX Filter Size:"), 1, 0);
+    QLabel *txFilterSizeLabel = new QLabel("Filter Size : ");
+    txFilterSizeLabel->setStyleSheet(labelStyle);
+    txControlsLayout->addWidget(txFilterSizeLabel, 1, 0);
     txControlsLayout->addWidget(txFilterSizeSlider, 1, 1);
     txControlsLayout->addWidget(txFilterSizeSpinBox, 1, 2);
 
@@ -219,7 +250,9 @@ void MainWindow::setupUi()
     txModulationIndexSpinBox->setRange(0.0, 10.0);
     txModulationIndexSpinBox->setValue(tx_modulation_index);
     txModulationIndexSpinBox->setSingleStep(0.01);
-    txControlsLayout->addWidget(new QLabel("TX Modulation Index:"), 2, 0);
+    QLabel *txModulationIndexLabel = new QLabel("Modulation Index : ");
+    txModulationIndexLabel->setStyleSheet(labelStyle);
+    txControlsLayout->addWidget(txModulationIndexLabel, 2, 0);
     txControlsLayout->addWidget(txModulationIndexSlider, 2, 1);
     txControlsLayout->addWidget(txModulationIndexSpinBox, 2, 2);
 
@@ -234,32 +267,45 @@ void MainWindow::setupUi()
     txInterpolationSpinBox->setRange(0.0, 100.0);
     txInterpolationSpinBox->setValue(tx_interpolation);
     txInterpolationSpinBox->setSingleStep(1.0);
-    txControlsLayout->addWidget(new QLabel("TX Interpolation:"), 3, 0);
+    QLabel *txInterpolationLabel = new QLabel("Interpolation : ");
+    txInterpolationLabel->setStyleSheet(labelStyle);
+    txControlsLayout->addWidget(txInterpolationLabel, 3, 0);
     txControlsLayout->addWidget(txInterpolationSlider, 3, 1);
     txControlsLayout->addWidget(txInterpolationSpinBox, 3, 2);
 
-    txAmpLabel = new QLabel("TX Amplifier : ", this);
-    txAmpLabel->setStyleSheet(labelStyle);
-    txAmpLabel->setMinimumWidth(100);  // Minimum genişlik ayarı
-    txAmpSlider = new QSlider(Qt::Horizontal, this);
-    txAmpSlider->setRange(0, HACKRF_TX_AMP_MAX_DB);
-    txAmpSlider->setValue(m_txAmpGain);
-    txAmpSlider->setTickPosition(QSlider::TicksBelow);
-    txAmpSlider->setTickInterval(10);
+    txAmpSlider = new QSlider(Qt::Horizontal);
+    txAmpSlider->setRange(0, HACKRF_TX_AMP_MAX_DB);  // 0.0 to 100.0 in 100 steps
+    txAmpSlider->setValue(m_txAmpGain);  // Default to 48.0
+    txAmpSpinBox = new QDoubleSpinBox();
     txAmpSlider->setMinimumHeight(30);
-    txAmpLevelLabel = new QLabel(QString::number(m_txAmpGain), this);
-    txAmpLevelLabel->setAlignment(Qt::AlignCenter);
-    txAmpLevelLabel->setStyleSheet("QLabel { background-color: #DAA520; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }");
+    txAmpSpinBox->setMinimumHeight(30);
+    txAmpSpinBox->setMinimumWidth(60);
+    txAmpSpinBox->setRange(0.0, HACKRF_TX_AMP_MAX_DB);
+    txAmpSpinBox->setValue(m_txAmpGain);
+    txAmpSpinBox->setSingleStep(1.0);
+    QLabel *txAmpLabel = new QLabel("Tx Gain : ");
+    txAmpLabel->setStyleSheet(labelStyle);
     txControlsLayout->addWidget(txAmpLabel, 4, 0);
     txControlsLayout->addWidget(txAmpSlider, 4, 1);
-    txControlsLayout->addWidget(txAmpLevelLabel, 4, 2);
+    txControlsLayout->addWidget(txAmpSpinBox, 4, 2);
 
-    txAmpSlider->setStyleSheet(sliderStyle);
+    tx_line = new QFrame();
+    tx_line->setFrameShape(QFrame::HLine);
+    tx_line->setFrameShadow(QFrame::Sunken);
+    outputLayout->addWidget(tx_line, 2, 0, 1, 6);
+    outputLayout->addLayout(txControlsLayout, 3, 0, 1, 6);
+    mainLayout->addWidget(outputGroup);
 
-    // Connect new sliders to their respective slots
-    connect(txAmpSlider, &QSlider::valueChanged, this, &MainWindow::onTxAmpSliderValueChanged);
+    connect(txAmpSlider, &QSlider::valueChanged, [this](int value) {
+        this->txAmpSpinBox->setValue(value);
+        m_txAmpGain = value;
+        if(m_isProcessing)
+        {
+            m_hackTvLib->setTxAmpGain(m_txAmpGain);
+        }
+        saveSettings();
+    });
 
-    // Connect signals and slots
     connect(txAmplitudeSlider, &QSlider::valueChanged, [this](int value) {
         float amplitude = value / 100.0f;
         this->txAmplitudeSpinBox->setValue(amplitude);
@@ -282,7 +328,7 @@ void MainWindow::setupUi()
 
     connect(txFilterSizeSlider, &QSlider::valueChanged, [this](int value) {
         float filterSize = value / 100.0f;
-        txFilterSizeSpinBox->setValue(filterSize);        
+        txFilterSizeSpinBox->setValue(filterSize);
         tx_filter_size = filterSize;
         if(m_isProcessing)
         {
@@ -302,7 +348,7 @@ void MainWindow::setupUi()
 
     connect(txModulationIndexSlider, &QSlider::valueChanged, [this](int value) {
         float modulationIndex = value / 100.0f;
-        txModulationIndexSpinBox->setValue(modulationIndex);        
+        txModulationIndexSpinBox->setValue(modulationIndex);
         tx_modulation_index = modulationIndex;
         if(m_isProcessing)
         {
@@ -311,7 +357,7 @@ void MainWindow::setupUi()
         saveSettings();
     });
     connect(txModulationIndexSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), [this](double value) {
-        txModulationIndexSlider->setValue(static_cast<int>(value * 100));       
+        txModulationIndexSlider->setValue(static_cast<int>(value * 100));
         tx_modulation_index = value;
         if(m_isProcessing)
         {
@@ -321,7 +367,7 @@ void MainWindow::setupUi()
     });
 
     connect(txInterpolationSlider, &QSlider::valueChanged, [this](int value) {
-        txInterpolationSpinBox->setValue(value);        
+        txInterpolationSpinBox->setValue(value);
         tx_interpolation = value;
         if(m_isProcessing)
         {
@@ -330,44 +376,111 @@ void MainWindow::setupUi()
         saveSettings();
     });
     connect(txInterpolationSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), [this](double value) {
-        txInterpolationSlider->setValue(static_cast<int>(value));        
+        txInterpolationSlider->setValue(static_cast<int>(value));
         tx_interpolation = value;
         if(m_isProcessing)
         {
             m_hackTvLib->setInterpolation(tx_interpolation);
         }
         saveSettings();
-    });   
+    });
 
-    outputLayout->addWidget(outputLabel, 0, 0);
-    outputLayout->addWidget(outputCombo, 0, 1);
+}
 
-    outputLayout->addWidget(ampEnabled, 1, 0);
-    outputLayout->addWidget(a2Stereo, 1, 1);
-    outputLayout->addWidget(repeat, 1, 2);
-    outputLayout->addWidget(acp, 1, 3);
-    outputLayout->addWidget(filter, 1, 4);
-    outputLayout->addWidget(colorDisabled, 1, 5);
+void MainWindow::addinputTypeGroup()
+{
+    // Input type group
+    inputTypeGroup = new QGroupBox("Input Type", this);
+    QVBoxLayout *inputTypeLayout = new QVBoxLayout(inputTypeGroup);
+    inputTypeCombo = new QComboBox(this);
+    inputTypeCombo->addItems({ "Fm Transmitter", "File", "Test", "FFmpeg"});
+    inputTypeLayout->addWidget(inputTypeCombo);
 
-    outputLayout->addWidget(channelLabel, 2, 0);
-    outputLayout->addWidget(channelCombo, 2, 1);
-    outputLayout->addWidget(sampleRateLabel, 2, 2);
-    outputLayout->addWidget(sampleRateCombo, 2, 3);
+    // Input file group
+    QWidget *inputFileWidget = new QWidget(this);
+    QHBoxLayout *inputFileLayout = new QHBoxLayout(inputFileWidget);
+    inputFileEdit = new QLineEdit(this);
+    chooseFileButton = new QPushButton("Choose File", this);
+    inputFileLayout->addWidget(inputFileEdit);
+    inputFileLayout->addWidget(chooseFileButton);
+    inputTypeLayout->addWidget(inputFileWidget);
 
-    outputLayout->addWidget(freqLabel, 3, 0);
-    outputLayout->addWidget(frequencyEdit, 3, 1);
-    outputLayout->addWidget(rxtxLabel, 3, 2);
-    outputLayout->addWidget(rxtxCombo, 3, 3);
+    // FFmpeg options
+    ffmpegOptionsEdit = new QLineEdit(this);
+    ffmpegOptionsEdit->setText("rtsp://localhost:8554/live");
+    ffmpegOptionsEdit->setVisible(false);  // Initially hidden
+    inputTypeLayout->addWidget(ffmpegOptionsEdit);
 
-    tx_line = new QFrame();
-    tx_line->setFrameShape(QFrame::HLine);
-    tx_line->setFrameShadow(QFrame::Sunken);
-    outputLayout->addWidget(tx_line, 4, 0, 1, 6);  // Span all 6 columns
+    mainLayout->addWidget(inputTypeGroup);
+    mainLayout->addWidget(modeGroup);
 
-    outputLayout->addLayout(txControlsLayout, 5, 0, 1, 6);  // Span all 6 columns
+    logBrowser = new QTextBrowser(this);
+    mainLayout->addWidget(logBrowser);
 
-    mainLayout->addWidget(outputGroup);
+    QGroupBox *logGroup = new QGroupBox("Info", this);
+    QGridLayout *logLayout = new QGridLayout(logGroup);
+    logLayout->setVerticalSpacing(15);
+    logLayout->setHorizontalSpacing(15);
+    logLayout->addWidget(logBrowser);
+    mainLayout->addWidget(logGroup);
 
+    executeButton = new QPushButton("Start", this);
+    exitButton = new QPushButton("Exit", this);
+    connect(exitButton, &QPushButton::clicked, this, &MainWindow::close);
+    mainLayout->addWidget(executeButton);
+    mainLayout->addWidget(exitButton);
+
+    mainLayout->addStretch();
+
+    fileDialog = new QFileDialog(this);
+    fileDialog->setFileMode(QFileDialog::ExistingFile);
+    fileDialog->setNameFilter("Video Files (*.flv *.mp4);;All Files (*)");
+
+    QString initialDir = QDir::homePath() + "/Desktop/Videos";
+    if (!QDir(initialDir).exists()) {
+        initialDir = QDir::homePath() + "/Videos";
+    }
+    fileDialog->setDirectory(initialDir);
+}
+
+void MainWindow::addModeGroup()
+{
+    modeGroup = new QGroupBox("Mode", this);
+    QHBoxLayout *modeLayout = new QHBoxLayout(modeGroup);
+    populateChannelCombo();
+
+    modeCombo = new QComboBox(this);
+
+    QVector<QPair<QString, QString>> modes = {
+        {"PAL-I (625 lines, 25 fps/50 Hz, 6.0 MHz FM audio)", "i"},
+        {"PAL-B/G (625 lines, 25 fps/50 Hz, 5.5 MHz FM audio)", "g"},
+        {"PAL-D/K (625 lines, 25 fps/50 Hz, 6.5 MHz FM audio)", "pal-d"},
+        {"PAL-FM (625 lines, 25 fps/50 Hz, 6.5 MHz FM audio)", "pal-fm"},
+        {"PAL-N (625 lines, 25 fps/50 Hz, 4.5 MHz AM audio)", "pal-n"},
+        {"PAL-M (525 lines, 30 fps/60 Hz, 4.5 MHz FM audio)", "pal-m"},
+        {"SECAM-L (625 lines, 25 fps/50 Hz, 6.5 MHz AM audio)", "l"},
+        {"SECAM-D/K (625 lines, 25 fps/50 Hz, 6.5 MHz FM audio)", "d"},
+        {"NTSC-M (525 lines, 29.97 fps/59.94 Hz, 4.5 MHz FM audio)", "m"},
+        {"NTSC-A (405 lines, 25 fps/50 Hz, -3.5 MHz AM audio)", "ntsc-a"},
+        {"CCIR System A (405 lines, 25 fps/50 Hz, -3.5 MHz AM audio)", "a"}
+    };
+
+    for (const auto &mode : modes) {
+        modeCombo->addItem(mode.first, mode.second);
+    }
+
+    // Set PAL-B/G as default
+    int defaultIndex = modeCombo->findData("g");
+    if (defaultIndex != -1) {
+        modeCombo->setCurrentIndex(defaultIndex);
+    }
+
+    modeLayout->addWidget(modeCombo);
+
+}
+
+void MainWindow::addRxGroup()
+{
     freqCtrl = new CFreqCtrl();
     freqCtrl->setup(0, 0, 6000e6, 1, FCTL_UNIT_MHZ);
     freqCtrl->setDigitColor(QColor("#FFC300"));
@@ -419,12 +532,11 @@ void MainWindow::setupUi()
     topLayout->addWidget(freqCtrl);
     rxLayout->addLayout(topLayout);
 
-    // Add cPlotter
-    rxLayout->addWidget(cPlotter, 1);
+    QVBoxLayout *midLayout = new QVBoxLayout();
+    midLayout->addWidget(cPlotter);
 
     // Controls layout
     QHBoxLayout *controlsLayout = new QHBoxLayout();
-    controlsLayout->setSpacing(20);
 
     // Volume controls
     QVBoxLayout *volumeLayout = new QVBoxLayout();
@@ -515,7 +627,7 @@ void MainWindow::setupUi()
     controlsLayout->addLayout(volumeLayout);
     controlsLayout->addLayout(lnaLayout);
     controlsLayout->addLayout(vgaLayout);
-    controlsLayout->addLayout(rxAmpLayout);    
+    controlsLayout->addLayout(rxAmpLayout);
 
     volumeSlider->setStyleSheet(sliderStyle);
     lnaSlider->setStyleSheet(sliderStyle);
@@ -533,132 +645,11 @@ void MainWindow::setupUi()
     connect(vgaSlider, &QSlider::valueChanged, this, &MainWindow::onVgaSliderValueChanged);
     connect(rxAmpSlider, &QSlider::valueChanged, this, &MainWindow::onRxAmpSliderValueChanged);
 
-    rxLayout->addLayout(controlsLayout);
+    midLayout->addLayout(controlsLayout);
+
+    rxLayout->addLayout(midLayout);
 
     mainLayout->addWidget(rxGroup);
-
-    // Mode group
-    modeGroup = new QGroupBox("Mode", this);
-    QHBoxLayout *modeLayout = new QHBoxLayout(modeGroup);
-    populateChannelCombo();
-
-    modeCombo = new QComboBox(this);
-
-    QVector<QPair<QString, QString>> modes = {
-        {"PAL-I (625 lines, 25 fps/50 Hz, 6.0 MHz FM audio)", "i"},
-        {"PAL-B/G (625 lines, 25 fps/50 Hz, 5.5 MHz FM audio)", "g"},
-        {"PAL-D/K (625 lines, 25 fps/50 Hz, 6.5 MHz FM audio)", "pal-d"},
-        {"PAL-FM (625 lines, 25 fps/50 Hz, 6.5 MHz FM audio)", "pal-fm"},
-        {"PAL-N (625 lines, 25 fps/50 Hz, 4.5 MHz AM audio)", "pal-n"},
-        {"PAL-M (525 lines, 30 fps/60 Hz, 4.5 MHz FM audio)", "pal-m"},
-        {"SECAM-L (625 lines, 25 fps/50 Hz, 6.5 MHz AM audio)", "l"},
-        {"SECAM-D/K (625 lines, 25 fps/50 Hz, 6.5 MHz FM audio)", "d"},
-        {"NTSC-M (525 lines, 29.97 fps/59.94 Hz, 4.5 MHz FM audio)", "m"},
-        {"NTSC-A (405 lines, 25 fps/50 Hz, -3.5 MHz AM audio)", "ntsc-a"},
-        {"CCIR System A (405 lines, 25 fps/50 Hz, -3.5 MHz AM audio)", "a"}
-    };
-
-    for (const auto &mode : modes) {
-        modeCombo->addItem(mode.first, mode.second);
-    }
-
-    // Set PAL-B/G as default
-    int defaultIndex = modeCombo->findData("g");
-    if (defaultIndex != -1) {
-        modeCombo->setCurrentIndex(defaultIndex);
-    }
-
-    modeLayout->addWidget(modeCombo);
-
-    // Input type group
-    inputTypeGroup = new QGroupBox("Input Type", this);
-    QVBoxLayout *inputTypeLayout = new QVBoxLayout(inputTypeGroup);
-    inputTypeCombo = new QComboBox(this);
-    inputTypeCombo->addItems({ "Fm Transmitter", "File", "Test", "FFmpeg"});
-    inputTypeLayout->addWidget(inputTypeCombo);
-
-    // Input file group
-    QWidget *inputFileWidget = new QWidget(this);
-    QHBoxLayout *inputFileLayout = new QHBoxLayout(inputFileWidget);
-    inputFileEdit = new QLineEdit(this);
-    chooseFileButton = new QPushButton("Choose File", this);
-    inputFileLayout->addWidget(inputFileEdit);
-    inputFileLayout->addWidget(chooseFileButton);
-    inputTypeLayout->addWidget(inputFileWidget);
-
-    // FFmpeg options
-    ffmpegOptionsEdit = new QLineEdit(this);
-    ffmpegOptionsEdit->setText("rtsp://localhost:8554/live");
-    ffmpegOptionsEdit->setVisible(false);  // Initially hidden
-    inputTypeLayout->addWidget(ffmpegOptionsEdit);
-
-    mainLayout->addWidget(inputTypeGroup);    
-    mainLayout->addWidget(modeGroup);
-
-    logBrowser = new QTextBrowser(this);
-    mainLayout->addWidget(logBrowser);
-
-    QGroupBox *logGroup = new QGroupBox("Info", this);
-    QGridLayout *logLayout = new QGridLayout(logGroup);
-    logLayout->setVerticalSpacing(15);
-    logLayout->setHorizontalSpacing(15);
-    logLayout->addWidget(logBrowser);
-    mainLayout->addWidget(logGroup);
-
-    executeButton = new QPushButton("Start", this);
-    exitButton = new QPushButton("Exit", this);
-    connect(exitButton, &QPushButton::clicked, this, &MainWindow::close);
-    mainLayout->addWidget(executeButton);
-    mainLayout->addWidget(exitButton);
-
-    mainLayout->addStretch();
-
-    setCentralWidget(centralWidget);
-
-    fileDialog = new QFileDialog(this);
-    fileDialog->setFileMode(QFileDialog::ExistingFile);
-    fileDialog->setNameFilter("Video Files (*.flv *.mp4);;All Files (*)");
-
-    QString initialDir = QDir::homePath() + "/Desktop/Videos";
-    if (!QDir(initialDir).exists()) {
-        initialDir = QDir::homePath() + "/Videos";
-    }
-    fileDialog->setDirectory(initialDir);   
-
-    // Connect signals and slots
-    connect(executeButton, &QPushButton::clicked, this, &MainWindow::executeCommand);
-    connect(chooseFileButton, &QPushButton::clicked, this, &MainWindow::chooseFile);
-    connect(inputTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onInputTypeChanged);
-    connect(rxtxCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onRxTxTypeChanged);
-    connect(sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onSampleRateChanged);
-
-    inputTypeGroup->setVisible(false);
-    modeGroup->setVisible(false);
-    rxGroup->setVisible(true);
-
-    // Hide TX controls initially
-    txAmplitudeSlider->setVisible(false);
-    txAmplitudeSpinBox->setVisible(false);
-    txFilterSizeSlider->setVisible(false);
-    txFilterSizeSpinBox->setVisible(false);
-    txModulationIndexSlider->setVisible(false);
-    txModulationIndexSpinBox->setVisible(false);
-    txInterpolationSlider->setVisible(false);
-    txInterpolationSpinBox->setVisible(false);
-    tx_line->setVisible(false);
-
-    for (int i = 0; i < txControlsLayout->rowCount(); ++i) {
-        QLayoutItem* item = txControlsLayout->itemAtPosition(i, 0);
-        if (item && item->widget()) {
-            item->widget()->setVisible(false);
-        }
-    }
-
-    rxtxCombo->setCurrentIndex(0);  // Start in RX mode
-    onRxTxTypeChanged(0);
 }
 
 void MainWindow::onVolumeSliderValueChanged(int value)
@@ -689,16 +680,6 @@ void MainWindow::onVgaSliderValueChanged(int value)
     m_vgaGain = value;
     if (m_isProcessing)
         m_hackTvLib->setVgaGain(m_vgaGain);
-
-    saveSettings();
-}
-
-void MainWindow::onTxAmpSliderValueChanged(int value)
-{
-    txAmpLevelLabel->setText(QString::number(value));
-    m_txAmpGain = value;
-    if (m_isProcessing)
-        m_hackTvLib->setTxAmpGain(m_txAmpGain);
 
     saveSettings();
 }
@@ -934,21 +915,10 @@ QStringList MainWindow::buildCommand()
         args << "--nocolour" ;
     }
 
-    if (repeat->isChecked()) {
-        args << "--repeat";
-    }
-
-    if (a2Stereo->isChecked()) {
-        args << "--a2stereo";
-    }
-
-    if (filter->isChecked()) {
-        args << "--filter";
-    }
-
-    if (acp->isChecked()) {
-        args << "--acp";
-    }
+    args << "--repeat";
+    args << "--a2stereo";
+    args << "--filter";
+    args << "--acp";
 
     switch(inputTypeCombo->currentIndex())
     {
@@ -1048,6 +1018,8 @@ void MainWindow::onInputTypeChanged(int index)
     txModulationIndexSpinBox->setVisible(isFmTransmit);
     txInterpolationSlider->setVisible(isFmTransmit);
     txInterpolationSpinBox->setVisible(isFmTransmit);
+    txAmpSlider->setVisible(isFmTransmit);
+    txAmpSpinBox->setVisible(isFmTransmit);
     tx_line->setVisible(isFmTransmit);
 
     // Also hide/show labels
@@ -1086,6 +1058,8 @@ void MainWindow::onRxTxTypeChanged(int index)
     txModulationIndexSpinBox->setVisible(isTx);
     txInterpolationSlider->setVisible(isTx);
     txInterpolationSpinBox->setVisible(isTx);
+    txAmpSlider->setVisible(isTx);
+    txAmpSpinBox->setVisible(isTx);
     tx_line->setVisible(isTx);
 
     // Also hide/show labels
@@ -1096,9 +1070,9 @@ void MainWindow::onRxTxTypeChanged(int index)
         }
     }
 
-    setMinimumSize(800, 600);  // Set a minimum size
+    setMinimumSize(defaultWidth, defaultHeight);  // Set a minimum size
     setMaximumSize(QSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX));
-    resize(800, 600);
+    resize(defaultWidth, defaultHeight);
     adjustSize();
     update();
 }

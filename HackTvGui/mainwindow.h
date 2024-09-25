@@ -53,11 +53,14 @@ private slots:
     void onVolumeSliderValueChanged(int value);
     void onLnaSliderValueChanged(int value);
     void onVgaSliderValueChanged(int value);
-    void onTxAmpSliderValueChanged(int value);
     void onRxAmpSliderValueChanged(int value);
 
 private:
     void setupUi();
+    void addOutputGroup();
+    void addinputTypeGroup();
+    void addModeGroup();
+    void addRxGroup();
     void saveSettings();
     void loadSettings();
     void populateChannelCombo();
@@ -68,25 +71,29 @@ private:
     void handleLog(const std::string& logMessage);
     void handleReceivedData(const int8_t *data, size_t len);
 
+    QVBoxLayout *mainLayout;
+
     // UI Elements
     QComboBox *outputCombo, *channelCombo, *sampleRateCombo, *rxtxCombo, *inputTypeCombo, *modeCombo;
-    QCheckBox *ampEnabled, *colorDisabled, *a2Stereo, *repeat, *acp, *filter;
+    QCheckBox *ampEnabled, *colorDisabled;
     QLineEdit *frequencyEdit, *inputFileEdit, *ffmpegOptionsEdit;
     QPushButton *chooseFileButton, *executeButton, *exitButton;
     QSlider *txAmplitudeSlider, *txFilterSizeSlider, *txModulationIndexSlider, *txInterpolationSlider;
-    QDoubleSpinBox *txAmplitudeSpinBox, *txFilterSizeSpinBox, *txModulationIndexSpinBox, *txInterpolationSpinBox;
+    QDoubleSpinBox *txAmplitudeSpinBox, *txFilterSizeSpinBox, *txModulationIndexSpinBox, *txInterpolationSpinBox, *txAmpSpinBox;
     QTextBrowser *logBrowser;
     QLabel *volumeLabel, *volumeLevelLabel, *lnaLabel, *lnaLevelLabel, *vgaLabel, *vgaLevelLabel,
-        *txAmpLabel, *txAmpLevelLabel, *rxAmpLabel, *rxAmpLevelLabel;
+           *rxAmpLabel, *rxAmpLevelLabel;
     QSlider *volumeSlider, *lnaSlider, *vgaSlider, *txAmpSlider, *rxAmpSlider;
     QFileDialog *fileDialog;
     CFreqCtrl *freqCtrl;
     CPlotter *cPlotter;
     CMeter *cMeter;
 
+    QString sliderStyle, labelStyle;    
+
     // Layouts and Groups
     QGridLayout *txControlsLayout;
-    QGroupBox *inputTypeGroup, *modeGroup, *rxGroup;
+    QGroupBox *outputGroup, *inputTypeGroup, *modeGroup, *rxGroup;
 
     // Member variables
     std::unique_ptr<HackTvLib> m_hackTvLib;
@@ -127,9 +134,9 @@ private:
     int interpolation = 4;
     int decimation = 2;
 
+    int defaultWidth, defaultHeight;
     std::atomic<bool> m_isProcessing;
 
-    // Signal processing components
     std::unique_ptr<LowPassFilter> lowPassFilter;
     std::unique_ptr<RationalResampler> rationalResampler;
     std::unique_ptr<FMDemodulator> fmDemodulator;
