@@ -8,6 +8,7 @@
 #include <QPushButton>
 #include <QCheckBox>
 #include <QSlider>
+#include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QTextBrowser>
 #include <QFileDialog>
@@ -79,7 +80,8 @@ private:
     QLineEdit *frequencyEdit, *inputFileEdit, *ffmpegOptionsEdit;
     QPushButton *chooseFileButton, *executeButton, *exitButton;
     QSlider *txAmplitudeSlider, *txFilterSizeSlider, *txModulationIndexSlider, *txInterpolationSlider;
-    QDoubleSpinBox *txAmplitudeSpinBox, *txFilterSizeSpinBox, *txModulationIndexSpinBox, *txInterpolationSpinBox, *txAmpSpinBox;
+    QDoubleSpinBox *txAmplitudeSpinBox, *txFilterSizeSpinBox, *txModulationIndexSpinBox, *txInterpolationSpinBox;
+    QSpinBox *txAmpSpinBox;;
     QTextBrowser *logBrowser;
     QLabel *volumeLabel, *volumeLevelLabel, *lnaLabel, *lnaLevelLabel, *vgaLabel, *vgaLevelLabel,
            *rxAmpLabel, *rxAmpLevelLabel;

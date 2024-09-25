@@ -34,7 +34,7 @@ MainWindow::MainWindow(QWidget *parent)
                           "margin: -2px 0; "
                           "border-radius: 3px; "
                           "}";
-    labelStyle = "QLabel { background-color: #113e47 ; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }";
+    labelStyle = "QLabel { background-color: #ad6d0a ; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }";
 
     if (QFile(m_sSettingsFile).exists())
         loadSettings();
@@ -276,13 +276,13 @@ void MainWindow::addOutputGroup()
     txAmpSlider = new QSlider(Qt::Horizontal);
     txAmpSlider->setRange(0, HACKRF_TX_AMP_MAX_DB);  // 0.0 to 100.0 in 100 steps
     txAmpSlider->setValue(m_txAmpGain);  // Default to 48.0
-    txAmpSpinBox = new QDoubleSpinBox();
+    txAmpSpinBox = new QSpinBox();
     txAmpSlider->setMinimumHeight(30);
     txAmpSpinBox->setMinimumHeight(30);
     txAmpSpinBox->setMinimumWidth(60);
-    txAmpSpinBox->setRange(0.0, HACKRF_TX_AMP_MAX_DB);
+    txAmpSpinBox->setRange(0, HACKRF_TX_AMP_MAX_DB);
     txAmpSpinBox->setValue(m_txAmpGain);
-    txAmpSpinBox->setSingleStep(1.0);
+    txAmpSpinBox->setSingleStep(1);
     QLabel *txAmpLabel = new QLabel("Tx Gain : ");
     txAmpLabel->setStyleSheet(labelStyle);
     txControlsLayout->addWidget(txAmpLabel, 4, 0);
@@ -296,7 +296,7 @@ void MainWindow::addOutputGroup()
     outputLayout->addLayout(txControlsLayout, 3, 0, 1, 6);
     mainLayout->addWidget(outputGroup);
 
-    connect(txAmpSlider, &QSlider::valueChanged, [this](int value) {
+    connect(txAmpSlider, &QSlider::valueChanged, [this](int value) {        
         this->txAmpSpinBox->setValue(value);
         m_txAmpGain = value;
         if(m_isProcessing)
