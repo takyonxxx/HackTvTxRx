@@ -25,9 +25,7 @@
 #include "meter.h"
 #include "audiooutput.h"
 #include "signalprocessor.h"
-#include "lowpassfilter.h"
-#include "fmdemodulator.h"
-#include "rationalresampler.h"
+#include "modulator.h"
 
 class MainWindow : public QMainWindow
 {
@@ -100,6 +98,7 @@ private:
     // Member variables
     std::unique_ptr<HackTvLib> m_hackTvLib;
     std::unique_ptr<AudioOutput> audioOutput;
+
     SignalProcessor *m_signalProcessor;
     QThreadPool m_threadPool;
     QTimer *logTimer;

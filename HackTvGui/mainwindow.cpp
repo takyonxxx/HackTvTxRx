@@ -22,18 +22,18 @@ MainWindow::MainWindow(QWidget *parent)
     m_threadPool.setMaxThreadCount(QThread::idealThreadCount());
 
     sliderStyle = "QSlider::groove:horizontal { "
-                          "border: 1px solid #999999; "
-                          "height: 8px; "
-                          "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #B1B1B1, stop:1 #c4c4c4); "
-                          "margin: 2px 0; "
-                          "} "
-                          "QSlider::handle:horizontal { "
-                          "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2980b9, stop:1 #3498db); "
-                          "border: 1px solid #5c5c5c; "
-                          "width: 18px; "
-                          "margin: -2px 0; "
-                          "border-radius: 3px; "
-                          "}";
+                  "border: 1px solid #999999; "
+                  "height: 8px; "
+                  "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #B1B1B1, stop:1 #c4c4c4); "
+                  "margin: 2px 0; "
+                  "} "
+                  "QSlider::handle:horizontal { "
+                  "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2980b9, stop:1 #3498db); "
+                  "border: 1px solid #5c5c5c; "
+                  "width: 18px; "
+                  "margin: -2px 0; "
+                  "border-radius: 3px; "
+                  "}";
     labelStyle = "QLabel { background-color: #ad6d0a ; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }";
 
     if (QFile(m_sSettingsFile).exists())
@@ -148,10 +148,10 @@ void MainWindow::addOutputGroup()
     outputLayout->setHorizontalSpacing(15);
 
     QVector<QPair<QString, QString>> devices = {
-        {"HackRF", "hackrf"},
-        {"SoapySDR", "soapysdr"},
-        {"FL2000", "fl2k"},
-    };
+                                                {"HackRF", "hackrf"},
+                                                {"SoapySDR", "soapysdr"},
+                                                {"FL2000", "fl2k"},
+                                                };
 
     QLabel *outputLabel = new QLabel("Device:", this);
     outputCombo = new QComboBox(this);
@@ -766,14 +766,24 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
         auto resampledSamples = rationalResampler->resample(filteredSamples);
         auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);
 
+        // Normalize the demodulated samples
+        float maxAbs = 0.0f;
+        for (const auto& sample : demodulatedSamples) {
+            maxAbs = std::max(maxAbs, std::abs(sample));
+        }
+        if (maxAbs > 0) {
+            float scale = 1.0f / maxAbs;
 #pragma omp parallel for
-        for (size_t i = 0; i < demodulatedSamples.size(); ++i) {
-            demodulatedSamples[i] *= audioGain;
+            for (size_t i = 0; i < demodulatedSamples.size(); ++i) {
+                demodulatedSamples[i] = std::clamp(demodulatedSamples[i] * scale * audioGain, -1.0f, 1.0f);
+            }
         }
 
+        // Queue the audio data for playback
         QMetaObject::invokeMethod(this, "processAudio",
                                   Qt::QueuedConnection,
                                   Q_ARG(const std::vector<float>&, demodulatedSamples));
+
     } else {
         qDebug() << "One or more components of the signal chain are not initialized.";
     }
@@ -842,10 +852,8 @@ void MainWindow::executeCommand()
     {
         QStringList args = buildCommand();
 
-        qDebug() << mode;
-
         if(mode == "rx")
-        {
+        {           
             lowPassFilter = std::make_unique<LowPassFilter>(m_sampleRate, m_HiCutFreq, transitionWidth);
             rationalResampler = std::make_unique<RationalResampler>(interpolation, decimation);
             fmDemodulator = std::make_unique<FMDemodulator>(quadratureRate, audioDecimation);
@@ -924,8 +932,11 @@ QStringList MainWindow::buildCommand()
     {
     case 0: // fmtransmitter
         args << "fmtransmitter";
-        m_hackTvLib->setMicEnabled(true);
-        sampleRateCombo->setCurrentIndex(0);
+        if(mode == "tx")
+        {
+            m_hackTvLib->setMicEnabled(true);
+            sampleRateCombo->setCurrentIndex(0);
+        }
         break;
     case 1: // File
         if (!inputFileEdit->text().isEmpty()) {
@@ -1098,7 +1109,7 @@ void MainWindow::onSampleRateChanged(int index)
             }
         }
         else
-             m_hackTvLib->setSampleRate(m_sampleRate);
+            m_hackTvLib->setSampleRate(m_sampleRate);
 
         lowPassFilter->designFilter(m_sampleRate, m_HiCutFreq, 10e3);
         cPlotter->setSampleRate(m_sampleRate);
@@ -1190,7 +1201,7 @@ void MainWindow::populateChannelCombo()
         channelCombo->addItem(channel.name, channel.frequency);
     }
 
-    int defaultIndex = channelCombo->findText("Radio");
+    int defaultIndex = channelCombo->findText("RadioTraffic");
     if (defaultIndex != -1) {
         channelCombo->setCurrentIndex(defaultIndex);
     }

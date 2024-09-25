@@ -12,25 +12,20 @@ LIBS += -L$$PARENT_DIR/lib -lHackTvLib
 SOURCES += \
     audiooutput.cpp \
     cplotter.cpp \
-    fmdemodulator.cpp \
     freqctrl.cpp \
-    lowpassfilter.cpp \
     main.cpp \
     mainwindow.cpp \
     meter.cpp \
-    rationalresampler.cpp \
     signalprocessor.cpp
 
 HEADERS += \
     audiooutput.h \
     constants.h \
     cplotter.h \
-    fmdemodulator.h \
     freqctrl.h \
-    lowpassfilter.h \
     mainwindow.h \
     meter.h \
-    rationalresampler.h \
+    modulator.h \
     signalprocessor.h
 
 FORMS += \
