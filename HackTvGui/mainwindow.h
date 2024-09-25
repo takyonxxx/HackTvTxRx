@@ -129,7 +129,7 @@ private:
     float tx_filter_size = 0;
     float tx_modulation_index = 5.0;
     float tx_interpolation = 48;
-    double transitionWidth = 10e3;
+    double transitionWidth = 50e3;
     double quadratureRate = 480e3;
     int audioDecimation = 12;
     int interpolation = 4;

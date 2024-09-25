@@ -755,7 +755,6 @@ void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
     float signal_level_dbfs;
     getFft(samples, fft_output, signal_level_dbfs, fft_size);
     cMeter->setLevel(signal_level_dbfs);
-
     cPlotter->setNewFttData(fft_output.data(), fft_output.data(), fft_size);
 }
 
