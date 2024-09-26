@@ -841,7 +841,7 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
     m_LowCutFreq = low;
     m_HiCutFreq = high;
     if (m_isProcessing)
-        lowPassFilter->designFilter(m_sampleRate, m_HiCutFreq, transitionWidth);
+        lowPassFilter->designFilter(m_sampleRate, m_CutFreq, transitionWidth);
     saveSettings();
 }
 
@@ -853,7 +853,7 @@ void MainWindow::executeCommand()
 
         if(mode == "rx")
         {           
-            lowPassFilter = std::make_unique<LowPassFilter>(m_sampleRate, m_HiCutFreq, transitionWidth);
+            lowPassFilter = std::make_unique<LowPassFilter>(m_sampleRate, m_CutFreq, transitionWidth);
             rationalResampler = std::make_unique<RationalResampler>(interpolation, decimation);
             fmDemodulator = std::make_unique<FMDemodulator>(quadratureRate, audioDecimation);
         }
@@ -1110,7 +1110,7 @@ void MainWindow::onSampleRateChanged(int index)
         else
             m_hackTvLib->setSampleRate(m_sampleRate);
 
-        lowPassFilter->designFilter(m_sampleRate, m_HiCutFreq, 10e3);
+        lowPassFilter->designFilter(m_sampleRate, m_CutFreq, 10e3);
         cPlotter->setSampleRate(m_sampleRate);
         cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
         cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));

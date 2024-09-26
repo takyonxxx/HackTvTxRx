@@ -119,6 +119,7 @@ private:
     float audioGain = 0.5f;
     int m_LowCutFreq = -100e3;
     int m_HiCutFreq = 100e3;
+    int m_CutFreq = 75e3;
     int flo = -5000;
     int fhi = 5000;
     int click_res = 100;
