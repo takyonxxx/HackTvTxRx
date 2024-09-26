@@ -116,9 +116,9 @@ private:
     QString mode;
     bool isTx, isFmTransmit, isFile, isTest, isFFmpeg;
 
-    float audioGain = 0.5f;
-    int m_LowCutFreq = -100e3;
-    int m_HiCutFreq = 100e3;
+    float audioGain = 0.75f;
+    int m_LowCutFreq = -75e3;
+    int m_HiCutFreq = 75e3;
     int m_CutFreq = 75e3;
     int flo = -5000;
     int fhi = 5000;

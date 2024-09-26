@@ -841,7 +841,7 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
     m_LowCutFreq = low;
     m_HiCutFreq = high;
     if (m_isProcessing)
-        lowPassFilter->designFilter(m_sampleRate, m_CutFreq, transitionWidth);
+        lowPassFilter->designFilter(m_sampleRate, m_LowCutFreq, transitionWidth);
     saveSettings();
 }
 
