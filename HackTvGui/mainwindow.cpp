@@ -47,9 +47,7 @@ MainWindow::MainWindow(QWidget *parent)
     setCurrentSampleRate(m_sampleRate);
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
     cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
-    freqCtrl->setFrequency(m_frequency);
-
-    palbDemodulator = new PALBDemodulator(m_sampleRate, this);
+    freqCtrl->setFrequency(m_frequency);    
 
     try {
         m_hackTvLib->setLogCallback([this](const std::string& msg) {
@@ -81,6 +79,8 @@ MainWindow::MainWindow(QWidget *parent)
     logTimer = new QTimer(this);
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
     logTimer->start(100);
+
+    //palbDemodulator = new PALBDemodulator(m_sampleRate, this);
 }
 
 MainWindow::~MainWindow()
@@ -649,11 +649,11 @@ void MainWindow::addRxGroup()
 
     midLayout->addLayout(controlsLayout);
 
-    videoDisplay = new QLabel(this);
-    videoDisplay->setMinimumSize(720, 576);  // PAL resolution
-    videoDisplay->setAlignment(Qt::AlignCenter);
-    videoDisplay->setStyleSheet("background-color: blue;");  // Set background to blue
-    midLayout->addWidget(videoDisplay);
+    // videoDisplay = new QLabel(this);
+    // videoDisplay->setMinimumSize(720, 576);  // PAL resolution
+    // videoDisplay->setAlignment(Qt::AlignCenter);
+    // videoDisplay->setStyleSheet("background-color: blue;");  // Set background to blue
+    // midLayout->addWidget(videoDisplay);
 
     rxLayout->addLayout(midLayout);
     mainLayout->addWidget(rxGroup);
@@ -767,7 +767,7 @@ void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
 
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-    /*if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput) {
+    if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput) {
         auto filteredSamples = lowPassFilter->apply(samples);
         auto resampledSamples = rationalResampler->resample(filteredSamples);
         auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);
@@ -792,7 +792,7 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 
     } else {
         qDebug() << "One or more components of the signal chain are not initialized.";
-    }*/
+    }
 
     if (palbDemodulator) {
         auto frame = palbDemodulator->demodulate(samples);
@@ -805,8 +805,6 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 
         audioOutput->processAudio(frame.audio);
 
-    } else {
-        qDebug() << "PAL-B demodulator is not initialized.";
     }
 }
 
