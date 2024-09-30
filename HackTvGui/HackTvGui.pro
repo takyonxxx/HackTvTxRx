@@ -16,6 +16,7 @@ SOURCES += \
     main.cpp \
     mainwindow.cpp \
     meter.cpp \
+    palbdemodulator.cpp \
     signalprocessor.cpp
 
 HEADERS += \
@@ -26,6 +27,7 @@ HEADERS += \
     mainwindow.h \
     meter.h \
     modulator.h \
+    palbdemodulator.h \
     signalprocessor.h
 
 FORMS += \

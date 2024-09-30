@@ -49,6 +49,8 @@ MainWindow::MainWindow(QWidget *parent)
     cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
     freqCtrl->setFrequency(m_frequency);
 
+    palbDemodulator = new PALBDemodulator(m_sampleRate, this);
+
     try {
         m_hackTvLib->setLogCallback([this](const std::string& msg) {
             handleLog(msg);
@@ -627,7 +629,7 @@ void MainWindow::addRxGroup()
     controlsLayout->addLayout(volumeLayout);
     controlsLayout->addLayout(lnaLayout);
     controlsLayout->addLayout(vgaLayout);
-    controlsLayout->addLayout(rxAmpLayout);
+    controlsLayout->addLayout(rxAmpLayout);    
 
     volumeSlider->setStyleSheet(sliderStyle);
     lnaSlider->setStyleSheet(sliderStyle);
@@ -647,8 +649,13 @@ void MainWindow::addRxGroup()
 
     midLayout->addLayout(controlsLayout);
 
-    rxLayout->addLayout(midLayout);
+    videoDisplay = new QLabel(this);
+    videoDisplay->setMinimumSize(720, 576);  // PAL resolution
+    videoDisplay->setAlignment(Qt::AlignCenter);
+    videoDisplay->setStyleSheet("background-color: blue;");  // Set background to blue
+    midLayout->addWidget(videoDisplay);
 
+    rxLayout->addLayout(midLayout);
     mainLayout->addWidget(rxGroup);
 }
 
@@ -760,7 +767,7 @@ void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
 
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-    if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput) {
+    /*if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput) {
         auto filteredSamples = lowPassFilter->apply(samples);
         auto resampledSamples = rationalResampler->resample(filteredSamples);
         auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);
@@ -785,7 +792,29 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 
     } else {
         qDebug() << "One or more components of the signal chain are not initialized.";
+    }*/
+
+    if (palbDemodulator) {
+        auto frame = palbDemodulator->demodulate(samples);
+
+        // Update the video display
+        QMetaObject::invokeMethod(this, "updateDisplay",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(const QImage&, frame.image));
+
+
+        audioOutput->processAudio(frame.audio);
+
+    } else {
+        qDebug() << "PAL-B demodulator is not initialized.";
     }
+}
+
+void MainWindow::updateDisplay(const QImage& image)
+{
+    videoDisplay->setPixmap(QPixmap::fromImage(image).scaled(videoDisplay->size(),
+                                                             Qt::KeepAspectRatio,
+                                                             Qt::SmoothTransformation));
 }
 
 void MainWindow::processAudio(const std::vector<float>& demodulatedSamples)

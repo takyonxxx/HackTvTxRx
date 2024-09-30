@@ -26,6 +26,7 @@
 #include "audiooutput.h"
 #include "signalprocessor.h"
 #include "modulator.h"
+#include "palbdemodulator.h"
 
 class MainWindow : public QMainWindow
 {
@@ -53,6 +54,7 @@ private slots:
     void onLnaSliderValueChanged(int value);
     void onVgaSliderValueChanged(int value);
     void onRxAmpSliderValueChanged(int value);
+    void updateDisplay(const QImage& image);
 
 private:
     void setupUi();
@@ -142,6 +144,9 @@ private:
     std::unique_ptr<LowPassFilter> lowPassFilter;
     std::unique_ptr<RationalResampler> rationalResampler;
     std::unique_ptr<FMDemodulator> fmDemodulator;
+
+    PALBDemodulator* palbDemodulator;
+    QLabel* videoDisplay;
 };
 
 #endif // MAINWINDOW_H
