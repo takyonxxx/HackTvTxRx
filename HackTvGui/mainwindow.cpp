@@ -80,7 +80,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
     logTimer->start(100);
 
-    //palbDemodulator = new PALBDemodulator(m_sampleRate, this);
+    palbDemodulator = new PALBDemodulator(m_sampleRate, this);
 }
 
 MainWindow::~MainWindow()
@@ -649,11 +649,13 @@ void MainWindow::addRxGroup()
 
     midLayout->addLayout(controlsLayout);
 
-    // videoDisplay = new QLabel(this);
-    // videoDisplay->setMinimumSize(720, 576);  // PAL resolution
-    // videoDisplay->setAlignment(Qt::AlignCenter);
-    // videoDisplay->setStyleSheet("background-color: blue;");  // Set background to blue
-    // midLayout->addWidget(videoDisplay);
+    videoDisplay = new QLabel(this);
+    videoDisplay->setMinimumSize(720, 576);  // PAL resolution
+    videoDisplay->setAlignment(Qt::AlignCenter);
+    videoDisplay->setStyleSheet("background-color: blue;");  // Set background to blue
+
+    videoDisplay->setMinimumHeight(400);
+    midLayout->addWidget(videoDisplay);
 
     rxLayout->addLayout(midLayout);
     mainLayout->addWidget(rxGroup);
@@ -803,7 +805,7 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
                                   Q_ARG(const QImage&, frame.image));
 
 
-        audioOutput->processAudio(frame.audio);
+        //audioOutput->processAudio(frame.audio);
 
     }
 }
