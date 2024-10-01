@@ -26,11 +26,27 @@ win32 {
 unix {
     INCLUDEPATH += /usr/local/include
     LIBS += -L/usr/local/lib
+    macx {    
+       HOMEBREW_PREFIX = $$system(brew --prefix)
+       !isEmpty(HOMEBREW_PREFIX) {
+           message("Homebrew found at $$HOMEBREW_PREFIX")
+           INCLUDEPATH += $$HOMEBREW_PREFIX/include
+           LIBS += -L$$HOMEBREW_PREFIX/lib
 
-    macx {
-        # macOS specific configurations
-        INCLUDEPATH += /opt/homebrew/include
-        LIBS += -L/opt/homebrew/lib
+           # Add specific paths for Qt
+           QT_PREFIX = $$system(brew --prefix qt)
+           !isEmpty(QT_PREFIX) {
+               INCLUDEPATH += $$QT_PREFIX/include
+               LIBS += -L$$QT_PREFIX/lib
+           }
+           HACKRF_PREFIX = $$system(brew --prefix hackrf)
+           !isEmpty(HACKRF_PREFIX) {
+               INCLUDEPATH += $$HACKRF_PREFIX/include
+               LIBS += -L$$HACKRF_PREFIX/lib
+           }
+       } else {
+           error("Homebrew not found. Please install Homebrew and required dependencies.")
+       }
     } else {
         # Linux specific configurations
         INCLUDEPATH += /usr/include
