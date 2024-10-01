@@ -1,35 +1,46 @@
 QT += core multimedia
 
 TEMPLATE = lib
-DEFINES += HACKTVLIB_LIBRARY
-
 CONFIG += c++17
 
+DEFINES += HACKTVLIB_LIBRARY
 DEFINES += _USE_MATH_DEFINES
 DEFINES += HAVE_HACKRF
 DEFINES += HAVE_SOAPYSDR
 DEFINES += HAVE_FL2K
 
-win32:DEFINES += _WIN32
+win32 {
+    DEFINES += _WIN32
+    TOOLCHAIN_PATH = C:/msys64/ucrt64
+    MINGW_PATH = C:/msys64/mingw64
+    INCLUDEPATH += $$TOOLCHAIN_PATH/include
+    INCLUDEPATH += $$MINGW_PATH/include
+    LIBS += -L$$TOOLCHAIN_PATH/lib
+    LIBS += -L$$TOOLCHAIN_PATH/bin
+    LIBS += -L$$MINGW_PATH/lib
+    LIBS += -L$$MINGW_PATH/bin
+    LIBS += -lwinmm -lcomctl32 -lole32 -luuid -lws2_32 -lgdi32 -lshell32 -ladvapi32 -lcomdlg32
+    QMAKE_LFLAGS += -Wl,--subsystem,windows
+}
 
-TOOLCHAIN_PATH = C:/msys64/ucrt64
-MINGW_PATH = C:/msys64/mingw64
+unix {
+    INCLUDEPATH += /usr/local/include
+    LIBS += -L/usr/local/lib
 
-INCLUDEPATH += $$TOOLCHAIN_PATH/include
-INCLUDEPATH += $$MINGW_PATH/include
-
-LIBS += -L$$TOOLCHAIN_PATH/lib
-LIBS += -L$$TOOLCHAIN_PATH/bin
-LIBS += -L$$MINGW_PATH/lib
-LIBS += -L$$MINGW_PATH/bin
+    macx {
+        # macOS specific configurations
+        INCLUDEPATH += /opt/homebrew/include
+        LIBS += -L/opt/homebrew/lib
+    } else {
+        # Linux specific configurations
+        INCLUDEPATH += /usr/include
+        LIBS += -L/usr/lib
+    }
+}
 
 LIBS += -lusb-1.0 -lhackrf -lfftw3f -losmo-fl2k -lSoapySDR -lfdk-aac -lopus -lportaudio
 LIBS += -lfltk -lfltk_forms -lfltk_gl -lfltk_images
 LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
-
-win32:LIBS += -lwinmm -lcomctl32 -lole32 -luuid -lws2_32 -lgdi32 -lshell32 -ladvapi32 -lcomdlg32
-
-QMAKE_LFLAGS += -Wl,--subsystem,windows
 
 SOURCES += \
     hackrfdevice.cpp \

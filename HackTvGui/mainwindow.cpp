@@ -846,6 +846,7 @@ void MainWindow::onFreqCtrl_setFrequency(qint64 freq)
     if (m_isProcessing)
         m_hackTvLib->setFrequency(m_frequency);
     frequencyEdit->setText(QString::number(m_frequency));
+    saveSettings();
 }
 
 void MainWindow::on_plotter_newDemodFreq(qint64 freq, qint64 delta)
@@ -1148,9 +1149,7 @@ void MainWindow::populateChannelCombo()
         long long frequency;
     };
 
-    QVector<Channel> channels = {
-                                 {"Radio", 445900000},
-                                 {"RadioTraffic", 88400000},
+    QVector<Channel> channels = {                                 
                                  {"PowerFm", 100000000},
                                  {"E2", 48250000},
                                  {"E3", 55250000},
@@ -1216,17 +1215,32 @@ void MainWindow::populateChannelCombo()
                                  {"E69", 855250000},
                                  };
 
-    connect(channelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onChannelChanged);    
+    int indexToSelect = 0; // Default to the first item
+    long long closestFrequency = std::abs(m_frequency - channels[0].frequency);
 
-    for (const auto &channel : channels) {
+    for (int i = 0; i < channels.size(); ++i) {
+        const auto &channel = channels[i];
         channelCombo->addItem(channel.name, channel.frequency);
+
+        // Find the closest frequency
+        long long diff = std::abs(m_frequency - channel.frequency);
+        if (diff < closestFrequency) {
+            closestFrequency = diff;
+            indexToSelect = i;
+        }
     }
 
-    int defaultIndex = channelCombo->findText("RadioTraffic");
-    if (defaultIndex != -1) {
-        channelCombo->setCurrentIndex(defaultIndex);
-    }
+    // Set the combo box to the closest frequency
+    channelCombo->setCurrentIndex(indexToSelect);
+
+
+    connect(channelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onChannelChanged);
+
+    // int defaultIndex = channelCombo->findText("PowerFm");
+    // if (defaultIndex != -1) {
+    //     channelCombo->setCurrentIndex(defaultIndex);
+    // }
 }
 
 void MainWindow::onChannelChanged(int index)
@@ -1236,8 +1250,8 @@ void MainWindow::onChannelChanged(int index)
     freqCtrl->setFrequency(frequency);
     m_frequency = frequency;
     if(m_isProcessing)
-    {        
+    {
         m_hackTvLib->setFrequency(m_frequency);
-        saveSettings();
     }
+    saveSettings();
 }

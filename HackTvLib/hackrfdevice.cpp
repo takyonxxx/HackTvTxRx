@@ -87,6 +87,8 @@ int HackRfDevice::start(rf_mode _mode)
     setBasebandFilterBandwidth(hackrf_compute_baseband_filter_bw(m_sampleRate));
     setAntennaEnable(m_antennaEnable);
 
+    std::cout << "HackRF Amp enabled : " << m_ampEnable << std::endl;
+
     if(mode == RX)
     {
         r = hackrf_start_rx(h_device, _rx_callback, this);
