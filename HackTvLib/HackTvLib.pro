@@ -118,3 +118,8 @@ unix {
 
 DISTFILES += \
     hacktv/README.md
+
+#sudo apt install qt5-default qtmultimedia5-dev build-essential libusb-1.0-0-dev libhackrf-dev libfftw3-dev libosmo-fl2k-dev libsoapysdr-dev libfdk-aac-dev libopus-dev portaudio19-dev libfltk1.3-dev libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
+#brew install qt libusb hackrf fftw osmo-fl2k soapysdr fdk-aac opus portaudio fltk ffmpeg
+#export PATH="/usr/local/opt/qt/bin:$PATH"
+#brew link qt --force
