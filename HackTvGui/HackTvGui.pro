@@ -28,7 +28,8 @@ HEADERS += \
     meter.h \
     modulator.h \
     palbdemodulator.h \
-    signalprocessor.h
+    signalprocessor.h \
+    tv_display.h
 
 FORMS += \
     mainwindow.ui

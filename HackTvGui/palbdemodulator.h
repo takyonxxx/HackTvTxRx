@@ -6,6 +6,7 @@
 #include <complex>
 #include <vector>
 #include <array>
+#include <deque>
 
 class PALBDemodulator : public QObject
 {
@@ -22,7 +23,7 @@ public:
     DemodulatedFrame demodulate(const std::vector<std::complex<float>>& samples);
 
 private:
-    // Constants for PAL-B
+    // Constants for PAL-B (adjusted for Turkey)
     static constexpr double VIDEO_CARRIER = 5.5e6;  // 5.5 MHz
     static constexpr double AUDIO_CARRIER = 5.74e6; // 5.74 MHz
     static constexpr double COLOR_SUBCARRIER = 4.43361875e6; // 4.43361875 MHz
@@ -46,6 +47,11 @@ private:
     std::complex<float> colorBurstOscillator;
     float colorBurstPhase;
 
+    // New members for improved functionality
+    double frequencyOffset;
+    std::deque<float> agcBuffer;
+    float agcGain;
+
     void demodulateAM(const std::vector<std::complex<float>>& samples);
     void extractVideoSignal();
     void extractAudioSignal();
@@ -59,6 +65,11 @@ private:
     float applyFilter(const std::vector<float>& filter, const std::vector<float>& signal, int index);
     std::complex<float> applyComplexFilter(const std::vector<float>& filter, const std::vector<std::complex<float>>& signal, int index);
     void yuv2rgb(float y, float u, float v, uint8_t& r, uint8_t& g, uint8_t& b);
+
+    // New helper functions
+    void estimateFrequencyOffset();
+    void applyFrequencyCorrection(std::vector<std::complex<float>>& samples);
+    void applyAGC(std::vector<float>& signal);
 };
 
 #endif // PALBDEMODULATOR_H

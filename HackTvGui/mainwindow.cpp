@@ -417,22 +417,26 @@ void MainWindow::addinputTypeGroup()
     mainLayout->addWidget(modeGroup);
 
     logBrowser = new QTextBrowser(this);
-    mainLayout->addWidget(logBrowser);
 
     QGroupBox *logGroup = new QGroupBox("Info", this);
-    QGridLayout *logLayout = new QGridLayout(logGroup);
-    logLayout->setVerticalSpacing(15);
-    logLayout->setHorizontalSpacing(15);
+    QHBoxLayout *logLayout = new QHBoxLayout(logGroup);
     logLayout->addWidget(logBrowser);
+    tvDisplay = new TVDisplay(this);
+    logLayout->addWidget(tvDisplay);
+    logLayout->setStretchFactor(logBrowser, 2);  // Changed from 1 to 2
+    logLayout->setStretchFactor(tvDisplay, 1);   // Changed from 2 to 1
     mainLayout->addWidget(logGroup);
+    logGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
+    QHBoxLayout *buttonLayout = new QHBoxLayout();
     executeButton = new QPushButton("Start", this);
     exitButton = new QPushButton("Exit", this);
     connect(exitButton, &QPushButton::clicked, this, &MainWindow::close);
-    mainLayout->addWidget(executeButton);
-    mainLayout->addWidget(exitButton);
 
-    mainLayout->addStretch();
+    buttonLayout->addWidget(executeButton);
+    buttonLayout->addWidget(exitButton);
+
+    mainLayout->addLayout(buttonLayout);
 
     fileDialog = new QFileDialog(this);
     fileDialog->setFileMode(QFileDialog::ExistingFile);
@@ -649,14 +653,6 @@ void MainWindow::addRxGroup()
 
     midLayout->addLayout(controlsLayout);
 
-    videoDisplay = new QLabel(this);
-    videoDisplay->setMinimumSize(720, 576);  // PAL resolution
-    videoDisplay->setAlignment(Qt::AlignCenter);
-    videoDisplay->setStyleSheet("background-color: blue;");  // Set background to blue
-
-    videoDisplay->setMinimumHeight(400);
-    midLayout->addWidget(videoDisplay);
-
     rxLayout->addLayout(midLayout);
     mainLayout->addWidget(rxGroup);
 }
@@ -812,9 +808,7 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 
 void MainWindow::updateDisplay(const QImage& image)
 {
-    videoDisplay->setPixmap(QPixmap::fromImage(image).scaled(videoDisplay->size(),
-                                                             Qt::KeepAspectRatio,
-                                                             Qt::SmoothTransformation));
+    tvDisplay->updateDisplay(image);
 }
 
 void MainWindow::processAudio(const std::vector<float>& demodulatedSamples)

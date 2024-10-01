@@ -27,6 +27,7 @@
 #include "signalprocessor.h"
 #include "modulator.h"
 #include "palbdemodulator.h"
+#include "tv_display.h"
 
 class MainWindow : public QMainWindow
 {
@@ -146,7 +147,7 @@ private:
     std::unique_ptr<FMDemodulator> fmDemodulator;
 
     PALBDemodulator* palbDemodulator;
-    QLabel* videoDisplay;
+    TVDisplay *tvDisplay;
 };
 
 #endif // MAINWINDOW_H

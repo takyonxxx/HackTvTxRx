@@ -5,12 +5,11 @@
 #include <numeric>
 
 PALBDemodulator::PALBDemodulator(double sampleRate, QObject *parent)
-    : QObject(parent), sampleRate(sampleRate), colorBurstPhase(0.0f)
+    : QObject(parent), sampleRate(sampleRate), colorBurstPhase(0.0f),
+    frequencyOffset(0.0), agcGain(1.0f)
 {
-    // Ensure sampleRate is within a reasonable range
-    if (sampleRate < 1e6 || sampleRate > 100e6) {
-        qWarning() << "Invalid sample rate:" << sampleRate << ". Setting to default 20e6.";
-        this->sampleRate = 20e6;
+    if (sampleRate != 20e6) {
+        qWarning() << "Sample rate is not 20 MHz. Adjusting processing accordingly.";
     }
 
     designFilters();
@@ -20,31 +19,80 @@ PALBDemodulator::PALBDemodulator(double sampleRate, QObject *parent)
     frameBuffer.fill({});
     uBuffer.fill({});
     vBuffer.fill({});
+    agcBuffer.resize(1024, 1.0f);  // Initialize AGC buffer
 }
 
 PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(const std::vector<std::complex<float>>& samples)
 {
     DemodulatedFrame frame;
 
-    // Step 1: Demodulate the AM signal
-    demodulateAM(samples);
+    // Step 1: Estimate and correct frequency offset
+    estimateFrequencyOffset();
+    std::vector<std::complex<float>> correctedSamples = samples;
+    applyFrequencyCorrection(correctedSamples);
 
-    // Step 2: Extract video and audio signals
+    // Step 2: Demodulate the AM signal
+    demodulateAM(correctedSamples);
+
+    // Step 3: Apply AGC
+    applyAGC(videoSignal);
+
+    // Step 4: Extract video and audio signals
     extractVideoSignal();
     extractAudioSignal();
 
-    // Step 3: Process video signal
+    // Step 5: Process video signal
     synchronizeHorizontal();
     synchronizeVertical();
     decodeColor();
 
-    // Step 4: Create QImage from processed video data
+    // Step 6: Create QImage from processed video data
     frame.image = createImage();
 
-    // Step 5: Process audio signal (simplified)
+    // Step 7: Process audio signal (simplified)
     frame.audio = audioSignal;
 
     return frame;
+}
+
+void PALBDemodulator::estimateFrequencyOffset()
+{
+    // Implement a frequency offset estimation algorithm
+    // This is a placeholder and should be replaced with a proper algorithm
+    // For example, you could use a FFT-based method to detect the carrier frequency
+    frequencyOffset = 0.0;  // Placeholder
+}
+
+void PALBDemodulator::applyFrequencyCorrection(std::vector<std::complex<float>>& samples)
+{
+    for (size_t i = 0; i < samples.size(); ++i) {
+        float phase = 2 * M_PI * frequencyOffset * i / sampleRate;
+        std::complex<float> correction(std::cos(phase), -std::sin(phase));
+        samples[i] *= correction;
+    }
+}
+
+void PALBDemodulator::applyAGC(std::vector<float>& signal)
+{
+    const float targetLevel = 0.5f;
+    const float attackRate = 0.01f;
+    const float decayRate = 0.001f;
+
+    for (float& sample : signal) {
+        float absample = std::abs(sample);
+        agcBuffer.pop_front();
+        agcBuffer.push_back(absample);
+
+        float maxLevel = *std::max_element(agcBuffer.begin(), agcBuffer.end());
+
+        if (maxLevel > targetLevel * agcGain) {
+            agcGain -= attackRate * (maxLevel - targetLevel * agcGain);
+        } else {
+            agcGain += decayRate * (targetLevel * agcGain - maxLevel);
+        }
+
+        sample *= agcGain;
+    }
 }
 
 void PALBDemodulator::demodulateAM(const std::vector<std::complex<float>>& samples)
@@ -81,7 +129,6 @@ void PALBDemodulator::extractVideoSignal()
 
 void PALBDemodulator::extractAudioSignal()
 {
-    // Apply audio bandpass filter
     audioSignal.resize(videoSignal.size());
     for (size_t i = 0; i < videoSignal.size(); ++i) {
         audioSignal[i] = applyFilter(audioFilter, videoSignal, i);
@@ -90,116 +137,83 @@ void PALBDemodulator::extractAudioSignal()
 
 void PALBDemodulator::synchronizeHorizontal()
 {
-    int64_t samplesPerLine = static_cast<int64_t>(std::round(LINE_DURATION * sampleRate));
-    int currentLine = 0;
+    const int SYNC_THRESHOLD = 100;  // Adjust based on your signal characteristics
+    const int SAMPLES_PER_LINE = static_cast<int>(sampleRate * LINE_DURATION);
 
-    for (size_t i = 0; i < videoSignal.size(); i += samplesPerLine) {
+    int lineStart = 0;
+    for (int line = 0; line < LINES_PER_FRAME; ++line) {
         // Find sync pulse
-        int syncStart = i;
-        float minValue = 1.0f;
-        for (int j = 0; j < samplesPerLine && (i + j) < videoSignal.size(); ++j) {
-            if (videoSignal[i + j] < minValue) {
-                minValue = videoSignal[i + j];
-                syncStart = i + j;
+        while (lineStart < videoSignal.size() - SAMPLES_PER_LINE &&
+               videoSignal[lineStart] > SYNC_THRESHOLD) {
+            ++lineStart;
+        }
+
+        // Process line
+        if (lineStart + SAMPLES_PER_LINE <= videoSignal.size()) {
+            for (int pixel = 0; pixel < PIXELS_PER_LINE; ++pixel) {
+                int sampleIndex = lineStart + pixel * SAMPLES_PER_LINE / PIXELS_PER_LINE;
+                frameBuffer[line][pixel] = videoSignal[sampleIndex];
             }
         }
 
-        // Extract active video region
-        int activeStart = syncStart + static_cast<int>(0.005 * sampleRate);  // 5µs after sync
-        for (int pixel = 0; pixel < PIXELS_PER_LINE; ++pixel) {
-            int sampleIndex = activeStart + (pixel * samplesPerLine / PIXELS_PER_LINE);
-            if (sampleIndex < videoSignal.size()) {
-                frameBuffer[currentLine][pixel] = videoSignal[sampleIndex];
-            } else {
-                frameBuffer[currentLine][pixel] = 0.0f;
-            }
-        }
-        currentLine = (currentLine + 1) % LINES_PER_FRAME;
+        lineStart += SAMPLES_PER_LINE;
     }
 }
 
 void PALBDemodulator::synchronizeVertical()
 {
-    // Detect vertical sync pulses
-    // This is a simplified version and may need refinement for real-world signals
-    int samplesPerField = static_cast<int>(FIELD_DURATION * sampleRate);
-    for (int i = 0; i < videoSignal.size() - samplesPerField; i++) {
-        int longPulseCount = 0;
-        for (int j = 0; j < 5; j++) {  // Check for 5 long pulses
-            if (videoSignal[i + j * static_cast<int>(LINE_DURATION * sampleRate)] < 0.1f) {
-                longPulseCount++;
+    const int FIELD_SYNC_LINES = 5;
+    const int FIELD_SYNC_THRESHOLD = 50;  // Adjust based on your signal characteristics
+
+    int fieldStart = 0;
+    for (int i = 0; i < LINES_PER_FRAME - FIELD_SYNC_LINES; ++i) {
+        int syncCount = 0;
+        for (int j = 0; j < FIELD_SYNC_LINES; ++j) {
+            if (*std::min_element(frameBuffer[i+j].begin(), frameBuffer[i+j].end()) < FIELD_SYNC_THRESHOLD) {
+                ++syncCount;
             }
         }
-        if (longPulseCount >= 4) {  // Found vertical sync
-            // Adjust frame start
-            std::rotate(frameBuffer.begin(), frameBuffer.begin() + (i / static_cast<int>(LINE_DURATION * sampleRate)), frameBuffer.end());
+        if (syncCount >= FIELD_SYNC_LINES - 1) {
+            fieldStart = i + FIELD_SYNC_LINES;
             break;
         }
     }
+
+    // Adjust frame buffer to start at the beginning of a field
+    std::rotate(frameBuffer.begin(), frameBuffer.begin() + fieldStart, frameBuffer.end());
 }
 
 void PALBDemodulator::decodeColor()
 {
-    int64_t samplesPerLine = static_cast<int64_t>(std::round(LINE_DURATION * sampleRate));
-    if (samplesPerLine <= 0 || samplesPerLine > static_cast<int64_t>(std::numeric_limits<int>::max())) {
-        qWarning() << "Invalid samplesPerLine value:" << samplesPerLine;
-        return;
-    }
+    const float BURST_START = 5.6e-6f;  // 5.6 µs after the start of horizontal sync
+    const float BURST_DURATION = 2.25e-6f;  // 2.25 µs duration
+    const int BURST_START_SAMPLE = static_cast<int>(BURST_START * sampleRate);
+    const int BURST_END_SAMPLE = static_cast<int>((BURST_START + BURST_DURATION) * sampleRate);
 
-    // Adjust these calculations to use microseconds
-    constexpr double BURST_START_US = 5.0;  // 5µs after sync
-    constexpr double BURST_END_US = 7.5;    // 7.5µs after sync
-
-    int burstStart = static_cast<int>(std::round((BURST_START_US * 1e-6) * sampleRate));
-    int burstEnd = static_cast<int>(std::round((BURST_END_US * 1e-6) * sampleRate));
-
-    if (burstStart >= burstEnd || burstEnd > PIXELS_PER_LINE) {
-        qWarning() << "Invalid burst start/end values:" << burstStart << burstEnd;
-        return;
-    }
-
-    bool colorBurstDetected = false;
     for (int line = 0; line < LINES_PER_FRAME; ++line) {
+        // Extract color burst
         std::complex<float> burst(0.0f, 0.0f);
-        for (int i = burstStart; i < burstEnd; ++i) {
-            if (i < 0 || i >= PIXELS_PER_LINE) {
-                qWarning() << "Invalid index in color burst extraction:" << i;
-                continue;
-            }
+        for (int i = BURST_START_SAMPLE; i < BURST_END_SAMPLE; ++i) {
             float sample = frameBuffer[line][i];
             burst += std::complex<float>(sample * std::cos(colorBurstPhase), sample * std::sin(colorBurstPhase));
             colorBurstPhase += 2 * M_PI * COLOR_SUBCARRIER / sampleRate;
         }
+        burst /= (BURST_END_SAMPLE - BURST_START_SAMPLE);
 
-        if (burstEnd > burstStart) {
-            burst /= static_cast<float>(burstEnd - burstStart);
-        }
+        // Correct color burst phase
+        float burstPhase = std::arg(burst);
+        std::complex<float> burstCorrection = std::exp(std::complex<float>(0, -burstPhase));
 
-        float burstMagnitude = std::abs(burst);
-        if (burstMagnitude > 1e-6f) {
-            colorBurstOscillator = std::conj(burst) / burstMagnitude;
-            colorBurstDetected = true;
-        } else {
-            colorBurstOscillator = std::complex<float>(1.0f, 0.0f);
-        }
-
+        // Demodulate color
         for (int pixel = 0; pixel < PIXELS_PER_LINE; ++pixel) {
             float y = frameBuffer[line][pixel];
-            if (colorBurstDetected) {
-                std::complex<float> color = std::complex<float>(y, 0.0f) * colorBurstOscillator;
-                uBuffer[line][pixel] = color.real();
-                vBuffer[line][pixel] = color.imag() * (line % 2 == 0 ? 1.0f : -1.0f);  // PAL switch
-                colorBurstOscillator *= std::polar(1.0f, static_cast<float>(2 * M_PI * COLOR_SUBCARRIER / sampleRate));
-            } else {
-                // If no color burst detected, treat as grayscale
-                uBuffer[line][pixel] = 0.0f;
-                vBuffer[line][pixel] = 0.0f;
-            }
-        }
-    }
+            std::complex<float> color = applyComplexFilter(colorBandpassFilter,
+                                                           reinterpret_cast<const std::vector<std::complex<float>>&>(frameBuffer[line]), pixel);
+            color *= burstCorrection;
 
-    if (!colorBurstDetected) {
-        qWarning() << "No color burst detected in any line. Treating image as grayscale.";
+            uBuffer[line][pixel] = color.real();
+            vBuffer[line][pixel] = (line % 2 == 0 ? 1.0f : -1.0f) * color.imag();  // PAL phase alternation
+        }
     }
 }
 
@@ -210,20 +224,20 @@ QImage PALBDemodulator::createImage()
     for (int y = 0; y < VISIBLE_LINES; ++y) {
         for (int x = 0; x < PIXELS_PER_LINE; ++x) {
             uint8_t r, g, b;
-            int actualY = y + (LINES_PER_FRAME - VISIBLE_LINES) / 2;
-            yuv2rgb(frameBuffer[actualY][x],
-                    uBuffer[actualY][x],
-                    vBuffer[actualY][x],
+            yuv2rgb(frameBuffer[y + (LINES_PER_FRAME - VISIBLE_LINES) / 2][x],
+                    uBuffer[y + (LINES_PER_FRAME - VISIBLE_LINES) / 2][x],
+                    vBuffer[y + (LINES_PER_FRAME - VISIBLE_LINES) / 2][x],
                     r, g, b);
             image.setPixel(x, y, qRgb(r, g, b));
         }
     }
+
     return image;
 }
 
 void PALBDemodulator::designFilters()
 {
-    // Adjust the cutoff frequencies
+    // Adjust the cutoff frequencies for 20 MHz sample rate
     double videoLowCutoff = (VIDEO_CARRIER - 2.5e6) / sampleRate;
     double videoHighCutoff = (VIDEO_CARRIER + 2.5e6) / sampleRate;
     double audioLowCutoff = (AUDIO_CARRIER - 15e3) / sampleRate;
@@ -240,8 +254,8 @@ void PALBDemodulator::designFilters()
             } else {
                 filter[i] = (std::sin(2 * M_PI * highCutoff * x) - std::sin(2 * M_PI * lowCutoff * x)) / (M_PI * x);
             }
-            // Apply Hamming window
-            filter[i] *= 0.54 - 0.46 * std::cos(2 * M_PI * i / (length - 1));
+            // Apply Blackman window for better sidelobe suppression
+            filter[i] *= 0.42 - 0.5 * std::cos(2 * M_PI * i / (length - 1)) + 0.08 * std::cos(4 * M_PI * i / (length - 1));
         }
         // Normalize
         float sum = std::accumulate(filter.begin(), filter.end(), 0.0f);
@@ -249,9 +263,9 @@ void PALBDemodulator::designFilters()
         return filter;
     };
 
-    videoFilter = designBandPass(videoLowCutoff, videoHighCutoff, 64);
-    audioFilter = designBandPass(audioLowCutoff, audioHighCutoff, 64);
-    colorBandpassFilter = designBandPass(colorLowCutoff, colorHighCutoff, 64);
+    videoFilter = designBandPass(videoLowCutoff, videoHighCutoff, 128);  // Increased filter length
+    audioFilter = designBandPass(audioLowCutoff, audioHighCutoff, 128);
+    colorBandpassFilter = designBandPass(colorLowCutoff, colorHighCutoff, 128);
 }
 
 float PALBDemodulator::applyFilter(const std::vector<float>& filter, const std::vector<float>& signal, int index)
