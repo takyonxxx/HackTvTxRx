@@ -14,7 +14,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_LowCutFreq(-1*int(DEFAULT_CUT_OFF)),
     m_HiCutFreq(DEFAULT_CUT_OFF),
     defaultWidth(800),
-    defaultHeight(600),
+    defaultHeight(800),
     m_isProcessing(false)
 {
     QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
@@ -423,7 +423,7 @@ void MainWindow::addinputTypeGroup()
     logLayout->addWidget(logBrowser);
     tvDisplay = new TVDisplay(this);
     logLayout->addWidget(tvDisplay);
-    logLayout->setStretchFactor(logBrowser, 2);  // Changed from 1 to 2
+    logLayout->setStretchFactor(logBrowser, 1);  // Changed from 1 to 2
     logLayout->setStretchFactor(tvDisplay, 1);   // Changed from 2 to 1
     mainLayout->addWidget(logGroup);
     logGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
