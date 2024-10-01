@@ -3,11 +3,27 @@ QT       += core gui multimedia
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
 CONFIG += c++17
-#PATH_DESKTOP = $$system(echo %USERPROFILE%\\Desktop)
 PARENT_DIR = $$absolute_path($$PWD/../)
-
 INCLUDEPATH += $$PARENT_DIR/include
-LIBS += -L$$PARENT_DIR/lib -lHackTvLib
+
+win32 {
+    #PATH_DESKTOP = $$system(echo %USERPROFILE%\\Desktop)
+    LIBS += -L$$PARENT_DIR/lib -lHackTvLib
+}
+
+unix {
+    LIBS += -L$$PARENT_DIR/lib -lHackTvLib
+
+    macx {
+        # macOS specific configurations
+        INCLUDEPATH += /usr/local/include
+        LIBS += -L/usr/local/lib
+    } else {
+        # Linux specific configurations
+        INCLUDEPATH += /usr/include
+        LIBS += -L/usr/lib
+    }
+}
 
 SOURCES += \
     audiooutput.cpp \
