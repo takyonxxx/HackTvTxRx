@@ -12,17 +12,25 @@ win32 {
 }
 
 unix {
-    LIBS += -L$$PARENT_DIR/lib -lHackTvLib
+    INCLUDEPATH += /usr/local/include
+    LIBS += -L/usr/local/lib
 
-    macx {
-        # macOS specific configurations
-        INCLUDEPATH += /usr/local/include
-        LIBS += -L/usr/local/lib
-    } else {
-        # Linux specific configurations
+    linux {
         INCLUDEPATH += /usr/include
         LIBS += -L/usr/lib
     }
+
+    macx {
+       HOMEBREW_PREFIX = $$system(brew --prefix)
+       !isEmpty(HOMEBREW_PREFIX) {
+           message("Homebrew found at $$HOMEBREW_PREFIX")
+           INCLUDEPATH += $$HOMEBREW_PREFIX/include
+           LIBS += -L$$HOMEBREW_PREFIX/lib
+       } else {
+           error("Homebrew not found. Please install Homebrew and required dependencies.")
+       }
+    }
+     LIBS += -lHackTvLib
 }
 
 SOURCES += \

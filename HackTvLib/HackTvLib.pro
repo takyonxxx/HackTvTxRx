@@ -26,6 +26,16 @@ win32 {
 unix {
     INCLUDEPATH += /usr/local/include
     LIBS += -L/usr/local/lib
+
+    target.path = /usr/lib
+    headers.files = $$HEADERS
+
+    linux {
+        INCLUDEPATH += /usr/include
+        LIBS += -L/usr/lib
+        headers.path = /usr/include/$$TARGET
+    }
+
     macx {    
        HOMEBREW_PREFIX = $$system(brew --prefix)
        !isEmpty(HOMEBREW_PREFIX) {
@@ -39,19 +49,15 @@ unix {
                INCLUDEPATH += $$QT_PREFIX/include
                LIBS += -L$$QT_PREFIX/lib
            }
-           HACKRF_PREFIX = $$system(brew --prefix hackrf)
-           !isEmpty(HACKRF_PREFIX) {
-               INCLUDEPATH += $$HACKRF_PREFIX/include
-               LIBS += -L$$HACKRF_PREFIX/lib
-           }
+           target.path = $$HOMEBREW_PREFIX/lib
+           headers.path = $$HOMEBREW_PREFIX/include/$$TARGET
        } else {
+           target.path = /usr/local/lib
+           headers.path = /usr/local/include/$$TARGET
            error("Homebrew not found. Please install Homebrew and required dependencies.")
        }
-    } else {
-        # Linux specific configurations
-        INCLUDEPATH += /usr/include
-        LIBS += -L/usr/lib
     }
+    INSTALLS += target headers
 }
 
 LIBS += -lusb-1.0 -lhackrf -lfftw3f -losmo-fl2k -lSoapySDR -lfdk-aac -lopus -lportaudio
@@ -126,10 +132,6 @@ HEADERS += \
 TRANSLATIONS += \
     HackTvLib_tr_TR.ts
 
-# Default rules for deployment.
-unix {
-    target.path = /usr/lib
-}
 !isEmpty(target.path): INSTALLS += target
 
 DISTFILES += \
