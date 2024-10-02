@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QImage>
+#include <QDebug>
 #include <complex>
 #include <vector>
 #include <array>
@@ -13,7 +14,7 @@ class PALBDemodulator : public QObject
     Q_OBJECT
 
 public:
-    explicit PALBDemodulator(double sampleRate, QObject *parent = nullptr);
+    explicit PALBDemodulator(double _sampleRate, QObject *parent = nullptr);
 
     struct DemodulatedFrame {
         QImage image;
@@ -21,6 +22,33 @@ public:
     };
 
     DemodulatedFrame demodulate(const std::vector<std::complex<float>>& samples);
+
+    std::vector<float> generateLowPassCoefficients(float sampleRate, float cutoffFreq, int numTaps)
+    {
+        std::vector<float> coeffs(numTaps);
+        float normCutoff = cutoffFreq / (sampleRate / 2); // Normalized cutoff frequency (0.0 to 1.0)
+
+        // Generate low-pass filter coefficients using the sinc function and Hamming window
+        for (int i = 0; i < numTaps; ++i) {
+            int middle = numTaps / 2;
+            if (i == middle) {
+                coeffs[i] = normCutoff;
+            } else {
+                float x = static_cast<float>(i - middle) * M_PI;
+                coeffs[i] = sin(normCutoff * x) / x;
+            }
+
+            // Apply Hamming window
+            coeffs[i] *= 0.54f - 0.46f * cos(2.0f * M_PI * i / (numTaps - 1));
+        }
+
+        // Normalize coefficients
+        float sum = 0.0f;
+        for (auto c : coeffs) sum += c;
+        for (auto& c : coeffs) c /= sum;
+
+        return coeffs;
+    }
 
 private:
     // Constants for PAL-B (adjusted for Turkey)
@@ -34,42 +62,12 @@ private:
     static constexpr double FIELD_DURATION = 0.02;  // 20 ms (50 Hz)
 
     double sampleRate;
-    std::vector<float> videoSignal;
-    std::vector<float> audioSignal;
-    std::array<std::array<float, PIXELS_PER_LINE>, LINES_PER_FRAME> frameBuffer;
-    std::array<std::array<float, PIXELS_PER_LINE>, LINES_PER_FRAME> uBuffer;
-    std::array<std::array<float, PIXELS_PER_LINE>, LINES_PER_FRAME> vBuffer;
 
-    // Filters and oscillators
-    std::vector<float> videoFilter;
-    std::vector<float> audioFilter;
-    std::vector<float> colorBandpassFilter;
-    std::complex<float> colorBurstOscillator;
-    float colorBurstPhase;
-
-    // New members for improved functionality
-    double frequencyOffset;
-    std::deque<float> agcBuffer;
-    float agcGain;
-
-    void demodulateAM(const std::vector<std::complex<float>>& samples);
-    void extractVideoSignal();
-    void extractAudioSignal();
-    void synchronizeHorizontal();
-    void synchronizeVertical();
-    void decodeColor();
-    QImage createImage();
-
-    // Helper functions
-    void designFilters();
-    float applyFilter(const std::vector<float>& filter, const std::vector<float>& signal, int index);
-    std::complex<float> applyComplexFilter(const std::vector<float>& filter, const std::vector<std::complex<float>>& signal, int index);
-    void yuv2rgb(float y, float u, float v, uint8_t& r, uint8_t& g, uint8_t& b);
-
-    // New helper functions
-    void estimateFrequencyOffset();
-    void applyFrequencyCorrection(std::vector<std::complex<float>>& samples);
-    void applyAGC(std::vector<float>& signal);
+    std::vector<float> lowPassFilter(const std::vector<float>& signal, float cutoffFreq);
+    std::vector<std::complex<float>> frequencyShift(const std::vector<std::complex<float>>& signal, double shiftFreq);
+    std::vector<float> amDemodulate(const std::vector<std::complex<float>>& signal);
+    std::vector<float> fmDemodulate(const std::vector<std::complex<float>>& signal);
+    QImage convertToImage(const std::vector<float>& videoSignal);
 };
 
 #endif // PALBDEMODULATOR_H
