@@ -765,7 +765,7 @@ void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
 
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-    /*if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput) {
+    if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput) {
         auto filteredSamples = lowPassFilter->apply(samples);
         auto resampledSamples = rationalResampler->resample(filteredSamples);
         auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);
@@ -790,7 +790,7 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 
     } else {
         qDebug() << "One or more components of the signal chain are not initialized.";
-    }*/
+    }
 
     if (palbDemodulator) {
         auto frame = palbDemodulator->demodulate(samples);
@@ -801,9 +801,9 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
                                   Q_ARG(const QImage&, frame.image));
 
 
-        QMetaObject::invokeMethod(this, "processAudio",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(const std::vector<float>&, frame.audio));
+        // QMetaObject::invokeMethod(this, "processAudio",
+        //                           Qt::QueuedConnection,
+        //                           Q_ARG(const std::vector<float>&, frame.audio));
 
     }
 }
@@ -1152,7 +1152,7 @@ void MainWindow::populateChannelCombo()
     };
 
     QVector<Channel> channels = {                                 
-                                 {"PowerFm", 100000000},
+                                 {"Tv", 620750000},
                                  {"E2", 48250000},
                                  {"E3", 55250000},
                                  {"E4", 62250000},

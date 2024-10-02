@@ -1,3 +1,4 @@
+
 #ifndef PALBDEMODULATOR_H
 #define PALBDEMODULATOR_H
 
@@ -6,8 +7,6 @@
 #include <QDebug>
 #include <complex>
 #include <vector>
-#include <array>
-#include <deque>
 
 class PALBDemodulator : public QObject
 {
@@ -23,33 +22,6 @@ public:
 
     DemodulatedFrame demodulate(const std::vector<std::complex<float>>& samples);
 
-    std::vector<float> generateLowPassCoefficients(float sampleRate, float cutoffFreq, int numTaps)
-    {
-        std::vector<float> coeffs(numTaps);
-        float normCutoff = cutoffFreq / (sampleRate / 2); // Normalized cutoff frequency (0.0 to 1.0)
-
-        // Generate low-pass filter coefficients using the sinc function and Hamming window
-        for (int i = 0; i < numTaps; ++i) {
-            int middle = numTaps / 2;
-            if (i == middle) {
-                coeffs[i] = normCutoff;
-            } else {
-                float x = static_cast<float>(i - middle) * M_PI;
-                coeffs[i] = sin(normCutoff * x) / x;
-            }
-
-            // Apply Hamming window
-            coeffs[i] *= 0.54f - 0.46f * cos(2.0f * M_PI * i / (numTaps - 1));
-        }
-
-        // Normalize coefficients
-        float sum = 0.0f;
-        for (auto c : coeffs) sum += c;
-        for (auto& c : coeffs) c /= sum;
-
-        return coeffs;
-    }
-
 private:
     // Constants for PAL-B (adjusted for Turkey)
     static constexpr double VIDEO_CARRIER = 5.5e6;  // 5.5 MHz
@@ -63,11 +35,19 @@ private:
 
     double sampleRate;
 
+    std::vector<float> generateLowPassCoefficients(float sampleRate, float cutoffFreq, int numTaps);
     std::vector<float> lowPassFilter(const std::vector<float>& signal, float cutoffFreq);
     std::vector<std::complex<float>> frequencyShift(const std::vector<std::complex<float>>& signal, double shiftFreq);
     std::vector<float> amDemodulate(const std::vector<std::complex<float>>& signal);
     std::vector<float> fmDemodulate(const std::vector<std::complex<float>>& signal);
     QImage convertToImage(const std::vector<float>& videoSignal);
+
+    // New helper functions
+    bool detectVerticalSync(const std::vector<float>& signal, size_t& syncStart);
+    std::vector<float> removeVBI(const std::vector<float>& signal);
+    std::vector<float> timingRecovery(const std::vector<float>& signal);
+    std::vector<float> removeDCOffset(const std::vector<float>& signal);
+    std::vector<float> applyAGC(const std::vector<float>& signal);
 };
 
 #endif // PALBDEMODULATOR_H
