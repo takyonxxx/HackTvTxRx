@@ -26,7 +26,6 @@
 #include "audiooutput.h"
 #include "signalprocessor.h"
 #include "modulator.h"
-#include "palbdemodulator.h"
 #include "tv_display.h"
 
 class MainWindow : public QMainWindow
@@ -145,9 +144,8 @@ private:
     std::unique_ptr<LowPassFilter> lowPassFilter;
     std::unique_ptr<RationalResampler> rationalResampler;
     std::unique_ptr<FMDemodulator> fmDemodulator;
-
-    PALBDemodulator* palbDemodulator;
     TVDisplay *tvDisplay;
+    QImage currentFrame;
 };
 
 #endif // MAINWINDOW_H

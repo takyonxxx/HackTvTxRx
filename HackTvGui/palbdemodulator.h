@@ -1,4 +1,3 @@
-
 #ifndef PALBDEMODULATOR_H
 #define PALBDEMODULATOR_H
 
@@ -55,3 +54,62 @@ private:
 };
 
 #endif // PALBDEMODULATOR_H
+
+
+// #ifndef PALBDEMODULATOR_H
+// #define PALBDEMODULATOR_H
+
+// #include <QObject>
+// #include <QImage>
+// #include <QVector>
+// #include <complex>
+// #include <vector>
+
+// class PALBDemodulator : public QObject
+// {
+//     Q_OBJECT
+
+// public:
+//     explicit PALBDemodulator(double sampleRate, QObject *parent = nullptr);
+
+//     struct PALSettings {
+//         bool asColor = true;
+//         unsigned field = 0;
+//         int hue = 0;
+//         int xoffset = 0;
+//         int yoffset = 0;
+//         int colorPhaseError = 0;
+//     };
+
+//     QImage demodulate(const std::vector<std::complex<float>>& samples, const PALSettings &settings);
+
+// private:
+//     static constexpr int PAL_HRES = 1135;
+//     static constexpr int PAL_VRES = 312;
+//     static constexpr int PAL_TOP = 22;
+//     static constexpr int PAL_LINES = 289;
+//     static constexpr int AV_LEN = 910;
+
+//     struct IIRLP {
+//         int c;
+//         int h;
+//     };
+
+//     IIRLP iirY, iirU, iirV;
+//     bool iirs_initialized = false;
+//     double m_sampleRate;
+
+//     void initIIR(IIRLP &f, int freq, int limit);
+//     void resetIIR(IIRLP &f);
+//     int iirf(IIRLP &f, int s);
+//     int expx(int n);
+//     void palSinCos14(int &sn, int &cs, int n);
+//     QVector<QVector<int>> generateCCBurst(int framephase, int field, int hue, int colorPhaseError);
+//     QVector<QVector<int>> generateCCSin(int framephase, int field, int hue, int colorPhaseError);
+//     QImage convertToImage(const QVector<QVector<int>> &analogSignal, int destw, int desth);
+//     double pixelsPerSample() const;
+// };
+
+// #endif // PALBDEMODULATOR_H
+
+

@@ -4,6 +4,7 @@
 #include <QtConcurrent/QtConcurrent>
 #include <QFuture>
 #include "constants.h"
+#include "palbdemodulator.h"
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
@@ -79,8 +80,6 @@ MainWindow::MainWindow(QWidget *parent)
     logTimer = new QTimer(this);
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
     logTimer->start(100);
-
-    palbDemodulator = new PALBDemodulator(m_sampleRate, this);
 }
 
 MainWindow::~MainWindow()
@@ -793,20 +792,18 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
         qDebug() << "One or more components of the signal chain are not initialized.";
     }
 
-    if (palbDemodulator) {
-        auto frame = palbDemodulator->demodulate(samples);
+    PALBDemodulator palbDemodulator(m_sampleRate);
+    auto frame = palbDemodulator.demodulate(samples);
 
-        // Update the video display
-        QMetaObject::invokeMethod(this, "updateDisplay",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(const QImage&, frame.image));
+    // Update the video display
+    QMetaObject::invokeMethod(this, "updateDisplay",
+                              Qt::QueuedConnection,
+                              Q_ARG(const QImage&, frame.image));
 
 
-        // QMetaObject::invokeMethod(this, "processAudio",
-        //                           Qt::QueuedConnection,
-        //                           Q_ARG(const std::vector<float>&, frame.audio));
-
-    }
+    // QMetaObject::invokeMethod(this, "processAudio",
+    //                           Qt::QueuedConnection,
+    //                           Q_ARG(const std::vector<float>&, frame.audio));
 }
 
 void MainWindow::updateDisplay(const QImage& image)
