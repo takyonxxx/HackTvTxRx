@@ -765,7 +765,8 @@ void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
 
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-    if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput) {
+    if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
+    {
         auto filteredSamples = lowPassFilter->apply(samples);
         auto resampledSamples = rationalResampler->resample(filteredSamples);
         auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);

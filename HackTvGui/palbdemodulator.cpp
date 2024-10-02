@@ -110,11 +110,53 @@ std::vector<float> PALBDemodulator::lowPassFilter(const std::vector<float>& sign
     return filtered;
 }
 
+std::vector<std::complex<float>> PALBDemodulator::extractColorSignal(const std::vector<float>& videoSignal)
+{
+    std::vector<std::complex<float>> colorSignal(videoSignal.size());
+    double phaseIncrement = 2 * M_PI * COLOR_SUBCARRIER / sampleRate;
+    std::complex<float> oscillator(1, 0);
+    std::complex<float> stepFactor(std::cos(phaseIncrement), std::sin(phaseIncrement));
+
+    for (size_t i = 0; i < videoSignal.size(); ++i) {
+        colorSignal[i] = videoSignal[i] * oscillator;
+        oscillator *= stepFactor;
+    }
+
+    return colorSignal;
+}
+
+std::vector<float> PALBDemodulator::demodulateU(const std::vector<std::complex<float>>& colorSignal)
+{
+    std::vector<float> uSignal(colorSignal.size());
+    for (size_t i = 0; i < colorSignal.size(); ++i) {
+        uSignal[i] = colorSignal[i].real();
+    }
+    return lowPassFilter(uSignal, 1.3e6);  // U bandwidth is typically around 1.3 MHz
+}
+
+std::vector<float> PALBDemodulator::demodulateV(const std::vector<std::complex<float>>& colorSignal)
+{
+    std::vector<float> vSignal(colorSignal.size());
+    for (size_t i = 0; i < colorSignal.size(); ++i) {
+        vSignal[i] = colorSignal[i].imag();
+    }
+    return lowPassFilter(vSignal, 1.3e6);  // V bandwidth is typically around 1.3 MHz
+}
+
+QRgb PALBDemodulator::yuv2rgb(float y, float u, float v)
+{
+    // Convert YUV to RGB
+    int r = std::clamp(static_cast<int>((y + 1.140f * v) * 255), 0, 255);
+    int g = std::clamp(static_cast<int>((y - 0.395f * u - 0.581f * v) * 255), 0, 255);
+    int b = std::clamp(static_cast<int>((y + 2.032f * u) * 255), 0, 255);
+
+    return qRgb(r, g, b);
+}
+
 QImage PALBDemodulator::convertToImage(const std::vector<float>& videoSignal)
 {
     QImage image(PIXELS_PER_LINE, VISIBLE_LINES, QImage::Format_Grayscale8);
     int pixelsPerLine = PIXELS_PER_LINE;
-
     for (int line = 0; line < VISIBLE_LINES; ++line) {
         for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
             size_t index = line * pixelsPerLine + pixel;
@@ -124,8 +166,30 @@ QImage PALBDemodulator::convertToImage(const std::vector<float>& videoSignal)
             }
         }
     }
-
     return image;
+
+    /*QImage image(PIXELS_PER_LINE, VISIBLE_LINES, QImage::Format_RGB32);
+    int pixelsPerLine = PIXELS_PER_LINE;
+
+    // Extract color information
+    auto colorSignal = extractColorSignal(videoSignal);
+    auto uSignal = demodulateU(colorSignal);
+    auto vSignal = demodulateV(colorSignal);
+
+    for (int line = 0; line < VISIBLE_LINES; ++line) {
+        for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
+            size_t index = line * pixelsPerLine + pixel;
+            if (index < videoSignal.size()) {
+                float y = videoSignal[index];
+                float u = uSignal[index];
+                float v = vSignal[index];
+
+                QRgb color = yuv2rgb(y, u, v);
+                image.setPixel(pixel, line, color);
+            }
+        }
+    }
+    return image;*/
 }
 
 std::vector<float> PALBDemodulator::generateLowPassCoefficients(float sampleRate, float cutoffFreq, int numTaps)

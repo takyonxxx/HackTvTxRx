@@ -15,26 +15,19 @@ class TVDisplay : public QWidget {
 
 public:
     TVDisplay(QWidget *parent = nullptr) : QWidget(parent) {
-        frameWidget = new QWidget(this);
-        frameWidget->setObjectName("frame");
 
-        blueScreen = new QWidget(frameWidget);
+        blueScreen = new QWidget(this);
         blueScreen->setObjectName("screen");
-        blueScreen->setStyleSheet("background-color:#051a42; border-radius: 20px;");
+        blueScreen->setStyleSheet("background-color:#102849; border-radius: 10px;");
 
         imageLabel = new QLabel(blueScreen);
         imageLabel->setAlignment(Qt::AlignCenter);
         imageLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
 
         QVBoxLayout *mainLayout = new QVBoxLayout(this);
-        mainLayout->addWidget(frameWidget);
-        mainLayout->setContentsMargins(20, 20, 20, 20);
-        setLayout(mainLayout);
-
-        QVBoxLayout *frameLayout = new QVBoxLayout(frameWidget);
-        frameLayout->addWidget(blueScreen);
-        frameLayout->setContentsMargins(10, 10, 10, 10);
-        frameWidget->setLayout(frameLayout);
+        mainLayout->addWidget(blueScreen);
+        mainLayout->setContentsMargins(10, 10, 10, 10);
+        setLayout(mainLayout);        
 
         QVBoxLayout *blueScreenLayout = new QVBoxLayout(blueScreen);
         blueScreenLayout->addWidget(imageLabel);
@@ -44,15 +37,14 @@ public:
         setStyleSheet(R"(
             #frame {
                 background-color: #404040;
-                border-radius: 30px;
+                border-radius: 5px;
             }
             #screen {
                 background-color: #112750;
-                border-radius: 20px;
+                border-radius: 5px;
             }
         )");
 
-        updateAspectRatio();
         if (!imageLabel->pixmap().isNull()) {
             updateDisplay(imageLabel->pixmap().toImage());
         }
@@ -78,7 +70,7 @@ public:
         QPainter painter(&roundedPixmap);
         painter.setRenderHint(QPainter::Antialiasing);
         QPainterPath path;
-        path.addRoundedRect(roundedPixmap.rect(), 20, 20);
+        path.addRoundedRect(roundedPixmap.rect(), 10, 10);
         painter.setClipPath(path);
         painter.drawPixmap(0, 0, scaledPixmap);
 
@@ -94,7 +86,6 @@ public:
 protected:
     void resizeEvent(QResizeEvent *event) override {
         QWidget::resizeEvent(event);
-        updateAspectRatio();
         if (!imageLabel->pixmap().isNull()) {
             updateDisplay(imageLabel->pixmap().toImage());
         }
@@ -104,18 +95,6 @@ private:
     QWidget *frameWidget;
     QWidget *blueScreen;
     QLabel *imageLabel;
-
-    void updateAspectRatio() {
-        int w = width() - 40;  // Account for main layout margins
-        int h = height() - 40;
-        int newH = w * 9 / 16;
-        if (newH <= h) {
-            frameWidget->setFixedSize(w, newH);
-        } else {
-            int newW = h * 16 / 9;
-            frameWidget->setFixedSize(newW, h);
-        }
-    }
 };
 
 #endif // TV_DISPLAY_H

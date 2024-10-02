@@ -40,6 +40,10 @@ private:
     std::vector<std::complex<float>> frequencyShift(const std::vector<std::complex<float>>& signal, double shiftFreq);
     std::vector<float> amDemodulate(const std::vector<std::complex<float>>& signal);
     std::vector<float> fmDemodulate(const std::vector<std::complex<float>>& signal);
+    std::vector<std::complex<float>> extractColorSignal(const std::vector<float>& videoSignal);
+    std::vector<float> demodulateU(const std::vector<std::complex<float>>& colorSignal);
+    std::vector<float> demodulateV(const std::vector<std::complex<float>>& colorSignal);
+    QRgb yuv2rgb(float y, float u, float v);
     QImage convertToImage(const std::vector<float>& videoSignal);
 
     // New helper functions
