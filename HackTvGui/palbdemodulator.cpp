@@ -44,10 +44,11 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(const std::vector<
     frame.image = convertToImage(filteredVideoSignal);
 
     // Step 5: Frequency shift to isolate the audio carrier
-    //auto shiftedAudio = frequencyShift(samples, -AUDIO_CARRIER);
+    auto shiftedAudio = frequencyShift(samples, -AUDIO_CARRIER);
 
     // Step 6: FM demodulate the audio signal
-    //auto audioSignal = fmDemodulate(shiftedAudio);
+    auto audioSignal = fmDemodulate(shiftedAudio);
+    frame.audio = audioSignal;
 
     // Optional: Apply a low-pass filter to the demodulated audio signal
     //float audioCutoffFrequency = 15e3; // Standard audio cutoff for PAL is 15 kHz
@@ -160,36 +161,36 @@ QImage PALBDemodulator::convertToImage(const std::vector<float>& videoSignal)
     for (int line = 0; line < VISIBLE_LINES; ++line) {
         for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
             size_t index = line * pixelsPerLine + pixel;
-            if (index < videoSignal.size()) {
+            //if (index < videoSignal.size()) {
                 uint8_t value = static_cast<uint8_t>(std::clamp(videoSignal[index] * 255.0f, 0.0f, 255.0f));
                 image.setPixel(pixel, line, qRgb(value, value, value));
-            }
+           // }
         }
     }
     return image;
 
-    /*QImage image(PIXELS_PER_LINE, VISIBLE_LINES, QImage::Format_RGB32);
-    int pixelsPerLine = PIXELS_PER_LINE;
+    // QImage image(PIXELS_PER_LINE, VISIBLE_LINES, QImage::Format_RGB32);
+    // int pixelsPerLine = PIXELS_PER_LINE;
 
-    // Extract color information
-    auto colorSignal = extractColorSignal(videoSignal);
-    auto uSignal = demodulateU(colorSignal);
-    auto vSignal = demodulateV(colorSignal);
+    // // Extract color information
+    // auto colorSignal = extractColorSignal(videoSignal);
+    // auto uSignal = demodulateU(colorSignal);
+    // auto vSignal = demodulateV(colorSignal);
 
-    for (int line = 0; line < VISIBLE_LINES; ++line) {
-        for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
-            size_t index = line * pixelsPerLine + pixel;
-            if (index < videoSignal.size()) {
-                float y = videoSignal[index];
-                float u = uSignal[index];
-                float v = vSignal[index];
+    // for (int line = 0; line < VISIBLE_LINES; ++line) {
+    //     for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
+    //         size_t index = line * pixelsPerLine + pixel;
+    //         if (index < videoSignal.size()) {
+    //             float y = videoSignal[index];
+    //             float u = uSignal[index];
+    //             float v = vSignal[index];
 
-                QRgb color = yuv2rgb(y, u, v);
-                image.setPixel(pixel, line, color);
-            }
-        }
-    }
-    return image;*/
+    //             QRgb color = yuv2rgb(y, u, v);
+    //             image.setPixel(pixel, line, color);
+    //         }
+    //     }
+    // }
+    // return image;
 }
 
 std::vector<float> PALBDemodulator::generateLowPassCoefficients(float sampleRate, float cutoffFreq, int numTaps)
@@ -307,166 +308,3 @@ std::vector<float> PALBDemodulator::applyAGC(const std::vector<float>& signal)
 
     return agcSignal;
 }
-
-// #include "palbdemodulator.h"
-// #include <QtMath>
-// #include <QDebug>
-
-// PALBDemodulator::PALBDemodulator(double sampleRate, QObject *parent)
-//     : QObject(parent)
-//     , m_sampleRate(sampleRate)
-// {
-// }
-
-// double PALBDemodulator::pixelsPerSample() const
-// {
-//     // PAL line duration is 64 μs
-//     const double lineDuration = 64e-6;
-//     return PAL_HRES / (m_sampleRate * lineDuration);
-// }
-
-// QImage PALBDemodulator::demodulate(const std::vector<std::complex<float>>& samples, const PALSettings &settings)
-// {
-//     if (samples.empty()) {
-//         qWarning() << "Input samples are empty";
-//         return QImage();
-//     }
-
-//     int destw = AV_LEN;
-//     int desth = (PAL_LINES * 64500) >> 16;
-
-//     if (!iirs_initialized) {
-//         initIIR(iirY, 1773448, 520000);
-//         initIIR(iirU, 1773448, 129000);
-//         initIIR(iirV, 1773448, 129000);
-//         iirs_initialized = true;
-//     }
-
-//     int framephase = (settings.field & 7) * 270;
-//     int field = settings.field & 1;
-
-//     auto ccburst = generateCCBurst(framephase, field, settings.hue, settings.colorPhaseError);
-//     auto ccsin = generateCCSin(framephase, field, settings.hue, settings.colorPhaseError);
-
-//     int xo = 225 + settings.xoffset + (AV_LEN - destw) / 2;
-//     int yo = PAL_TOP + settings.yoffset + (PAL_LINES - desth) / 2;
-
-//     xo = (xo & ~3);
-
-//     QVector<QVector<int>> analogSignal(PAL_VRES, QVector<int>(PAL_HRES, 0));
-
-//     double pps = pixelsPerSample();
-
-//     size_t sampleIndex = 0;
-//     for (int y = 0; y < desth && sampleIndex < samples.size(); ++y) {
-//         resetIIR(iirY);
-//         resetIIR(iirU);
-//         resetIIR(iirV);
-
-//         for (int x = 0; x < destw && sampleIndex < samples.size(); ++x, ++sampleIndex) {
-
-//             size_t currentSampleIndex = static_cast<size_t>(x / pps);
-//             if (currentSampleIndex != sampleIndex) {
-//                 sampleIndex = currentSampleIndex;
-//                 if (sampleIndex >= samples.size()) break;
-//             }
-
-//             float magnitude = std::abs(samples[sampleIndex]);
-//             int fy = static_cast<int>(magnitude * 255); // Assuming magnitude is between 0 and 1
-//             int ire = 0; // BLACK_LEVEL
-
-//             int voff = ((y + yo) & 3);
-//             fy = iirf(iirY, fy);
-
-//             if (settings.asColor) {
-//                 int sn, cs;
-//                 palSinCos14(sn, cs, ccsin[voff][(x + xo) & 3] - ((y + yo) * 10 * 8192) / 3125);
-//                 float phase = std::arg(samples[sampleIndex]);
-//                 int fu = static_cast<int>(std::cos(phase) * 255);
-//                 int fv = static_cast<int>(std::sin(phase) * 255);
-//                 fu = iirf(iirU, fu) * sn >> 14;
-//                 fv = (voff & 1 ? -1 : 1) * iirf(iirV, fv) * cs >> 14;
-//                 ire += (fy + fu + fv) * 100 >> 10;
-//             } else {
-//                 ire += fy * 100 >> 10;
-//             }
-
-//             ire = qBound(0, ire, 110);
-//             analogSignal[y + yo][x + xo] = ire;
-//         }
-//     }
-
-//     return convertToImage(analogSignal, destw, desth);
-// }
-
-// void PALBDemodulator::initIIR(IIRLP &f, int freq, int limit)
-// {
-//     int rate = (freq << 9) / limit;
-//     f.c = 2048 - expx(-((6434 << 9) / rate));
-//     f.h = 0;
-// }
-
-// void PALBDemodulator::resetIIR(IIRLP &f)
-// {
-//     f.h = 0;
-// }
-
-// int PALBDemodulator::iirf(IIRLP &f, int s)
-// {
-//     f.h += ((s - f.h) * f.c) >> 11;
-//     return f.h;
-// }
-
-// int PALBDemodulator::expx(int n)
-// {
-//     // Simplified exponential function implementation
-//     return 2048 - (n * 1887) / 2048;
-// }
-
-// void PALBDemodulator::palSinCos14(int &sn, int &cs, int n)
-// {
-//     // Simplified sine and cosine calculation
-//     double angle = n * M_PI / 4096.0;
-//     sn = qRound(qSin(angle) * 16384);
-//     cs = qRound(qCos(angle) * 16384);
-// }
-
-// QVector<QVector<int>> PALBDemodulator::generateCCBurst(int framephase, int field, int hue, int colorPhaseError)
-// {
-//     QVector<QVector<int>> ccburst(4, QVector<int>(4));
-//     for (int y = 0; y < 4; ++y) {
-//         int vert = y * 90;
-//         for (int x = 0; x < 4; ++x) {
-//             int n = -vert + hue + x * 90 + 45 + framephase + field * 180;
-//             ccburst[y][x] = (n + (y & 1 ? -45 : 45)) * 8192 / 180;
-//         }
-//     }
-//     return ccburst;
-// }
-
-// QVector<QVector<int>> PALBDemodulator::generateCCSin(int framephase, int field, int hue, int colorPhaseError)
-// {
-//     QVector<QVector<int>> ccsin(4, QVector<int>(4));
-//     for (int y = 0; y < 4; ++y) {
-//         int vert = y * 90;
-//         for (int x = 0; x < 4; ++x) {
-//             int n = -vert + hue + x * 90 + 45 + framephase + field * 180;
-//             int calign = 25 - (colorPhaseError * 20);
-//             ccsin[y][x] = (n - (180 + calign)) * 8192 / 180;
-//         }
-//     }
-//     return ccsin;
-// }
-
-// QImage PALBDemodulator::convertToImage(const QVector<QVector<int>> &analogSignal, int destw, int desth)
-// {
-//     QImage image(destw, desth, QImage::Format_RGB888);
-//     for (int y = 0; y < desth; ++y) {
-//         for (int x = 0; x < destw; ++x) {
-//             int ire = analogSignal[y + PAL_TOP][x + 225];
-//             int value = qBound(0, ire * 255 / 110, 255);
-//             image.setPixelColor(x, y, QColor(value, value, value));
-//         }
-//     }
-//     return image;
-// }
