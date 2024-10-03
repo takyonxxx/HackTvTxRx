@@ -67,6 +67,8 @@ MainWindow::MainWindow(QWidget *parent)
         m_signalProcessor = new SignalProcessor(this);
         connect(m_signalProcessor, &SignalProcessor::samplesReady, this, &MainWindow::handleSamples);
         m_signalProcessor->start();
+
+        palbDemodulator = new PALBDemodulator(m_sampleRate);
     }
     catch (const std::exception& e) {
         qDebug() << "Exception in createHackTvLib:" << e.what();
@@ -792,18 +794,21 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 //         qDebug() << "One or more components of the signal chain are not initialized.";
 //     }
 
-    PALBDemodulator palbDemodulator(m_sampleRate);
-    auto frame = palbDemodulator.demodulate(samples);
 
-    // Update the video display
-    QMetaObject::invokeMethod(this, "updateDisplay",
-                              Qt::QueuedConnection,
-                              Q_ARG(const QImage&, frame.image));
+    if(palbDemodulator)
+    {
+        auto frame = palbDemodulator->demodulate(samples);
+
+        QMetaObject::invokeMethod(this, "updateDisplay",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(const QImage&, frame.image));
 
 
-    QMetaObject::invokeMethod(this, "processAudio",
-                              Qt::QueuedConnection,
-                              Q_ARG(const std::vector<float>&, frame.audio));
+        QMetaObject::invokeMethod(this, "processAudio",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(const std::vector<float>&, frame.audio));
+    }
+
 }
 
 void MainWindow::updateDisplay(const QImage& image)

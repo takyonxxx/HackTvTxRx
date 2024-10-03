@@ -50,9 +50,8 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(const std::vector<
     auto audioSignal = fmDemodulate(shiftedAudio);
     frame.audio = audioSignal;
 
-    // Optional: Apply a low-pass filter to the demodulated audio signal
-    //float audioCutoffFrequency = 15e3; // Standard audio cutoff for PAL is 15 kHz
-    //frame.audio = lowPassFilter(audioSignal, audioCutoffFrequency);
+    // float audioCutoffFrequency = 15e3; // Standard audio cutoff for PAL is 15 kHz
+    // frame.audio = lowPassFilter(audioSignal, audioCutoffFrequency);
 
     return frame;
 }
@@ -161,10 +160,10 @@ QImage PALBDemodulator::convertToImage(const std::vector<float>& videoSignal)
     for (int line = 0; line < VISIBLE_LINES; ++line) {
         for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
             size_t index = line * pixelsPerLine + pixel;
-            //if (index < videoSignal.size()) {
+            if (index < videoSignal.size()) {
                 uint8_t value = static_cast<uint8_t>(std::clamp(videoSignal[index] * 255.0f, 0.0f, 255.0f));
                 image.setPixel(pixel, line, qRgb(value, value, value));
-           // }
+            }
         }
     }
     return image;
