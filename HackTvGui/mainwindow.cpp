@@ -766,34 +766,33 @@ void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
 
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-//     if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
-//     {
-//         auto filteredSamples = lowPassFilter->apply(samples);
-//         auto resampledSamples = rationalResampler->resample(filteredSamples);
-//         auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);
+    if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
+    {
+        auto filteredSamples = lowPassFilter->apply(samples);
+        auto resampledSamples = rationalResampler->resample(filteredSamples);
+        auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);
 
-//         // Normalize the demodulated samples
-//         float maxAbs = 0.0f;
-//         for (const auto& sample : demodulatedSamples) {
-//             maxAbs = std::max(maxAbs, std::abs(sample));
-//         }
-//         if (maxAbs > 0) {
-//             float scale = 1.0f / maxAbs;
-// #pragma omp parallel for
-//             for (size_t i = 0; i < demodulatedSamples.size(); ++i) {
-//                 demodulatedSamples[i] = std::clamp(demodulatedSamples[i] * scale * audioGain, -1.0f, 1.0f);
-//             }
-//         }
+        // Normalize the demodulated samples
+        float maxAbs = 0.0f;
+        for (const auto& sample : demodulatedSamples) {
+            maxAbs = std::max(maxAbs, std::abs(sample));
+        }
+        if (maxAbs > 0) {
+            float scale = 1.0f / maxAbs;
+#pragma omp parallel for
+            for (size_t i = 0; i < demodulatedSamples.size(); ++i) {
+                demodulatedSamples[i] = std::clamp(demodulatedSamples[i] * scale * audioGain, -1.0f, 1.0f);
+            }
+        }
 
-//         // Queue the audio data for playback
-//         QMetaObject::invokeMethod(this, "processAudio",
-//                                   Qt::QueuedConnection,
-//                                   Q_ARG(const std::vector<float>&, demodulatedSamples));
+        // Queue the audio data for playback
+        QMetaObject::invokeMethod(this, "processAudio",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(const std::vector<float>&, demodulatedSamples));
 
-//     } else {
-//         qDebug() << "One or more components of the signal chain are not initialized.";
-//     }
-
+    } else {
+        qDebug() << "One or more components of the signal chain are not initialized.";
+    }
 
     if(palbDemodulator)
     {
@@ -804,9 +803,9 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
                                   Q_ARG(const QImage&, frame.image));
 
 
-        QMetaObject::invokeMethod(this, "processAudio",
+        /*QMetaObject::invokeMethod(this, "processAudio",
                                   Qt::QueuedConnection,
-                                  Q_ARG(const std::vector<float>&, frame.audio));
+                                  Q_ARG(const std::vector<float>&, frame.audio));*/
     }
 
 }
