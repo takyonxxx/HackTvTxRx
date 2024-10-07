@@ -1,5 +1,6 @@
 #include "palbdemodulator.h"
 #include <cmath>
+#include <algorithm>
 
 PALBDemodulator::PALBDemodulator(double _sampleRate, QObject *parent)
     : QObject(parent), sampleRate(_sampleRate)
@@ -8,6 +9,8 @@ PALBDemodulator::PALBDemodulator(double _sampleRate, QObject *parent)
         qWarning() << "Sample rate is less than 16 MHz. Adjusting processing accordingly.";
         sampleRate = 16e6;
     }
+    m_fltBufferI.fill(0.0f);
+    m_fltBufferQ.fill(0.0f);
 }
 
 PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(const std::vector<std::complex<float>>& samples)
@@ -17,41 +20,35 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(const std::vector<
     // Step 1: Frequency shift to isolate the video carrier
     auto shiftedVideo = frequencyShift(samples, -VIDEO_CARRIER);
 
-    // Step 2: AM demodulate the shifted video signal
-    auto videoSignal = amDemodulate(shiftedVideo);
+    // Step 2: FM demodulate the shifted video signal using YDiff method
+    auto videoSignal = fmDemodulateYDiff(shiftedVideo);
 
-    // New steps: DC offset removal and AGC
+    // Step 3: Remove DC offset and apply AGC
     videoSignal = removeDCOffset(videoSignal);
     videoSignal = applyAGC(videoSignal);
 
-    // New step: Vertical sync detection and alignment
+    // Step 4: Vertical sync detection and alignment
     size_t syncStart;
     if (detectVerticalSync(videoSignal, syncStart)) {
         videoSignal = std::vector<float>(videoSignal.begin() + syncStart, videoSignal.end());
     }
 
-    // New step: Remove Vertical Blanking Interval
+    // Step 5: Remove Vertical Blanking Interval
     videoSignal = removeVBI(videoSignal);
 
-    // New step: Timing recovery
+    // Step 6: Timing recovery
     videoSignal = timingRecovery(videoSignal);
 
-    // Step 3: Apply a low-pass filter to the demodulated video signal
+    // Step 7: Apply a low-pass filter to the demodulated video signal
     float videoCutoffFrequency = 4.5e6; // Typically, PAL video bandwidth is around 4.5 MHz
     auto filteredVideoSignal = lowPassFilter(videoSignal, videoCutoffFrequency);
 
-    // Step 4: Generate the video frame from the filtered video signal
+    // Step 8: Generate the video frame from the filtered video signal
     frame.image = convertToImage(filteredVideoSignal);
 
-    // Step 5: Frequency shift to isolate the audio carrier
+    // Audio processing (simplified for now)
     auto shiftedAudio = frequencyShift(samples, -AUDIO_CARRIER);
-
-    // Step 6: FM demodulate the audio signal
-    auto audioSignal = fmDemodulate(shiftedAudio);
-    frame.audio = audioSignal;
-
-    // float audioCutoffFrequency = 15e3; // Standard audio cutoff for PAL is 15 kHz
-    // frame.audio = lowPassFilter(audioSignal, audioCutoffFrequency);
+    frame.audio = fmDemodulateYDiff(shiftedAudio);
 
     return frame;
 }
@@ -61,7 +58,7 @@ std::vector<std::complex<float>> PALBDemodulator::frequencyShift(const std::vect
     std::vector<std::complex<float>> shifted(signal.size());
     double phaseIncrement = 2 * M_PI * shiftFreq / sampleRate;
     std::complex<float> phase(1, 0);
-    std::complex<float> phaseStep(cos(phaseIncrement), sin(phaseIncrement));
+    std::complex<float> phaseStep(std::cos(phaseIncrement), std::sin(phaseIncrement));
 
     for (size_t i = 0; i < signal.size(); ++i) {
         shifted[i] = signal[i] * phase;
@@ -71,157 +68,90 @@ std::vector<std::complex<float>> PALBDemodulator::frequencyShift(const std::vect
     return shifted;
 }
 
-std::vector<float> PALBDemodulator::amDemodulate(const std::vector<std::complex<float>>& signal)
+std::vector<float> PALBDemodulator::fmDemodulateYDiff(const std::vector<std::complex<float>>& signal)
 {
     std::vector<float> demodulated(signal.size());
-    std::transform(signal.begin(), signal.end(), demodulated.begin(),
-                   [](std::complex<float> sample) { return std::abs(sample); });
-    return demodulated;
-}
 
-std::vector<float> PALBDemodulator::fmDemodulate(const std::vector<std::complex<float>>& signal)
-{
-    std::vector<float> demodulated(signal.size());
-    for (size_t i = 1; i < signal.size(); ++i) {
-        float phaseDiff = std::arg(signal[i] * std::conj(signal[i - 1]));
-        demodulated[i] = phaseDiff;
+    for (size_t i = 0; i < signal.size(); ++i)
+    {
+        float sampleNorm = std::abs(signal[i]);
+        float sampleNormI = signal[i].real() / sampleNorm;
+        float sampleNormQ = signal[i].imag() / sampleNorm;
+
+        float sample = m_fltBufferI[0] * (sampleNormQ - m_fltBufferQ[1]);
+        sample -= m_fltBufferQ[0] * (sampleNormI - m_fltBufferI[1]);
+
+        sample += 2.0f;
+        sample /= 4.0f;
+
+        m_fltBufferI[1] = m_fltBufferI[0];
+        m_fltBufferQ[1] = m_fltBufferQ[0];
+
+        m_fltBufferI[0] = sampleNormI;
+        m_fltBufferQ[0] = sampleNormQ;
+
+        demodulated[i] = sample;
     }
+
     return demodulated;
 }
 
 std::vector<float> PALBDemodulator::lowPassFilter(const std::vector<float>& signal, float cutoffFreq)
 {
-    int numTaps = 101; // Adjust based on the desired filter sharpness and latency
-    std::vector<float> coefficients = generateLowPassCoefficients(sampleRate, cutoffFreq, numTaps);
+    // Implement a simple moving average filter for now
+    // For better results, implement a proper FIR filter
+    const int windowSize = static_cast<int>(sampleRate / cutoffFreq);
+    std::vector<float> filtered(signal.size());
 
-    int signalSize = signal.size();
-    std::vector<float> filtered(signalSize, 0.0f);
-
-    for (int i = 0; i < signalSize; ++i) {
-        float acc = 0.0f;
-        for (int j = 0; j < numTaps; ++j) {
-            if (i - j >= 0) {
-                acc += signal[i - j] * coefficients[j];
-            }
+    for (size_t i = 0; i < signal.size(); ++i)
+    {
+        float sum = 0.0f;
+        int count = 0;
+        for (int j = std::max(0, static_cast<int>(i) - windowSize/2);
+             j < std::min(static_cast<int>(signal.size()), static_cast<int>(i) + windowSize/2 + 1); ++j)
+        {
+            sum += signal[j];
+            ++count;
         }
-        filtered[i] = acc;
+        filtered[i] = sum / count;
     }
 
     return filtered;
 }
 
-std::vector<std::complex<float>> PALBDemodulator::extractColorSignal(const std::vector<float>& videoSignal)
+std::vector<float> PALBDemodulator::removeDCOffset(const std::vector<float>& signal)
 {
-    std::vector<std::complex<float>> colorSignal(videoSignal.size());
-    double phaseIncrement = 2 * M_PI * COLOR_SUBCARRIER / sampleRate;
-    std::complex<float> oscillator(1, 0);
-    std::complex<float> stepFactor(std::cos(phaseIncrement), std::sin(phaseIncrement));
-
-    for (size_t i = 0; i < videoSignal.size(); ++i) {
-        colorSignal[i] = videoSignal[i] * oscillator;
-        oscillator *= stepFactor;
-    }
-
-    return colorSignal;
+    float mean = std::accumulate(signal.begin(), signal.end(), 0.0f) / signal.size();
+    std::vector<float> corrected(signal.size());
+    std::transform(signal.begin(), signal.end(), corrected.begin(),
+                   [mean](float sample) { return sample - mean; });
+    return corrected;
 }
 
-std::vector<float> PALBDemodulator::demodulateU(const std::vector<std::complex<float>>& colorSignal)
+std::vector<float> PALBDemodulator::applyAGC(const std::vector<float>& signal)
 {
-    std::vector<float> uSignal(colorSignal.size());
-    for (size_t i = 0; i < colorSignal.size(); ++i) {
-        uSignal[i] = colorSignal[i].real();
-    }
-    return lowPassFilter(uSignal, 1.3e6);  // U bandwidth is typically around 1.3 MHz
-}
+    const float targetAmplitude = 0.7f;
+    const float agcAttackRate = 0.01f;
 
-std::vector<float> PALBDemodulator::demodulateV(const std::vector<std::complex<float>>& colorSignal)
-{
-    std::vector<float> vSignal(colorSignal.size());
-    for (size_t i = 0; i < colorSignal.size(); ++i) {
-        vSignal[i] = colorSignal[i].imag();
-    }
-    return lowPassFilter(vSignal, 1.3e6);  // V bandwidth is typically around 1.3 MHz
-}
+    std::vector<float> agcSignal(signal.size());
+    float currentGain = 1.0f;
 
-QRgb PALBDemodulator::yuv2rgb(float y, float u, float v)
-{
-    // Convert YUV to RGB
-    int r = std::clamp(static_cast<int>((y + 1.140f * v) * 255), 0, 255);
-    int g = std::clamp(static_cast<int>((y - 0.395f * u - 0.581f * v) * 255), 0, 255);
-    int b = std::clamp(static_cast<int>((y + 2.032f * u) * 255), 0, 255);
-
-    return qRgb(r, g, b);
-}
-
-QImage PALBDemodulator::convertToImage(const std::vector<float>& videoSignal)
-{
-    QImage image(PIXELS_PER_LINE, VISIBLE_LINES, QImage::Format_Grayscale8);
-    int pixelsPerLine = PIXELS_PER_LINE;
-    for (int line = 0; line < VISIBLE_LINES; ++line) {
-        for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
-            size_t index = line * pixelsPerLine + pixel;
-            if (index < videoSignal.size()) {
-                uint8_t value = static_cast<uint8_t>(std::clamp(videoSignal[index] * 255.0f, 0.0f, 255.0f));
-                image.setPixel(pixel, line, qRgb(value, value, value));
-            }
-        }
-    }
-    return image;
-
-    // QImage image(PIXELS_PER_LINE, VISIBLE_LINES, QImage::Format_RGB32);
-    // int pixelsPerLine = PIXELS_PER_LINE;
-
-    // // Extract color information
-    // auto colorSignal = extractColorSignal(videoSignal);
-    // auto uSignal = demodulateU(colorSignal);
-    // auto vSignal = demodulateV(colorSignal);
-
-    // for (int line = 0; line < VISIBLE_LINES; ++line) {
-    //     for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
-    //         size_t index = line * pixelsPerLine + pixel;
-    //         if (index < videoSignal.size()) {
-    //             float y = videoSignal[index];
-    //             float u = uSignal[index];
-    //             float v = vSignal[index];
-
-    //             QRgb color = yuv2rgb(y, u, v);
-    //             image.setPixel(pixel, line, color);
-    //         }
-    //     }
-    // }
-    // return image;
-}
-
-std::vector<float> PALBDemodulator::generateLowPassCoefficients(float sampleRate, float cutoffFreq, int numTaps)
-{
-    std::vector<float> coeffs(numTaps);
-    float normCutoff = cutoffFreq / (sampleRate / 2); // Normalized cutoff frequency (0.0 to 1.0)
-
-    for (int i = 0; i < numTaps; ++i) {
-        int middle = numTaps / 2;
-        if (i == middle) {
-            coeffs[i] = normCutoff;
+    for (size_t i = 0; i < signal.size(); ++i) {
+        float absValue = std::abs(signal[i]);
+        if (absValue * currentGain > targetAmplitude) {
+            currentGain = targetAmplitude / absValue;
         } else {
-            float x = static_cast<float>(i - middle) * M_PI;
-            coeffs[i] = sin(normCutoff * x) / x;
+            currentGain += agcAttackRate * (targetAmplitude / std::max(absValue, 1e-6f) - currentGain);
         }
-        // Apply Hamming window
-        coeffs[i] *= 0.54f - 0.46f * cos(2.0f * M_PI * i / (numTaps - 1));
+        agcSignal[i] = signal[i] * currentGain;
     }
 
-    // Normalize coefficients
-    float sum = std::accumulate(coeffs.begin(), coeffs.end(), 0.0f);
-    for (auto& c : coeffs) c /= sum;
-
-    return coeffs;
+    return agcSignal;
 }
-
-// New helper function implementations
 
 bool PALBDemodulator::detectVerticalSync(const std::vector<float>& signal, size_t& syncStart)
 {
     // Simple vertical sync detection based on signal level
-    // Adjust these thresholds based on your specific signal characteristics
     const float syncThreshold = 0.1f;
     const size_t minSyncDuration = static_cast<size_t>(sampleRate * 150e-6); // 150 µs sync pulse
 
@@ -257,7 +187,6 @@ std::vector<float> PALBDemodulator::removeVBI(const std::vector<float>& signal)
 std::vector<float> PALBDemodulator::timingRecovery(const std::vector<float>& signal)
 {
     // Simple linear interpolation for timing recovery
-    // For more advanced timing recovery, consider implementing a PLL-based approach
     const double nominalSamplesPerLine = sampleRate * LINE_DURATION;
     const double resampleRatio = PIXELS_PER_LINE / nominalSamplesPerLine;
 
@@ -278,32 +207,19 @@ std::vector<float> PALBDemodulator::timingRecovery(const std::vector<float>& sig
     return recovered;
 }
 
-std::vector<float> PALBDemodulator::removeDCOffset(const std::vector<float>& signal)
+QImage PALBDemodulator::convertToImage(const std::vector<float>& videoSignal)
 {
-    float mean = std::accumulate(signal.begin(), signal.end(), 0.0f) / signal.size();
-    std::vector<float> corrected(signal.size());
-    std::transform(signal.begin(), signal.end(), corrected.begin(),
-                   [mean](float sample) { return sample - mean; });
-    return corrected;
-}
+    QImage image(PIXELS_PER_LINE, VISIBLE_LINES, QImage::Format_Grayscale8);
 
-std::vector<float> PALBDemodulator::applyAGC(const std::vector<float>& signal)
-{
-    const float targetAmplitude = 0.7f; // Adjust as needed
-    const float agcAttackRate = 0.01f; // Adjust for faster/slower AGC response
-
-    std::vector<float> agcSignal(signal.size());
-    float currentGain = 1.0f;
-
-    for (size_t i = 0; i < signal.size(); ++i) {
-        float absValue = std::abs(signal[i]);
-        if (absValue * currentGain > targetAmplitude) {
-            currentGain = targetAmplitude / absValue;
-        } else {
-            currentGain += agcAttackRate * (targetAmplitude / std::max(absValue, 1e-6f) - currentGain);
+    for (int line = 0; line < VISIBLE_LINES; ++line) {
+        for (int pixel = 0; pixel < PIXELS_PER_LINE; ++pixel) {
+            size_t index = line * PIXELS_PER_LINE + pixel;
+            if (index < videoSignal.size()) {
+                uint8_t value = static_cast<uint8_t>(std::clamp(videoSignal[index] * 255.0f, 0.0f, 255.0f));
+                image.setPixel(pixel, line, qRgb(value, value, value));
+            }
         }
-        agcSignal[i] = signal[i] * currentGain;
     }
 
-    return agcSignal;
+    return image;
 }

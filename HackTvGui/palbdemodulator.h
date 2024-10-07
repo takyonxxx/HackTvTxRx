@@ -6,11 +6,11 @@
 #include <QDebug>
 #include <complex>
 #include <vector>
+#include <array>
 
 class PALBDemodulator : public QObject
 {
     Q_OBJECT
-
 public:
     explicit PALBDemodulator(double _sampleRate, QObject *parent = nullptr);
 
@@ -33,24 +33,19 @@ private:
     static constexpr double FIELD_DURATION = 0.02;  // 20 ms (50 Hz)
 
     double sampleRate;
+    std::array<float, 6> m_fltBufferI;
+    std::array<float, 6> m_fltBufferQ;
 
-    std::vector<float> generateLowPassCoefficients(float sampleRate, float cutoffFreq, int numTaps);
-    std::vector<float> lowPassFilter(const std::vector<float>& signal, float cutoffFreq);
+    // Helper functions
     std::vector<std::complex<float>> frequencyShift(const std::vector<std::complex<float>>& signal, double shiftFreq);
-    std::vector<float> amDemodulate(const std::vector<std::complex<float>>& signal);
-    std::vector<float> fmDemodulate(const std::vector<std::complex<float>>& signal);
-    std::vector<std::complex<float>> extractColorSignal(const std::vector<float>& videoSignal);
-    std::vector<float> demodulateU(const std::vector<std::complex<float>>& colorSignal);
-    std::vector<float> demodulateV(const std::vector<std::complex<float>>& colorSignal);
-    QRgb yuv2rgb(float y, float u, float v);
-    QImage convertToImage(const std::vector<float>& videoSignal);
-
-    // New helper functions
+    std::vector<float> fmDemodulateYDiff(const std::vector<std::complex<float>>& signal);
+    std::vector<float> lowPassFilter(const std::vector<float>& signal, float cutoffFreq);
+    std::vector<float> removeDCOffset(const std::vector<float>& signal);
+    std::vector<float> applyAGC(const std::vector<float>& signal);
     bool detectVerticalSync(const std::vector<float>& signal, size_t& syncStart);
     std::vector<float> removeVBI(const std::vector<float>& signal);
     std::vector<float> timingRecovery(const std::vector<float>& signal);
-    std::vector<float> removeDCOffset(const std::vector<float>& signal);
-    std::vector<float> applyAGC(const std::vector<float>& signal);
+    QImage convertToImage(const std::vector<float>& videoSignal);
 };
 
 #endif // PALBDEMODULATOR_H
