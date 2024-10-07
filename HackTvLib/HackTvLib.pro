@@ -60,7 +60,7 @@ unix {
     INSTALLS += target headers
 }
 
-LIBS += -lusb-1.0 -lhackrf -lfftw3f -losmo-fl2k -lSoapySDR -lfdk-aac -lopus -lportaudio
+LIBS += -lusb-1.0 -lhackrf -lfftw3f -losmo-fl2k -lSoapySDR -lfdk-aac -lopus -lportaudio -lrtlsdr
 LIBS += -lfltk -lfltk_forms -lfltk_gl -lfltk_images
 LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
 
@@ -91,11 +91,13 @@ SOURCES += \
     hacktv/vitc.c \
     hacktv/vits.c \
     hacktv/wss.c \
-    hacktvlib.cpp
+    hacktvlib.cpp \
+    rtlsdrdevice.cpp
 
 HEADERS += \
     HackTvLib_global.h \
     audioinput.h \
+    constants.h \
     hackrfdevice.h \
     hacktv/acp.h \
     hacktv/av.h \
@@ -126,6 +128,7 @@ HEADERS += \
     hacktv/wss.h \
     hacktvlib.h \
     modulation.h \
+    rtlsdrdevice.h \
     stream_tx.h \
     types.h
 
@@ -141,3 +144,4 @@ DISTFILES += \
 #brew install qt libusb hackrf fftw osmo-fl2k soapysdr fdk-aac opus portaudio fltk ffmpeg
 #export PATH="/usr/local/opt/qt/bin:$PATH"
 #brew link qt --force
+#pacman -S mingw-w64-x86_64-rtl-sdr

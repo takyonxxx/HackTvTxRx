@@ -277,37 +277,58 @@ bool HackTvLib::start()
     m_abort = false;
     m_signal = 0;
 
-    log("HackTvLib starting.");
+    log("HackTvLib starting.");    
 
     if(!parseArguments())
-        return false;
+        return false;    
 
-    log("Freq: %.3f MHz, Sample: %.1f MHz, Gain: %d, Amp: %s, RxTx: %s",
+    log("Freq: %.3f MHz, Sample: %.1f MHz, Gain: %d, Amp: %s, RxTx: %s, Device: %s",
         s.frequency / 1e6,
         s.samplerate / 1e6,
         s.gain,
         getBoolString(s.amp),
-        getRxTxModeString(m_rxTxMode));   
+        getRxTxModeString(m_rxTxMode),
+        s.output_type);
 
     if(m_rxTxMode == RX_MODE)
     {
-        hackRfDevice = new HackRfDevice();
-        hackRfDevice->setSampleRate(s.samplerate);
-        hackRfDevice->setFrequency(s.frequency);
-        hackRfDevice->setAmpEnable(s.amp);
-
-        hackRfDevice->setDataCallback([this](const int8_t* data, size_t len) {
-            this->dataReceived(data, len);
-        });
-
-        if(hackRfDevice->start(rf_mode::RX) != RF_OK)
+        if(strcmp(s.output_type, "hackrf") == 0)
         {
-            log("Could not open HackRF ib RX. Please check the device.");
-            return false;
-        }
+            hackRfDevice = new HackRfDevice();
+            hackRfDevice->setSampleRate(s.samplerate);
+            hackRfDevice->setFrequency(s.frequency);
+            hackRfDevice->setAmpEnable(s.amp);
 
-        log("HackTvLib started at RX mode.");
-        return true;
+            hackRfDevice->setDataCallback([this](const int8_t* data, size_t len) {
+                this->dataReceived(data, len);
+            });
+
+            if(hackRfDevice->start(rf_mode::RX) != RF_OK)
+            {
+                log("Could not open HackRF ib RX. Please check the device.");
+                return false;
+            }
+
+            log("HackTvLib started at RX mode with HackRf.");
+            return true;
+        }
+        else if(strcmp(s.output_type, "rtlsdr") == 0)
+        {
+            rtlSdrDevice = new RTLSDRDevice();
+            rtlSdrDevice->setDataCallback([this](const int8_t* data, size_t len) {
+                this->dataReceived(data, len);
+            });
+            if (rtlSdrDevice->initialize(s.samplerate, s.frequency)) {
+                rtlSdrDevice->start();
+                log("HackTvLib started at RX mode with SdrRtl.");
+                return true;
+            }
+            else
+            {
+                log("Could not open RtlSdr RX. Please check the device.");
+                return false;
+            }
+        }
     }
 
     if(micEnabled && m_rxTxMode == TX_MODE)
@@ -356,15 +377,33 @@ bool HackTvLib::start()
 
 void HackTvLib::setFrequency(uint64_t frequency_hz)
 {
-    if (hackRfDevice) {
-        hackRfDevice->setFrequency(frequency_hz);
+    if(strcmp(s.output_type, "hackrf") == 0)
+    {
+        if (hackRfDevice) {
+            hackRfDevice->setFrequency(frequency_hz);
+        }
+    }
+    else if(strcmp(s.output_type, "rtlsdr") == 0)
+    {
+        if (rtlSdrDevice) {
+            rtlSdrDevice->setFrequency(frequency_hz);
+        }
     }
 }
 
 void HackTvLib::setSampleRate(uint32_t sample_rate)
 {
-    if (hackRfDevice) {
-        hackRfDevice->setSampleRate(sample_rate);
+    if(strcmp(s.output_type, "hackrf") == 0)
+    {
+        if (hackRfDevice) {
+            hackRfDevice->setSampleRate(sample_rate);
+        }
+    }
+    else if(strcmp(s.output_type, "rtlsdr") == 0)
+    {
+        if (rtlSdrDevice) {
+            rtlSdrDevice->setSampleRate(sample_rate);
+        }
     }
 }
 
@@ -876,6 +915,11 @@ bool HackTvLib::parseArguments()
                 s.output_type = "hackrf";
                 s.output = sub;
             }
+            else if(strcmp(pre, "rtlsdr") == 0)
+            {
+                s.output_type = "rtlsdr";
+                s.output = sub;
+            }
             else if(strcmp(pre, "soapysdr") == 0)
             {
                 s.output_type = "soapysdr";
@@ -1216,8 +1260,7 @@ bool HackTvLib::parseArguments()
             } else {
                 fprintf(stderr, "Invalid mode. Use 'rx' or 'tx'.\n");
                 return false;
-            }
-            printf("m_rxTxMode value: %s\n", m_rxTxMode == RX_MODE ? "RX_MODE" : "TX_MODE");
+            }            
             break;
 
         case '?':
@@ -1347,11 +1390,24 @@ bool HackTvLib::stop()
 {
     if(m_rxTxMode == RX_MODE || micEnabled)
     {
-        if(hackRfDevice->stop() == 0)
+        if(strcmp(s.output_type, "hackrf") == 0)
         {
-            delete hackRfDevice;
-            log("HackTvLib stopped.");
-            return true;
+            if(hackRfDevice->stop() == 0)
+            {
+                delete hackRfDevice;
+                log("HackTvLib stopped.");
+                return true;
+            }
+        }
+        else if(strcmp(s.output_type, "rtlsdr") == 0)
+        {
+            if(rtlSdrDevice)
+            {
+                rtlSdrDevice->stop();
+                delete rtlSdrDevice;
+                log("RtlSdr stopped.");
+                return true;
+            }
         }
         return false;
     }

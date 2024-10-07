@@ -5,10 +5,10 @@
 PALBDemodulator::PALBDemodulator(double _sampleRate, QObject *parent)
     : QObject(parent), sampleRate(_sampleRate)
 {
-    if (sampleRate < 16e6) {
-        qWarning() << "Sample rate is less than 16 MHz. Adjusting processing accordingly.";
-        sampleRate = 16e6;
-    }
+    // if (sampleRate < 16e6) {
+    //     qWarning() << "Sample rate is less than 16 MHz. Adjusting processing accordingly.";
+    //     sampleRate = 16e6;
+    // }
     m_fltBufferI.fill(0.0f);
     m_fltBufferQ.fill(0.0f);
 }

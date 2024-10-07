@@ -12,23 +12,6 @@
 #include "audioinput.h"
 #include <functional>
 
-#define _GHZ(x) ((uint64_t)(x) * 1000000000)
-#define _MHZ(x) ((x) * 1000000)
-#define _KHZ(x) ((x) * 1000)
-#define _HZ(x) ((x) * 1)
-
-#define DEFAULT_FREQUENCY              _MHZ(100)
-#define DEFAULT_SAMPLE_RATE            _MHZ(20)
-#define DEFAULT_AUDIO_SAMPLE_RATE      _KHZ(48)
-#define DEFAULT_CUT_OFF                _KHZ(75)
-
-#define HACKRF_RX_VGA_MAX_DB            62.0
-#define HACKRF_RX_LNA_MAX_DB            40.0
-#define HACKRF_RX_AMP_MAX_DB            11.0
-#define HACKRF_TX_AMP_MAX_DB            47.0
-
-#define DEFAULT_FFT_SIZE                1024
-
 typedef enum RfMode {
     TX,
     RX,
@@ -76,10 +59,6 @@ public:
     void setModulation_index(float newModulation_index);
     void setDecimation(int newDecimation);
     void setInterpolation(float newInterpolation);
-
-private slots:
-    void emitReceivedData(const int8_t *data, size_t len);
-
 private:
     static int _tx_callback(hackrf_transfer *transfer);
     static int _rx_callback(hackrf_transfer *transfer);
@@ -112,17 +91,3 @@ private:
 };
 
 #endif // HACKRFDEVICE_H
-
-// std::unique_ptr<PortAudioInput> m_audioInput = std::make_unique<PortAudioInput>(nullptr, &s.rf);
-// if(micEnabled)
-// {
-//     if (!m_audioInput->start()) {
-//         std::cerr << "Failed to start PortAudioInput" << std::endl;
-//         return;
-//     }
-// }
-
-// size_t desired_size = 262144 / 2;  // Desired size for the float buffer
-// std::vector<float> float_buffer = m_audioInput->readStreamToSize(desired_size);
-// std::cout << "Final buffer size " << float_buffer.size() << std::endl;
-// m_audioInput->stop();

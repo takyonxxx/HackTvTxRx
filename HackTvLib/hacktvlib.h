@@ -8,10 +8,11 @@
 #include <stdint.h>
 #include <vector>
 #include <mutex>
-#include <complex>
+#include <cstring>
 #include "hacktv/video.h"
 #include "hacktv/rf.h"
 #include "hackrfdevice.h"
+#include "rtlsdrdevice.h"
 
 /* Return codes */
 #define HACKTV_OK             0
@@ -139,6 +140,7 @@ private:
     void rfTxLoop();
     void rfRxLoop();
     HackRfDevice *hackRfDevice{};
+    RTLSDRDevice *rtlSdrDevice{};
 };
 
 #endif // HACKTVLIB_H

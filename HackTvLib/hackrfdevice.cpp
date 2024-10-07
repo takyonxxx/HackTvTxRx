@@ -1,6 +1,7 @@
 #include "hackrfdevice.h"
 #include "modulation.h"
 #include <iostream>
+#include "constants.h"
 
 std::string removeZerosFromBeginning(const std::string &string) {
     uint32_t i = 0;
@@ -256,13 +257,6 @@ void HackRfDevice::setAmplitude(float newAmplitude)
 void HackRfDevice::setDataCallback(DataCallback callback)
 {
     m_dataCallback = std::move(callback);
-}
-
-void HackRfDevice::emitReceivedData(const int8_t *data, size_t len)
-{
-    if (m_dataCallback) {
-        m_dataCallback(data, len);
-    }
 }
 
 void HackRfDevice::setFrequency(uint64_t frequency_hz)
