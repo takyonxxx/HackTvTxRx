@@ -5,10 +5,6 @@
 PALBDemodulator::PALBDemodulator(double _sampleRate, QObject *parent)
     : QObject(parent), sampleRate(_sampleRate)
 {
-    // if (sampleRate < 16e6) {
-    //     qWarning() << "Sample rate is less than 16 MHz. Adjusting processing accordingly.";
-    //     sampleRate = 16e6;
-    // }
     m_fltBufferI.fill(0.0f);
     m_fltBufferQ.fill(0.0f);
 }
@@ -18,10 +14,10 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(const std::vector<
     DemodulatedFrame frame;
 
     // Step 1: Frequency shift to isolate the video carrier
-    auto shiftedVideo = frequencyShift(samples, -VIDEO_CARRIER);
+    auto shiftedVideo = frequencyShift(samples, VIDEO_CARRIER);
 
     // Step 2: FM demodulate the shifted video signal using YDiff method
-    auto videoSignal = fmDemodulateYDiff(shiftedVideo);
+    auto videoSignal = amDemodulate(shiftedVideo);
 
     // Step 3: Remove DC offset and apply AGC
     videoSignal = removeDCOffset(videoSignal);
@@ -36,18 +32,21 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(const std::vector<
     // Step 5: Remove Vertical Blanking Interval
     videoSignal = removeVBI(videoSignal);
 
-    // Step 6: Timing recovery
+    // // Step 6: Timing recovery
     videoSignal = timingRecovery(videoSignal);
 
     // Step 7: Apply a low-pass filter to the demodulated video signal
     float videoCutoffFrequency = 4.5e6; // Typically, PAL video bandwidth is around 4.5 MHz
     auto filteredVideoSignal = lowPassFilter(videoSignal, videoCutoffFrequency);
 
-    // Step 8: Generate the video frame from the filtered video signal
-    frame.image = convertToImage(filteredVideoSignal);
+    float brightness = 40.0f;  // Increase brightness by 20
+    float contrast = 2.0f;     // Increase contrast by 20%
+
+    QImage image = convertToImage(filteredVideoSignal, brightness, contrast);
+    frame.image = image;
 
     // Audio processing (simplified for now)
-    auto shiftedAudio = frequencyShift(samples, -AUDIO_CARRIER);
+    auto shiftedAudio = frequencyShift(samples, AUDIO_CARRIER);
     frame.audio = fmDemodulateYDiff(shiftedAudio);
 
     return frame;
@@ -91,6 +90,19 @@ std::vector<float> PALBDemodulator::fmDemodulateYDiff(const std::vector<std::com
         m_fltBufferQ[0] = sampleNormQ;
 
         demodulated[i] = sample;
+    }
+
+    return demodulated;
+}
+
+std::vector<float> PALBDemodulator::amDemodulate(const std::vector<std::complex<float>>& signal)
+{
+    std::vector<float> demodulated(signal.size());
+
+    for (size_t i = 0; i < signal.size(); ++i)
+    {
+        // For AM demodulation, we just compute the magnitude of the complex signal
+        demodulated[i] = std::abs(signal[i]);
     }
 
     return demodulated;
@@ -207,7 +219,52 @@ std::vector<float> PALBDemodulator::timingRecovery(const std::vector<float>& sig
     return recovered;
 }
 
-QImage PALBDemodulator::convertToImage(const std::vector<float>& videoSignal)
+// QImage PALBDemodulator::convertToImage(const std::vector<float>& videoSignal, float brightness, float contrast)
+// {
+//     // Define image dimensions (PAL-B: 720 pixels per line, 576 visible lines)
+//     const int width = PIXELS_PER_LINE; // 720 pixels
+//     const int height = VISIBLE_LINES;  // 576 lines
+
+//     // Create a QImage with the required dimensions (grayscale format)
+//     QImage image(width, height, QImage::Format_Grayscale8);
+
+//     // Normalize video signal to 0-255 (grayscale intensity range)
+//     float minVal = *std::min_element(videoSignal.begin(), videoSignal.end());
+//     float maxVal = *std::max_element(videoSignal.begin(), videoSignal.end());
+
+//     if (maxVal == minVal) {
+//         maxVal = minVal + 1; // Avoid division by zero if signal is flat
+//     }
+
+//     // Apply brightness and contrast
+//     for (int line = 0; line < height; ++line) {
+//         for (int pixel = 0; pixel < width; ++pixel) {
+//             // Calculate the position in the video signal array
+//             size_t index = line * width + pixel;
+
+//             if (index < videoSignal.size()) {
+//                 // Normalize pixel intensity to 0-255 range
+//                 float normalized = (videoSignal[index] - minVal) / (maxVal - minVal) * 255.0f;
+
+//                 // Apply brightness and contrast adjustments
+//                 normalized = (normalized - 128.0f) * contrast + 128.0f + brightness;
+
+//                 // Clamp the value to 0-255 range
+//                 uint8_t pixelValue = static_cast<uint8_t>(std::clamp(normalized, 0.0f, 255.0f));
+
+//                 // Set the pixel value in the image (grayscale)
+//                 image.setPixel(pixel, line, pixelValue);
+//             } else {
+//                 // If videoSignal size is smaller than expected, set black (0)
+//                 image.setPixel(pixel, line, 0);
+//             }
+//         }
+//     }
+
+//     return image; // Return the constructed image
+// }
+
+QImage PALBDemodulator::convertToImage(const std::vector<float>& videoSignal, float brightness, float contrast)
 {
     QImage image(PIXELS_PER_LINE, VISIBLE_LINES, QImage::Format_Grayscale8);
 

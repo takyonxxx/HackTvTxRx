@@ -39,13 +39,14 @@ private:
     // Helper functions
     std::vector<std::complex<float>> frequencyShift(const std::vector<std::complex<float>>& signal, double shiftFreq);
     std::vector<float> fmDemodulateYDiff(const std::vector<std::complex<float>>& signal);
+    std::vector<float> amDemodulate(const std::vector<std::complex<float>>& signal);
     std::vector<float> lowPassFilter(const std::vector<float>& signal, float cutoffFreq);
     std::vector<float> removeDCOffset(const std::vector<float>& signal);
     std::vector<float> applyAGC(const std::vector<float>& signal);
     bool detectVerticalSync(const std::vector<float>& signal, size_t& syncStart);
     std::vector<float> removeVBI(const std::vector<float>& signal);
     std::vector<float> timingRecovery(const std::vector<float>& signal);
-    QImage convertToImage(const std::vector<float>& videoSignal);
+    QImage convertToImage(const std::vector<float>& videoSignal, float brightness, float contrast);
 };
 
 #endif // PALBDEMODULATOR_H

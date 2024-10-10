@@ -804,9 +804,9 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
                                   Q_ARG(const QImage&, frame.image));
 
 
-        /*QMetaObject::invokeMethod(this, "processAudio",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(const std::vector<float>&, frame.audio));*/
+        // QMetaObject::invokeMethod(this, "processAudio",
+        //                           Qt::QueuedConnection,
+        //                           Q_ARG(const std::vector<float>&, frame.audio));
     }
 
 }
