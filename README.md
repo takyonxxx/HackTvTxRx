@@ -1,4 +1,4 @@
-# HackTvWindows QT 6.6 Library Project
+# HackTvRxTx QT 6.6 Library Project
 
 This project is a clone of https://github.com/fsphil/hacktv with modifications for building on Windows. 
 
