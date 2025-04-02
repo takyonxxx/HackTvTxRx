@@ -6,6 +6,8 @@ CONFIG += c++17
 PARENT_DIR = $$absolute_path($$PWD/../)
 INCLUDEPATH += $$PARENT_DIR/include
 
+message($$PARENT_DIR)
+
 win32 {
     #PATH_DESKTOP = $$system(echo %USERPROFILE%\\Desktop)
     LIBS += -L$$PARENT_DIR/lib -lHackTvLib
@@ -65,3 +67,4 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 
 RESOURCES += \
     resources.qrc
+#windeployqt.exe C:\Users\MSI\Desktop\HackTvTxRx\lib\HackTvGui.exe
