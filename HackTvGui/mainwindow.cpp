@@ -45,10 +45,6 @@ MainWindow::MainWindow(QWidget *parent)
     setupUi();
 
     frequencyEdit->setText(QString::number(m_frequency));
-    setCurrentSampleRate(m_sampleRate);
-    cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
-    cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
-    freqCtrl->setFrequency(m_frequency);    
 
     try {
         m_hackTvLib->setLogCallback([this](const std::string& msg) {
@@ -78,6 +74,11 @@ MainWindow::MainWindow(QWidget *parent)
         qDebug() << "Unknown exception in createHackTvLib";
         QMessageBox::critical(this, "HackTvLib Error", "An unknown error occurred while creating HackTvLib");
     }
+
+    setCurrentSampleRate(m_sampleRate);
+    cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
+    cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
+    freqCtrl->setFrequency(m_frequency);
 
     logTimer = new QTimer(this);
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
