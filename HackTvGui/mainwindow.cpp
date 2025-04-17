@@ -1178,36 +1178,7 @@ void MainWindow::processAudio(const std::vector<float>& demodulatedSamples)
     if (demodulatedSamples.empty())
         return;
 
-    // Static buffer with pre-allocated capacity
-    static std::vector<float> audioBuffer;
-    static const size_t OPTIMAL_CHUNK_SIZE = 4800;
-    static bool firstRun = true;
-
-    if (firstRun) {
-        // Pre-allocate a reasonably sized buffer (10x chunk size)
-        audioBuffer.reserve(OPTIMAL_CHUNK_SIZE * 10);
-        firstRun = false;
-    }
-
-    // Add samples to buffer (faster than repeatedly calling insert)
-    const size_t oldSize = audioBuffer.size();
-    audioBuffer.resize(oldSize + demodulatedSamples.size());
-    std::memcpy(audioBuffer.data() + oldSize, demodulatedSamples.data(),
-                demodulatedSamples.size() * sizeof(float));
-
-    // Batch process audio chunks
-    if (audioBuffer.size() >= OPTIMAL_CHUNK_SIZE) {
-        // Calculate how many complete chunks we can process
-        size_t chunks = audioBuffer.size() / OPTIMAL_CHUNK_SIZE;
-        size_t totalSamples = chunks * OPTIMAL_CHUNK_SIZE;
-
-        // Process all chunks at once instead of one by one
-        std::vector<float> allChunks(audioBuffer.begin(), audioBuffer.begin() + totalSamples);
-        audioOutput->processAudio(allChunks);
-
-        // Remove all processed samples at once
-        audioBuffer.erase(audioBuffer.begin(), audioBuffer.begin() + totalSamples);
-    }
+    audioOutput->processAudio(demodulatedSamples);
 }
 
 void MainWindow::handleReceivedData(const int8_t *data, size_t len)
@@ -1241,12 +1212,41 @@ void MainWindow::handleReceivedData(const int8_t *data, size_t len)
 
 void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
 {
+    // Protect FFT processing with mutex to prevent concurrent access to shared resources
+    static QMutex fftMutex;
+    QMutexLocker locker(&fftMutex);
+
     int fft_size = 2048;
     std::vector<float> fft_output(fft_size);
     float signal_level_dbfs;
+
+    // Process FFT calculations
     getFft(samples, fft_output, signal_level_dbfs, fft_size);
-    cMeter->setLevel(signal_level_dbfs);
-    cPlotter->setNewFttData(fft_output.data(), fft_output.data(), fft_size);
+
+    // Use invokeMethod to update UI components from the main thread
+    QMetaObject::invokeMethod(cMeter, "setLevel",
+                              Qt::QueuedConnection,
+                              Q_ARG(float, signal_level_dbfs));
+
+    // Create a copy of the data for thread safety
+    float* fft_data = new float[fft_size];
+    std::memcpy(fft_data, fft_output.data(), fft_size * sizeof(float));
+
+    // Update the plotter in the main thread
+    QMetaObject::invokeMethod(this, "updatePlotter",
+                              Qt::QueuedConnection,
+                              Q_ARG(float*, fft_data),
+                              Q_ARG(int, fft_size));
+}
+
+// Add this method to your MainWindow class
+void MainWindow::updatePlotter(float* fft_data, int size)
+{
+    // This runs in the main thread
+    cPlotter->setNewFttData(fft_data, fft_data, size);
+
+    // Clean up the memory we allocated
+    delete[] fft_data;
 }
 
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)

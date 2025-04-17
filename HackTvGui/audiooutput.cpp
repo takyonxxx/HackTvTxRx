@@ -68,7 +68,9 @@ void AudioOutput::processAudio(const std::vector<float> &audioData)
     }
 
     QMutexLocker locker(mutex);
-    audioDevice->write(buffer);
+    if (m_audioOutput->bytesFree() >= buffer.size()) {
+        audioDevice->write(buffer);
+    }
 }
 
 void AudioOutput::stop()

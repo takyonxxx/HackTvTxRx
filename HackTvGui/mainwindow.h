@@ -36,6 +36,9 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
+public slots:
+    void updatePlotter(float* fft_data, int size);
+
 private slots:
     void executeCommand();
     void chooseFile();
