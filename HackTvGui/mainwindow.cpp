@@ -60,11 +60,7 @@ MainWindow::MainWindow(QWidget *parent)
             throw std::runtime_error("Failed to create AudioOutput");
         }
 
-        m_signalProcessor = new SignalProcessor(this);
-        connect(m_signalProcessor, &SignalProcessor::samplesReady, this, &MainWindow::handleSamples);
-        m_signalProcessor->start();
-
-        palbDemodulator = new PALBDemodulator(m_sampleRate);
+        // palbDemodulator = new PALBDemodulator(m_sampleRate);
     }
     catch (const std::exception& e) {
         qDebug() << "Exception in createHackTvLib:" << e.what();
@@ -87,8 +83,6 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
-    m_signalProcessor->stop();
-    m_signalProcessor->wait();
     audioOutput.reset();
     fmDemodulator.reset();
     rationalResampler.reset();
@@ -754,95 +748,12 @@ void MainWindow::handleSamples(const std::vector<std::complex<float>>& samples)
     });
 
     fftFuture.waitForFinished();
-}
-
-void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
-{
-    int fft_size = 2048;
-    std::vector<float> fft_output(fft_size);
-    float signal_level_dbfs;
-    getFft(samples, fft_output, signal_level_dbfs, fft_size);
-    cMeter->setLevel(signal_level_dbfs);
-    cPlotter->setNewFttData(fft_output.data(), fft_output.data(), fft_size);
-}
-
-void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
-{
-    if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
-    {
-        auto filteredSamples = lowPassFilter->apply(samples);
-        auto resampledSamples = rationalResampler->resample(filteredSamples);
-        auto demodulatedSamples = fmDemodulator->demodulate(resampledSamples);
-
-        // Normalize the demodulated samples
-        float maxAbs = 0.0f;
-        for (const auto& sample : demodulatedSamples) {
-            maxAbs = std::max(maxAbs, std::abs(sample));
-        }
-        if (maxAbs > 0) {
-            float scale = 1.0f / maxAbs;
-#pragma omp parallel for
-            for (size_t i = 0; i < demodulatedSamples.size(); ++i) {
-                demodulatedSamples[i] = std::clamp(demodulatedSamples[i] * scale * audioGain, -1.0f, 1.0f);
-            }
-        }
-
-        // Queue the audio data for playback
-        QMetaObject::invokeMethod(this, "processAudio",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(const std::vector<float>&, demodulatedSamples));
-
-    } else {
-        qDebug() << "One or more components of the signal chain are not initialized.";
-    }
-
-    if(palbDemodulator)
-    {
-        auto frame = palbDemodulator->demodulate(samples);
-
-        QMetaObject::invokeMethod(this, "updateDisplay",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(const QImage&, frame.image));
-
-
-        // QMetaObject::invokeMethod(this, "processAudio",
-        //                           Qt::QueuedConnection,
-        //                           Q_ARG(const std::vector<float>&, frame.audio));
-    }
-
+    demodFuture.waitForFinished();
 }
 
 void MainWindow::updateDisplay(const QImage& image)
 {
     tvDisplay->updateDisplay(image);
-}
-
-void MainWindow::processAudio(const std::vector<float>& demodulatedSamples)
-{
-    audioOutput->processAudio(demodulatedSamples);
-}
-
-void MainWindow::processReceivedData(const int8_t *data, size_t len)
-{
-    if (!m_isProcessing.load() || !data || len != 262144) {
-        return;
-    }
-
-    std::vector<std::complex<float>> samples(len / 2);
-    for (size_t i = 0; i < len; i += 2) {
-        float i_sample = data[i] / 128.0f;
-        float q_sample = data[i + 1] / 128.0f;
-        samples[i/2] = std::complex<float>(i_sample, q_sample);
-    }
-
-    m_signalProcessor->addSamples(samples.data());
-}
-
-void MainWindow::handleReceivedData(const int8_t *data, size_t len)
-{
-    QMetaObject::invokeMethod(this, "processReceivedData", Qt::QueuedConnection,
-                              Q_ARG(const int8_t*, data),
-                              Q_ARG(size_t, len));
 }
 
 void MainWindow::onFreqCtrl_setFrequency(qint64 freq)
@@ -882,7 +793,7 @@ void MainWindow::executeCommand()
         QStringList args = buildCommand();
 
         if(mode == "rx")
-        {           
+        {
             lowPassFilter = std::make_unique<LowPassFilter>(m_sampleRate, m_CutFreq, transitionWidth);
             rationalResampler = std::make_unique<RationalResampler>(interpolation, decimation);
             fmDemodulator = std::make_unique<FMDemodulator>(quadratureRate, audioDecimation);
@@ -1260,4 +1171,123 @@ void MainWindow::onChannelChanged(int index)
         m_hackTvLib->setFrequency(m_frequency);
     }
     saveSettings();
+}
+
+void MainWindow::processAudio(const std::vector<float>& demodulatedSamples)
+{
+    if (demodulatedSamples.empty())
+        return;
+
+    // Static buffer with pre-allocated capacity
+    static std::vector<float> audioBuffer;
+    static const size_t OPTIMAL_CHUNK_SIZE = 4800;
+    static bool firstRun = true;
+
+    if (firstRun) {
+        // Pre-allocate a reasonably sized buffer (10x chunk size)
+        audioBuffer.reserve(OPTIMAL_CHUNK_SIZE * 10);
+        firstRun = false;
+    }
+
+    // Add samples to buffer (faster than repeatedly calling insert)
+    const size_t oldSize = audioBuffer.size();
+    audioBuffer.resize(oldSize + demodulatedSamples.size());
+    std::memcpy(audioBuffer.data() + oldSize, demodulatedSamples.data(),
+                demodulatedSamples.size() * sizeof(float));
+
+    // Batch process audio chunks
+    if (audioBuffer.size() >= OPTIMAL_CHUNK_SIZE) {
+        // Calculate how many complete chunks we can process
+        size_t chunks = audioBuffer.size() / OPTIMAL_CHUNK_SIZE;
+        size_t totalSamples = chunks * OPTIMAL_CHUNK_SIZE;
+
+        // Process all chunks at once instead of one by one
+        std::vector<float> allChunks(audioBuffer.begin(), audioBuffer.begin() + totalSamples);
+        audioOutput->processAudio(allChunks);
+
+        // Remove all processed samples at once
+        audioBuffer.erase(audioBuffer.begin(), audioBuffer.begin() + totalSamples);
+    }
+}
+
+void MainWindow::handleReceivedData(const int8_t *data, size_t len)
+{
+    if (!m_isProcessing.load() || !data || len != 262144)
+        return;
+
+    const int samples_count = len / 2;
+
+    // Create a shared pointer to a single vector
+    auto samplesPtr = std::make_shared<std::vector<std::complex<float>>>(samples_count);
+
+// Fill the vector with IQ samples
+#pragma omp parallel for
+    for (int i = 0; i < samples_count; i++) {
+        (*samplesPtr)[i] = std::complex<float>(
+            static_cast<int8_t>(data[i * 2]) / 128.0f,
+            static_cast<int8_t>(data[i * 2 + 1]) / 128.0f
+            );
+    }
+
+    // Process FFT and demodulation in parallel, sharing the same data
+    QFuture<void> fftFuture = QtConcurrent::run(&m_threadPool, [this, samplesPtr]() {
+        this->processFft(*samplesPtr);
+    });
+
+    QFuture<void> demodFuture = QtConcurrent::run(&m_threadPool, [this, samplesPtr]() {
+        this->processDemod(*samplesPtr);
+    });
+}
+
+void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
+{
+    int fft_size = 2048;
+    std::vector<float> fft_output(fft_size);
+    float signal_level_dbfs;
+    getFft(samples, fft_output, signal_level_dbfs, fft_size);
+    cMeter->setLevel(signal_level_dbfs);
+    cPlotter->setNewFttData(fft_output.data(), fft_output.data(), fft_size);
+}
+
+void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
+{
+    if (!lowPassFilter || !rationalResampler || !fmDemodulator || !audioOutput)
+        return;
+
+    try {
+        // Pre-allocate output buffers with reserved capacity to reduce allocations
+        std::vector<std::complex<float>> filteredSamples;
+        filteredSamples.reserve(samples.size());
+
+        // Use move semantics to avoid copies
+        filteredSamples = lowPassFilter->apply(samples);
+        auto resampledSamples = rationalResampler->resample(std::move(filteredSamples));
+        auto demodulatedSamples = fmDemodulator->demodulate(std::move(resampledSamples));
+
+        if (demodulatedSamples.empty())
+            return;
+
+        // Process in-place to avoid copies
+        for (auto& sample : demodulatedSamples) {
+            sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
+        }
+
+        // Use std::move to avoid another copy
+        QMetaObject::invokeMethod(this, "processAudio",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(std::vector<float>, std::move(demodulatedSamples)));
+    }
+    catch (const std::exception& e) {
+        qDebug() << "Exception in signal processing chain:" << e.what();
+    }
+
+    // if(palbDemodulator)
+    // {
+    //     auto frame = palbDemodulator->demodulate(samples);
+
+    //     QMetaObject::invokeMethod(this, "updateDisplay",
+    //                               Qt::QueuedConnection,
+    //                               Q_ARG(const QImage&, frame.image));
+    // }
+
 }

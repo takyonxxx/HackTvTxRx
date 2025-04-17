@@ -24,7 +24,6 @@
 #include "cplotter.h"
 #include "meter.h"
 #include "audiooutput.h"
-#include "signalprocessor.h"
 #include "modulator.h"
 #include "tv_display.h"
 #include "palbdemodulator.h"
@@ -49,7 +48,6 @@ private slots:
     void on_plotter_newFilterFreq(int low, int high);
     void handleSamples(const std::vector<std::complex<float>>& samples);
     void updateLogDisplay();
-    void processReceivedData(const int8_t *data, size_t len);
     void processAudio(const std::vector<float>& demodulatedSamples);
     void onVolumeSliderValueChanged(int value);
     void onLnaSliderValueChanged(int value);
@@ -102,7 +100,6 @@ private:
     std::unique_ptr<HackTvLib> m_hackTvLib;
     std::unique_ptr<AudioOutput> audioOutput;
 
-    SignalProcessor *m_signalProcessor;
     QThreadPool m_threadPool;
     QTimer *logTimer;
     QString m_sSettingsFile;

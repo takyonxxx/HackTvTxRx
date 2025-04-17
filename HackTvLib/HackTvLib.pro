@@ -6,63 +6,16 @@ CONFIG += c++17
 DEFINES += HACKTVLIB_LIBRARY
 DEFINES += _USE_MATH_DEFINES
 DEFINES += HAVE_HACKRF
-DEFINES += HAVE_SOAPYSDR
-DEFINES += HAVE_FL2K
 
 win32 {
     DEFINES += _WIN32
-    TOOLCHAIN_PATH = C:/msys64/ucrt64
     MINGW_PATH = C:/msys64/mingw64
-    INCLUDEPATH += $$TOOLCHAIN_PATH/include
     INCLUDEPATH += $$MINGW_PATH/include
-    LIBS += -L$$TOOLCHAIN_PATH/lib
-    LIBS += -L$$TOOLCHAIN_PATH/bin
     LIBS += -L$$MINGW_PATH/lib
     LIBS += -L$$MINGW_PATH/bin
-    LIBS += -lwinmm -lcomctl32 -lole32 -luuid -lws2_32 -lgdi32 -lshell32 -ladvapi32 -lcomdlg32
-    QMAKE_LFLAGS += -Wl,--subsystem,windows
+    LIBS += -lusb-1.0 -lhackrf -lfftw3f -lfdk-aac -lopus -lportaudio -lrtlsdr
+    LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
 }
-
-unix {
-    INCLUDEPATH += /usr/local/include
-    LIBS += -L/usr/local/lib
-
-    target.path = /usr/lib
-    headers.files = $$HEADERS
-
-    linux {
-        INCLUDEPATH += /usr/include
-        LIBS += -L/usr/lib
-        headers.path = /usr/include/$$TARGET
-    }
-
-    macx {    
-       HOMEBREW_PREFIX = $$system(brew --prefix)
-       !isEmpty(HOMEBREW_PREFIX) {
-           message("Homebrew found at $$HOMEBREW_PREFIX")
-           INCLUDEPATH += $$HOMEBREW_PREFIX/include
-           LIBS += -L$$HOMEBREW_PREFIX/lib
-
-           # Add specific paths for Qt
-           QT_PREFIX = $$system(brew --prefix qt)
-           !isEmpty(QT_PREFIX) {
-               INCLUDEPATH += $$QT_PREFIX/include
-               LIBS += -L$$QT_PREFIX/lib
-           }
-           target.path = $$HOMEBREW_PREFIX/lib
-           headers.path = $$HOMEBREW_PREFIX/include/$$TARGET
-       } else {
-           target.path = /usr/local/lib
-           headers.path = /usr/local/include/$$TARGET
-           error("Homebrew not found. Please install Homebrew and required dependencies.")
-       }
-    }
-    INSTALLS += target headers
-}
-
-LIBS += -lusb-1.0 -lhackrf -lfftw3f -losmo-fl2k -lSoapySDR -lfdk-aac -lopus -lportaudio -lrtlsdr
-LIBS += -lfltk -lfltk_forms -lfltk_gl -lfltk_images
-LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
 
 SOURCES += \
     hackrfdevice.cpp \
@@ -78,9 +31,7 @@ SOURCES += \
     hacktv/nicam728.c \
     hacktv/rf.c \
     hacktv/rf_file.c \
-    hacktv/rf_fl2k.c \
     hacktv/rf_hackrf.c \
-    hacktv/rf_soapysdr.c \
     hacktv/sis.c \
     hacktv/syster.c \
     hacktv/teletext.c \
@@ -112,9 +63,7 @@ HEADERS += \
     hacktv/nicam728.h \
     hacktv/rf.h \
     hacktv/rf_file.h \
-    hacktv/rf_fl2k.h \
     hacktv/rf_hackrf.h \
-    hacktv/rf_soapysdr.h \
     hacktv/sis.h \
     hacktv/syster.h \
     hacktv/teletext.h \
@@ -140,8 +89,17 @@ TRANSLATIONS += \
 DISTFILES += \
     hacktv/README.md
 
-#sudo apt install qt5-default qtmultimedia5-dev build-essential libusb-1.0-0-dev libhackrf-dev libfftw3-dev libosmo-fl2k-dev libsoapysdr-dev libfdk-aac-dev libopus-dev portaudio19-dev libfltk1.3-dev libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
-#brew install qt libusb hackrf fftw osmo-fl2k soapysdr fdk-aac opus portaudio fltk ffmpeg
+#sudo apt install qt5-default qtmultimedia5-dev build-essential libusb-1.0-0-dev libhackrf-dev libfftw3-dev libosmo-fl2k-dev portaudio19-dev libfltk1.3-dev libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
+#brew install qt libusb hackrf fftw portaudio ffmpeg
 #export PATH="/usr/local/opt/qt/bin:$PATH"
 #brew link qt --force
-#pacman -S mingw-w64-x86_64-rtl-sdr
+# pacman -S mingw-w64-x86_64-gcc
+# pacman -S mingw-w64-x86_64-qt5
+# pacman -S mingw-w64-x86_64-hackrf
+# pacman -S mingw-w64-x86_64-rtl-sdr
+# pacman -S mingw-w64-x86_64-ffmpeg
+# pacman -S mingw-w64-x86_64-portaudio
+# pacman -S mingw-w64-x86_64-fftw
+# pacman -S mingw-w64-x86_64-fdk-aac
+# pacman -S mingw-w64-x86_64-opus
+# pacman -S mingw-w64-x86_64-libusb

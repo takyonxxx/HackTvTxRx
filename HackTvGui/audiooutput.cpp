@@ -28,7 +28,7 @@ AudioOutput::AudioOutput(QObject *parent):
     }
 
     m_audioOutput.reset(new QAudioSink(outputDevice, m_format));
-    m_audioOutput->setBufferSize(1024 * 512);
+    m_audioOutput->setBufferSize(1024 * 1024);
     audioDevice = m_audioOutput->start();
 
     mutex = new QMutex;

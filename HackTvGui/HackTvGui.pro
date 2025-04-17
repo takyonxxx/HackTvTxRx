@@ -42,8 +42,7 @@ SOURCES += \
     main.cpp \
     mainwindow.cpp \
     meter.cpp \
-    palbdemodulator.cpp \
-    signalprocessor.cpp
+    palbdemodulator.cpp
 
 HEADERS += \
     audiooutput.h \
@@ -54,7 +53,6 @@ HEADERS += \
     meter.h \
     modulator.h \
     palbdemodulator.h \
-    signalprocessor.h \
     tv_display.h
 
 FORMS += \
