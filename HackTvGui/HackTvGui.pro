@@ -65,4 +65,4 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 
 RESOURCES += \
     resources.qrc
-#windeployqt.exe C:\Users\MSI\Desktop\HackTvTxRx\lib\HackTvGui.exe
+#C:\Qt\6.6.3\mingw_64\bin\windeployqt.exe C:\Users\turka\Desktop\build-HackTvGui\release
