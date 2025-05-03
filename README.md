@@ -27,7 +27,7 @@ Download and install MSYS2 from: https://www.msys2.org/
 
 ### 2. Install Dependencies
 
-Open MSYS2 and run the following commands:
+Open MSYS2 MINGW64 and run the following commands:
 
 ```bash
 pacman -Syu
