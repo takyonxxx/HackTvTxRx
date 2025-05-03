@@ -11,6 +11,7 @@ win32 {
     DEFINES += _WIN32
     MINGW_PATH = C:/msys64/mingw64
     INCLUDEPATH += $$MINGW_PATH/include
+
     LIBS += -L$$MINGW_PATH/lib
     LIBS += -L$$MINGW_PATH/bin
     LIBS += -lusb-1.0 -lhackrf -lfftw3f -lfdk-aac -lopus -lportaudio -lrtlsdr
@@ -42,7 +43,6 @@ win32 {
     }
 
     # Copy dependent DLLs for distribution (optional)
-    # You might want to copy these only for release builds
     CONFIG(release, debug|release) {
         # Define the DLLs you want to copy
         DEPENDENT_DLLS = \
@@ -59,17 +59,7 @@ win32 {
             QMAKE_POST_LINK += && $$QMAKE_COPY $$shell_path($$MINGW_PATH/bin/$$dll) $$shell_path($$DESTDIR/)
         }
 
-        # Copy FFmpeg DLLs (these often have version numbers)
-        FFMPEG_DLLS = \
-            avformat-*.dll \
-            avdevice-*.dll \
-            avcodec-*.dll \
-            avutil-*.dll \
-            avfilter-*.dll \
-            swscale-*.dll \
-            swresample-*.dll
-
-        # Copy FFmpeg DLLs with wildcards
+        # Copy FFmpeg DLLs
         QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/avformat-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
         QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/avdevice-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
         QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/avcodec-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
