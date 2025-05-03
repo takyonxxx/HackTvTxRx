@@ -10,7 +10,8 @@ message($$PARENT_DIR)
 
 win32 {
     #PATH_DESKTOP = $$system(echo %USERPROFILE%\\Desktop)
-    LIBS += -L$$PARENT_DIR/lib -lHackTvLib
+    WIN_LIB_DIR = $$absolute_path($$PARENT_DIR/lib/windows)
+    LIBS += -L$$WIN_LIB_DIR -lHackTvLib
 }
 
 macx {

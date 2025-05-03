@@ -15,6 +15,62 @@ win32 {
     LIBS += -L$$MINGW_PATH/bin
     LIBS += -lusb-1.0 -lhackrf -lfftw3f -lfdk-aac -lopus -lportaudio -lrtlsdr
     LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
+
+    # Define the target library directory
+    DESTDIR = $$PWD/../lib/windows
+
+    # Create the directory if it doesn't exist
+    !exists($$DESTDIR) {
+        system(mkdir $$shell_path($$DESTDIR))
+    }
+
+    # Windows uses different naming for debug/release builds
+    CONFIG(debug, debug|release) {
+        TARGET = HackTvLibd  # Add 'd' suffix for debug builds
+    } else {
+        TARGET = HackTvLib
+    }
+
+    # Copy the DLL after building
+    QMAKE_POST_LINK += $$QMAKE_COPY $$shell_path($$OUT_PWD/$(DESTDIR_TARGET)) $$shell_path($$DESTDIR/)
+
+    # Copy dependent DLLs for distribution (optional)
+    # You might want to copy these only for release builds
+    CONFIG(release, debug|release) {
+        # Define the DLLs you want to copy
+        DEPENDENT_DLLS = \
+            libusb-1.0.dll \
+            libhackrf.dll \
+            libfftw3f-3.dll \
+            libfdk-aac-2.dll \
+            libopus-0.dll \
+            libportaudio.dll \
+            librtlsdr.dll
+
+        # Copy each DLL
+        for(dll, DEPENDENT_DLLS) {
+            QMAKE_POST_LINK += && $$QMAKE_COPY $$shell_path($$MINGW_PATH/bin/$$dll) $$shell_path($$DESTDIR/)
+        }
+
+        # Copy FFmpeg DLLs (these often have version numbers)
+        FFMPEG_DLLS = \
+            avformat-*.dll \
+            avdevice-*.dll \
+            avcodec-*.dll \
+            avutil-*.dll \
+            avfilter-*.dll \
+            swscale-*.dll \
+            swresample-*.dll
+
+        # Copy FFmpeg DLLs with wildcards
+        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/avformat-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
+        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/avdevice-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
+        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/avcodec-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
+        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/avutil-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
+        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/avfilter-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
+        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/swscale-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
+        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/swresample-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
+    }
 }
 
 macx {
