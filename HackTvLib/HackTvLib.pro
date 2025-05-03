@@ -9,11 +9,16 @@ DEFINES += HAVE_HACKRF
 
 win32 {
     DEFINES += _WIN32
-    MINGW_PATH = C:/msys64/mingw64
-    INCLUDEPATH += $$MINGW_PATH/include
+    MSYS2_PATH = C:/msys64/mingw64
 
-    LIBS += -L$$MINGW_PATH/lib
-    LIBS += -L$$MINGW_PATH/bin
+    # Include paths for dependencies from MSYS2
+    INCLUDEPATH += $$MSYS2_PATH/include
+
+    # Library paths
+    LIBS += -L$$MSYS2_PATH/lib
+    LIBS += -L$$MSYS2_PATH/bin
+
+    # Link to libraries
     LIBS += -lusb-1.0 -lhackrf -lfftw3f -lfdk-aac -lopus -lportaudio -lrtlsdr
     LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
 
@@ -30,43 +35,6 @@ win32 {
         TARGET = HackTvLibd  # Add 'd' suffix for debug builds
     } else {
         TARGET = HackTvLib
-    }
-
-    # Copy the DLL after building
-    QMAKE_POST_LINK += $$QMAKE_COPY $$shell_path($$OUT_PWD/$(DESTDIR_TARGET)) $$shell_path($$DESTDIR/)
-
-    # Copy the static library (.a file)
-    CONFIG(debug, debug|release) {
-        QMAKE_POST_LINK += && $$QMAKE_COPY $$shell_path($$OUT_PWD/debug/libHackTvLibd.a) $$shell_path($$DESTDIR/)
-    } else {
-        QMAKE_POST_LINK += && $$QMAKE_COPY $$shell_path($$OUT_PWD/release/libHackTvLib.a) $$shell_path($$DESTDIR/)
-    }
-
-    # Copy dependent DLLs for distribution (optional)
-    CONFIG(release, debug|release) {
-        # Define the DLLs you want to copy
-        DEPENDENT_DLLS = \
-            libusb-1.0.dll \
-            libhackrf.dll \
-            libfftw3f-3.dll \
-            libfdk-aac-2.dll \
-            libopus-0.dll \
-            libportaudio.dll \
-            librtlsdr.dll
-
-        # Copy each DLL
-        for(dll, DEPENDENT_DLLS) {
-            QMAKE_POST_LINK += && $$QMAKE_COPY $$shell_path($$MINGW_PATH/bin/$$dll) $$shell_path($$DESTDIR/)
-        }
-
-        # Copy FFmpeg DLLs
-        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/avformat-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
-        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/avdevice-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
-        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/avcodec-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
-        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/avutil-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
-        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/avfilter-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
-        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/swscale-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
-        QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/swresample-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
     }
 
     # pacman -S mingw-w64-x86_64-ffmpeg \
