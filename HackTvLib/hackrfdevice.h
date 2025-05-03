@@ -9,8 +9,12 @@
 #include <libhackrf/hackrf.h>
 #include <pthread.h>
 #include <unistd.h>
-#include "audioinput.h"
+#include <mutex>
+#include <atomic>
+#include <memory>
 #include <functional>
+#include "audioinput.h"
+#include "types.h"
 
 typedef enum RfMode {
     TX,
@@ -20,17 +24,19 @@ typedef enum RfMode {
 class HackRfDevice : public QObject
 {
     Q_OBJECT
-
 public:
     explicit HackRfDevice(QObject *parent = nullptr);
     ~HackRfDevice();
 
     using DataCallback = std::function<void(const int8_t*, size_t)>;
     void setDataCallback(DataCallback callback);
+
     int apply_fm_modulation(int8_t* buffer, uint32_t length);
     std::vector<float> readStreamToSize(size_t size);
+
     int start(rf_mode mode);
     int stop();
+
     std::vector<std::string> listDevices();
 
     // Setters
@@ -59,16 +65,27 @@ public:
     void setModulation_index(float newModulation_index);
     void setDecimation(int newDecimation);
     void setInterpolation(float newInterpolation);
+
 private:
     static int _tx_callback(hackrf_transfer *transfer);
     static int _rx_callback(hackrf_transfer *transfer);
 
+    bool applySettings();
+    void cleanup();
+
     std::unique_ptr<PortAudioInput> m_audioInput;
 
+    // Use shared_ptr for mutex to prevent invalid access
+    std::shared_ptr<std::mutex> m_deviceMutex;
+    std::atomic<bool> m_isStopped{true};
+    std::atomic<bool> m_isRunning{false};
+    std::atomic<bool> m_isDestroying{false};
+
     std::vector<std::string> device_serials;
-    std::vector<int> device_board_ids;
+    std::vector<hackrf_usb_board_id> device_board_ids;
+
     rf_mode mode;
-    hackrf_device *h_device;
+    hackrf_device *h_device = nullptr;
     DataCallback m_dataCallback;
 
     float amplitude = 1.0;
@@ -87,6 +104,7 @@ private:
     bool m_ampEnable;
     uint32_t m_basebandFilterBandwidth;
     bool m_antennaEnable;
+
     dsp::stream_tx<dsp::complex_tx> stream_tx;
 };
 

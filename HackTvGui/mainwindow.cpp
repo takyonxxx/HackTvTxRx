@@ -14,8 +14,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_sampleRate(DEFAULT_SAMPLE_RATE),
     m_LowCutFreq(-1*int(DEFAULT_CUT_OFF)),
     m_HiCutFreq(DEFAULT_CUT_OFF),
-    defaultWidth(800),
-    defaultHeight(800),
+    defaultWidth(1024),
+    defaultHeight(780),
     m_isProcessing(false)
 {
     QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
@@ -956,9 +956,7 @@ void MainWindow::onInputTypeChanged(int index)
     isTest = (index == 2);
     isFFmpeg = (index == 3);
 
-    if(!isFmTransmit)
-        sampleRateCombo->setCurrentIndex(6);
-    else
+    if(isFmTransmit)
         sampleRateCombo->setCurrentIndex(0);
 
     inputFileEdit->setVisible(isFile);
@@ -1036,32 +1034,16 @@ void MainWindow::onRxTxTypeChanged(int index)
 void MainWindow::onSampleRateChanged(int index)
 {
     m_sampleRate = sampleRateCombo->currentData().toInt();
-    if(m_isProcessing)
+    if(m_isProcessing && m_hackTvLib->stop())
     {
-        if(mode == "tx")
-        {
-            if(!m_hackTvLib->stop())
-                m_isProcessing.store(false);
-            else
-                logBrowser->append("Failed to stop HackTvLib.");
-
-            m_hackTvLib->setSampleRate(m_sampleRate);
-
-            if(m_hackTvLib->start()) {
-                m_isProcessing.store(true);
-            } else {
-                logBrowser->append("Failed to start HackTvLib.");
-            }
-        }
-        else
-            m_hackTvLib->setSampleRate(m_sampleRate);
-
-        lowPassFilter->designFilter(m_sampleRate, m_CutFreq, 10e3);
+        m_isProcessing.store(false);
+        executeButton->setText("Start");    lowPassFilter->designFilter(m_sampleRate, m_CutFreq, 10e3);
         cPlotter->setSampleRate(m_sampleRate);
         cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
         cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
+        m_hackTvLib->setSampleRate(m_sampleRate);
+        saveSettings();
     }
-    saveSettings();
 }
 
 void MainWindow::populateChannelCombo()
