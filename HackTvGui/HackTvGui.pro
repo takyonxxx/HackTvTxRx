@@ -13,26 +13,28 @@ win32 {
     LIBS += -L$$PARENT_DIR/lib -lHackTvLib
 }
 
-unix {
-    INCLUDEPATH += /usr/local/include
-    LIBS += -L/usr/local/lib
+macx {
+    # Path to the library directory for macOS
+    MACOS_LIB_DIR = $$absolute_path($$PARENT_DIR/lib/macos)
 
-    linux {
-        INCLUDEPATH += /usr/include
-        LIBS += -L/usr/lib
-    }
+    # Include path for headers
+    INCLUDEPATH += $$PARENT_DIR/HackTvLib
 
-    macx {
-       HOMEBREW_PREFIX = $$system(brew --prefix)
-       !isEmpty(HOMEBREW_PREFIX) {
-           message("Homebrew found at $$HOMEBREW_PREFIX")
-           INCLUDEPATH += $$HOMEBREW_PREFIX/include
-           LIBS += -L$$HOMEBREW_PREFIX/lib
-       } else {
-           error("Homebrew not found. Please install Homebrew and required dependencies.")
-       }
-    }
-     LIBS += -lHackTvLib
+    # Link to the library with full path
+    LIBS += -L$$MACOS_LIB_DIR -lHackTvLib
+
+    # Add rpath so the app can find the library at runtime
+    QMAKE_RPATHDIR += $$MACOS_LIB_DIR
+
+    # Also add the library directory to the loader path
+    QMAKE_LFLAGS += -Wl,-rpath,@loader_path/../../../lib/macos
+    QMAKE_LFLAGS += -Wl,-rpath,$$MACOS_LIB_DIR
+
+    # Set the install name for the library
+    QMAKE_LFLAGS += -Wl,-headerpad_max_install_names
+
+    # Set minimum macOS version if needed
+    QMAKE_MACOSX_DEPLOYMENT_TARGET = 11.0
 }
 
 SOURCES += \
@@ -65,4 +67,3 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 
 RESOURCES += \
     resources.qrc
-#C:\Qt\6.6.3\mingw_64\bin\windeployqt.exe C:\Users\turka\Desktop\build-HackTvGui\release

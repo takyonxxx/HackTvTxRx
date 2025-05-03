@@ -17,6 +17,50 @@ win32 {
     LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
 }
 
+macx {
+    # macOS specific configurations
+    DEFINES += __APPLE__
+
+    # MacPorts paths
+    MACPORTS_PREFIX = /opt/local
+
+    # Include paths
+    INCLUDEPATH += $$MACPORTS_PREFIX/include
+    INCLUDEPATH += $$MACPORTS_PREFIX/include/libusb-1.0
+
+    # Library paths
+    LIBS += -L$$MACPORTS_PREFIX/lib
+
+    # Libraries
+    LIBS += -lusb-1.0 -lhackrf -lfftw3f -lfdk-aac -lopus -lportaudio -lrtlsdr
+
+    # FFmpeg libraries
+    LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
+
+    # Framework paths (if needed)
+    QMAKE_MACOSX_DEPLOYMENT_TARGET = 11.0
+    QMAKE_CXXFLAGS += -I$$MACPORTS_PREFIX/include
+    QMAKE_LFLAGS += -L$$MACPORTS_PREFIX/lib
+
+    # Set up proper install name for the library
+    QMAKE_LFLAGS_SONAME = -Wl,-install_name,@rpath/
+
+    # Define the target library directory
+    DESTDIR = $$PWD/../lib/macos
+
+    # Create the directory if it doesn't exist
+    !exists($$DESTDIR) {
+        system(mkdir -p $$DESTDIR)
+    }
+
+    # Post-build commands to create symlinks
+    QMAKE_POST_LINK += cd $$DESTDIR && \
+                       ln -sf libHackTvLib.1.0.0.dylib libHackTvLib.dylib && \
+                       ln -sf libHackTvLib.1.0.0.dylib libHackTvLib.1.dylib && \
+                       ln -sf libHackTvLib.1.0.0.dylib libHackTvLib.1.0.dylib && \
+                       install_name_tool -id @rpath/libHackTvLib.1.dylib libHackTvLib.1.0.0.dylib
+}
+
 SOURCES += \
     hackrfdevice.cpp \
     hacktv/acp.c \

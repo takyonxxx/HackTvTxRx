@@ -37,10 +37,17 @@ MainWindow::MainWindow(QWidget *parent)
                   "}";
     labelStyle = "QLabel { background-color: #ad6d0a ; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }";
 
-    if (QFile(m_sSettingsFile).exists())
-        loadSettings();
-    else
-        saveSettings();
+    try {
+        if (QFile::exists(m_sSettingsFile)) {
+            qDebug() << "Settings file exists, loading settings";
+            loadSettings();
+        } else {
+            qDebug() << "Settings file doesn't exist, saving default settings";
+            saveSettings();
+        }
+    } catch (const std::exception& e) {
+        qDebug() << "Exception caught:" << e.what();
+    }
 
     setupUi();
 
@@ -163,7 +170,7 @@ void MainWindow::addOutputGroup()
     colorDisabled->setChecked(false);
     QLabel *freqLabel = new QLabel("Frequency (Hz):", this);
     frequencyEdit = new QLineEdit(this);
-    frequencyEdit->setFixedWidth(75);
+    frequencyEdit->setFixedWidth(150);
     QLabel *channelLabel = new QLabel("Channel:", this);
     channelCombo = new QComboBox(this);
     QLabel *sampleRateLabel = new QLabel("Sample Rate (MHz):", this);
