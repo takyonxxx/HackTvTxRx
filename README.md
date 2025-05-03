@@ -1,19 +1,18 @@
-# HackTvRxTx QT 6.x Library Project
+# HackTvRxTx QT 6.x Library And Gui Project
 
 This project is a clone of https://github.com/fsphil/hacktv with modifications for building on Windows. 
 
 Now macos supported.
 
-Enabled Rx WFM && FFt spectrum
-
-Still continue to develop.
+Enabled Rx and Tx Mode. Video and FM Transmitter && FFt spectrum
 
 <b>Please compile for windows with Desktop Qt 6.x MinGW 64-bit
 
 For macos qt.6.x desktop works.</b>
 
-HackTvLib creates library (HackTvLib.dll)
-HackTvGui shows how you will use library
+HackTvLib creates library (HackTvLib.dll, libHackTvLib.a) for windows gui.
+HackTvLib creates library (libHackTvLib.1.0.0.dylib, libHackTvLib.1.0.dylib, libHackTvLib.1.dylib, libHackTvLib.dylib) for macos gui.
+You can compile HackTvGui with these libraries, they will be automaticaly copied to project Lib folder when you compile HackTvLib.
 
 ![HackTvGui Screenshot](hacktvgui_screen.png)
 
