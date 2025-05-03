@@ -119,6 +119,7 @@ typedef struct {
 	_frame_dbuffer_t out_audio_buffer;
 	int out_frame_size;
 	int allowed_error;
+    float audio_gain;
 	
 	/* Threads */
 	pthread_t input_thread;
@@ -773,97 +774,113 @@ static void *_audio_decode_thread(void *arg)
 
 static void *_audio_scaler_thread(void *arg)
 {
-	av_ffmpeg_t *s = (av_ffmpeg_t *) arg;
-	AVFrame *frame, *oframe;
-	int64_t pts, next_pts;
-	uint8_t const *data[AV_NUM_DATA_POINTERS];
-	int r, count, drop;
-	
-	//fprintf(stderr, "_audio_scaler_thread(): Starting\n");
-	
-	/* Fetch audio frames and pass them through the resampler */
-	while((frame = _frame_dbuffer_flip(&s->in_audio_buffer)) != NULL)
-	{
-		pts = frame->best_effort_timestamp;
-		drop = 0;
-		
-		if(pts != AV_NOPTS_VALUE)
-		{
-			pts      = av_rescale_q(pts, s->audio_stream->time_base, s->audio_time_base);
-			pts     -= s->audio_start_time;
-			next_pts = pts + frame->nb_samples;
-			
-			if(next_pts <= 0)
-			{
-				/* This frame is in the past. Skip it */
-				av_frame_unref(frame);
-				continue;
-			}
-			
-			if(pts < -s->allowed_error)
-			{
-				/* Trim this frame */
-				drop = -pts;
-				//swr_drop_input(s->swr_ctx, -pts); /* It would be nice if this existed */
-			}
-			else if(pts > s->allowed_error)
-			{
-				/* This frame is in the future. Send silence to fill the gap */
-				r = swr_inject_silence(s->swr_ctx, pts);
-				s->audio_start_time += pts;
-			}
-		}
-		
-		count = frame->nb_samples;
-		
-		count -= drop;
+    av_ffmpeg_t *s = (av_ffmpeg_t *) arg;
+    AVFrame *frame, *oframe;
+    int64_t pts, next_pts;
+    uint8_t const *data[AV_NUM_DATA_POINTERS];
+    int r, count, drop;
+    //fprintf(stderr, "_audio_scaler_thread(): Starting\n");
+
+    /* Fetch audio frames and pass them through the resampler */
+    while((frame = _frame_dbuffer_flip(&s->in_audio_buffer)) != NULL)
+    {
+        pts = frame->best_effort_timestamp;
+        drop = 0;
+
+        if(pts != AV_NOPTS_VALUE)
+        {
+            pts      = av_rescale_q(pts, s->audio_stream->time_base, s->audio_time_base);
+            pts     -= s->audio_start_time;
+            next_pts = pts + frame->nb_samples;
+
+            if(next_pts <= 0)
+            {
+                /* This frame is in the past. Skip it */
+                av_frame_unref(frame);
+                continue;
+            }
+
+            if(pts < -s->allowed_error)
+            {
+                /* Trim this frame */
+                drop = -pts;
+                //swr_drop_input(s->swr_ctx, -pts); /* It would be nice if this existed */
+            }
+            else if(pts > s->allowed_error)
+            {
+                /* This frame is in the future. Send silence to fill the gap */
+                r = swr_inject_silence(s->swr_ctx, pts);
+                s->audio_start_time += pts;
+            }
+        }
+
+        count = frame->nb_samples;
+
+        count -= drop;
 #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(59, 24, 100)
-		_audio_offset(
-			data,
-			(const uint8_t **) frame->data,
-			drop,
-			s->audio_codec_ctx->ch_layout.nb_channels,
-			s->audio_codec_ctx->sample_fmt
-		);
+        _audio_offset(
+            data,
+            (const uint8_t **) frame->data,
+            drop,
+            s->audio_codec_ctx->ch_layout.nb_channels,
+            s->audio_codec_ctx->sample_fmt
+            );
 #else
-		_audio_offset(
-			data,
-			(const uint8_t **) frame->data,
-			drop,
-			s->audio_codec_ctx->channels,
-			s->audio_codec_ctx->sample_fmt
-		);
+        _audio_offset(
+            data,
+            (const uint8_t **) frame->data,
+            drop,
+            s->audio_codec_ctx->channels,
+            s->audio_codec_ctx->sample_fmt
+            );
 #endif
-		
-		do
-		{
-			oframe = _frame_dbuffer_back_buffer(&s->out_audio_buffer);
-			r = swr_convert(
-				s->swr_ctx,
-				oframe->data,
-				s->out_frame_size,
-				count ? data : NULL,
-				count
-			);
-			if(r == 0) break;
-			
-			oframe->nb_samples = r;
-			
-			_frame_dbuffer_ready(&s->out_audio_buffer, 0);
-			
-			s->audio_start_time += count;
-			count = 0;
-		}
-		while(r > 0);
-		
-		av_frame_unref(frame);
-	}
-	
-	_frame_dbuffer_abort(&s->out_audio_buffer);
-	
-	//fprintf(stderr, "_audio_scaler_thread(): Ending\n");
-	
-	return(NULL);
+
+        do
+        {
+            oframe = _frame_dbuffer_back_buffer(&s->out_audio_buffer);
+            r = swr_convert(
+                s->swr_ctx,
+                oframe->data,
+                s->out_frame_size,
+                count ? data : NULL,
+                count
+                );
+            if(r == 0) break;
+
+            oframe->nb_samples = r;
+
+            if(s->audio_gain != 1.0)
+            {
+                int16_t *audio_data = (int16_t *)oframe->data[0];
+                int total_samples = r * 2; // stereo (2 channels)
+
+                for(int i = 0; i < total_samples; i++)
+                {
+                    int32_t sample = audio_data[i] * s->audio_gain;
+
+                    /* Clip to prevent overflow */
+                    if(sample > 32767) sample = 32767;
+                    if(sample < -32768) sample = -32768;
+
+                    audio_data[i] = (int16_t)sample;
+                }
+            }
+
+            _frame_dbuffer_ready(&s->out_audio_buffer, 0);
+
+            s->audio_start_time += count;
+            count = 0;
+        }
+        while(r > 0);
+
+        av_frame_unref(frame);
+    }
+
+    _frame_dbuffer_abort(&s->out_audio_buffer);
+
+    //fprintf(stderr, "_audio_scaler_thread(): Ending\n");
+
+    return(NULL);
 }
 
 static int16_t *_ffmpeg_read_audio(void *ctx, size_t *samples)
@@ -960,7 +977,7 @@ static int _ffmpeg_close(void *ctx)
 	return(HACKTV_OK);
 }
 
-int av_ffmpeg_open(av_t *av, char *input_url, char *format, char *options)
+int av_ffmpeg_open(av_t *av, char *input_url, char *format, char *options, float audio_gain)
 {
 	av_ffmpeg_t *s;
 	const AVInputFormat *fmt = NULL;
@@ -981,6 +998,7 @@ int av_ffmpeg_open(av_t *av, char *input_url, char *format, char *options)
 	}
 	
 	s->av = av;
+    s->audio_gain = audio_gain;
 	
 	/* Use 'pipe:' for stdin */
 	if(strcmp(input_url, "-") == 0)

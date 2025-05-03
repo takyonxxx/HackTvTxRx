@@ -818,6 +818,7 @@ void MainWindow::executeCommand()
         try
         {
             m_hackTvLib->setArguments(stdArgs);
+            m_hackTvLib->setAmplitude(tx_amplitude);
             if(m_hackTvLib->start()) {
                 executeButton->setText("Stop");
                 QString argsString = args.join(' ');
@@ -958,6 +959,14 @@ void MainWindow::onInputTypeChanged(int index)
 
     if(isFmTransmit)
         sampleRateCombo->setCurrentIndex(0);
+    else
+    {
+        sampleRateCombo->setCurrentIndex(5);
+        int defaultIndex = channelCombo->findText("E39"); // 615250000Hz
+        if (defaultIndex != -1) {
+            channelCombo->setCurrentIndex(defaultIndex);
+        }
+    }
 
     inputFileEdit->setVisible(isFile);
     chooseFileButton->setVisible(isFile);
@@ -1053,8 +1062,7 @@ void MainWindow::populateChannelCombo()
         long long frequency;
     };
 
-    QVector<Channel> channels = {                                 
-                                 {"Tv", 620750000},
+    QVector<Channel> channels = {
                                  {"E2", 48250000},
                                  {"E3", 55250000},
                                  {"E4", 62250000},
@@ -1140,11 +1148,6 @@ void MainWindow::populateChannelCombo()
 
     connect(channelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onChannelChanged);
-
-    // int defaultIndex = channelCombo->findText("PowerFm");
-    // if (defaultIndex != -1) {
-    //     channelCombo->setCurrentIndex(defaultIndex);
-    // }
 }
 
 void MainWindow::onChannelChanged(int index)

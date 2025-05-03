@@ -82,6 +82,7 @@ typedef struct {
     int json;
     char *ffmt;
     char *fopts;
+    float audio_gain;
 
     /* Video encoder state */
     vid_t vid;

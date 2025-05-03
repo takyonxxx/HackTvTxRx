@@ -272,6 +272,7 @@ bool HackTvLib::start()
     s.file_type = RF_INT16;
     s.raw_bb_blanking_level = 0;
     s.raw_bb_white_level = INT16_MAX;
+    s.audio_gain = 3.0;
     m_rxTxMode = TX_MODE;
 
     m_abort = false;
@@ -1293,11 +1294,11 @@ void HackTvLib::rfTxLoop()
             }
             else if (strncmp(pre, "ffmpeg", l) == 0)
             {
-                r = av_ffmpeg_open(&s.vid.av, sub, s.ffmt, s.fopts);
+                r = av_ffmpeg_open(&s.vid.av, sub, s.ffmt, s.fopts, s.audio_gain);
             }
             else
             {
-                r = av_ffmpeg_open(&s.vid.av, pre, s.ffmt, s.fopts);
+                r = av_ffmpeg_open(&s.vid.av, pre, s.ffmt, s.fopts, s.audio_gain);
             }
 
             if (r != HACKTV_OK)

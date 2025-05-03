@@ -23,7 +23,7 @@
 extern "C" {
 #endif
 
-int av_ffmpeg_open(av_t *av, char *input_url, char *format, char *options);
+int av_ffmpeg_open(av_t *av, char *input_url, char *format, char *options, float audio_gain);
 void av_ffmpeg_init(void);
 void av_ffmpeg_deinit(void);
 

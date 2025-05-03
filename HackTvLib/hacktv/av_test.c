@@ -69,137 +69,156 @@ static int _test_close(void *ctx)
 
 int av_test_open(av_t *av)
 {
-	uint32_t const bars[8] = {
-		0x000000,
-		0x0000BF,
-		0xBF0000,
-		0xBF00BF,
-		0x00BF00,
-		0x00BFBF,
-		0xBFBF00,
-		0xFFFFFF,
-	};
-	av_test_t *s;
-	int c, x, y;
-	double d;
-	int16_t l;
-	
-	s = calloc(1, sizeof(av_test_t));
-	if(!s)
-	{
-		return(HACKTV_OUT_OF_MEMORY);
-	}
-	
-	/* Generate a basic test pattern */
-	s->width = av->width;
-	s->height = av->height;
-	s->video = malloc(av->width * av->height * sizeof(uint32_t));
-	if(!s->video)
-	{
-		free(s);
-		return(HACKTV_OUT_OF_MEMORY);
-	}
-	
-	for(y = 0; y < s->height; y++)
-	{
-		for(x = 0; x < s->width; x++)
-		{
-			if(y < s->height - 140)
-			{
-				/* 75% colour bars */
-				c = 7 - x * 8 / s->width;
-				c = bars[c];
-			}
-			else if(y < s->height - 120)
-			{
-				/* 75% red */
-				c = 0xBF0000;
-			}
-			else if(y < s->height - 100)
-			{
-				/* Gradient black to white */
-				c = x * 0xFF / (s->width - 1);
-				c = c << 16 | c << 8 | c;
-			}
-			else
-			{
-				/* 8 level grey bars */
-				c = x * 0xFF / (s->width - 1);
-				c &= 0xE0;
-				c = c | (c >> 3) | (c >> 6);
-				c = c << 16 | c << 8 | c;
-			}
-			
-			s->video[y * s->width + x] = c;
-		}
-	}
-	
-	/* Overlay the logo */
-	if(s->width >= LOGO_WIDTH * LOGO_SCALE &&
-	   s->height >= LOGO_HEIGHT * LOGO_SCALE)
-	{
-		x = s->width / 2;
-		y = s->height / 10;
-		
-		for(x = 0; x < LOGO_WIDTH * LOGO_SCALE; x++)
-		{
-			for(y = 0; y < LOGO_HEIGHT * LOGO_SCALE; y++)
-			{
-				c = _logo[y / LOGO_SCALE * LOGO_WIDTH + x / LOGO_SCALE] == ' ' ? 0x000000 : 0xFFFFFF;
-				
-				s->video[(s->height / 10 + y) * s->width + ((s->width - LOGO_WIDTH * LOGO_SCALE) / 2) + x] = c;
-			}
-		}
-	}
-	
-	/* Generate the 1khz test tones (BBC 1 style) */
-	d = 1000.0 * 2 * M_PI * av->sample_rate.den / av->sample_rate.num;
-	y = av->sample_rate.num / av->sample_rate.den * 64 / 100; /* 640ms */
-	s->audio_samples = y * 10; /* 6.4 seconds */
-	s->audio = malloc(s->audio_samples * 2 * sizeof(int16_t));
-	if(!s->audio)
-	{
-		free(s->video);
-		free(s);
-		return(HACKTV_OUT_OF_MEMORY);
-	}
-	
-	for(x = 0; x < s->audio_samples; x++)
-	{
-		l = sin(x * d) * INT16_MAX * 0.1;
-		
-		if(x < y)
-		{
-			/* 0 - 640ms, interrupt left channel */
-			s->audio[x * 2 + 0] = 0;
-			s->audio[x * 2 + 1] = l;
-		}
-		else if(x >= y * 2 && x < y * 3)
-		{
-			/* 1280ms - 1920ms, interrupt right channel */
-			s->audio[x * 2 + 0] = l;
-			s->audio[x * 2 + 1] = 0;
-		}
-		else if(x >= y * 4 && x < y * 5)
-		{
-			/* 2560ms - 3200ms, interrupt right channel again */
-			s->audio[x * 2 + 0] = l;
-			s->audio[x * 2 + 1] = 0;
-		}
-		else
-		{
-			/* Use both channels for all other times */
-			s->audio[x * 2 + 0] = l; /* Left */
-			s->audio[x * 2 + 1] = l; /* Right */
-		}
-	}
-	
-	/* Register the callback functions */
-	av->av_source_ctx = s;
-	av->read_video = _test_read_video;
-	av->read_audio = _test_read_audio;
-	av->close = _test_close;
-	
-	return(HACKTV_OK);
-}
+    uint32_t const bars[8] = {
+        0x000000,
+        0x0000BF,
+        0xBF0000,
+        0xBF00BF,
+        0x00BF00,
+        0x00BFBF,
+        0xBFBF00,
+        0xFFFFFF,
+    };
+    av_test_t *s;
+    int c, x, y;
+    double d;
+    int16_t l;
 
+    s = calloc(1, sizeof(av_test_t));
+    if(!s)
+    {
+        return(HACKTV_OUT_OF_MEMORY);
+    }
+
+    /* Generate a basic test pattern */
+    s->width = av->width;
+    s->height = av->height;
+    s->video = malloc(av->width * av->height * sizeof(uint32_t));
+    if(!s->video)
+    {
+        free(s);
+        return(HACKTV_OUT_OF_MEMORY);
+    }
+
+    for(y = 0; y < s->height; y++)
+    {
+        for(x = 0; x < s->width; x++)
+        {
+            if(y < s->height - 140)
+            {
+                /* 75% colour bars */
+                c = 7 - x * 8 / s->width;
+                c = bars[c];
+            }
+            else if(y < s->height - 120)
+            {
+                /* 75% red */
+                c = 0xBF0000;
+            }
+            else if(y < s->height - 100)
+            {
+                /* Gradient black to white */
+                c = x * 0xFF / (s->width - 1);
+                c = c << 16 | c << 8 | c;
+            }
+            else
+            {
+                /* 8 level grey bars */
+                c = x * 0xFF / (s->width - 1);
+                c &= 0xE0;
+                c = c | (c >> 3) | (c >> 6);
+                c = c << 16 | c << 8 | c;
+            }
+
+            s->video[y * s->width + x] = c;
+        }
+    }
+
+    /* Overlay the logo */
+    if(s->width >= LOGO_WIDTH * LOGO_SCALE &&
+        s->height >= LOGO_HEIGHT * LOGO_SCALE)
+    {
+        x = s->width / 2;
+        y = s->height / 10;
+
+        for(x = 0; x < LOGO_WIDTH * LOGO_SCALE; x++)
+        {
+            for(y = 0; y < LOGO_HEIGHT * LOGO_SCALE; y++)
+            {
+                c = _logo[y / LOGO_SCALE * LOGO_WIDTH + x / LOGO_SCALE] == ' ' ? 0x000000 : 0xFFFFFF;
+
+                s->video[(s->height / 10 + y) * s->width + ((s->width - LOGO_WIDTH * LOGO_SCALE) / 2) + x] = c;
+            }
+        }
+    }
+
+    /* Generate the 1khz test tones with smoother amplitude */
+    d = 1000.0 * 2 * M_PI * av->sample_rate.den / av->sample_rate.num;
+    y = av->sample_rate.num / av->sample_rate.den * 64 / 100; /* 640ms */
+    s->audio_samples = y * 10; /* 6.4 seconds */
+    s->audio = malloc(s->audio_samples * 2 * sizeof(int16_t));
+    if(!s->audio)
+    {
+        free(s->video);
+        free(s);
+        return(HACKTV_OUT_OF_MEMORY);
+    }
+
+    /* Sabit genlik için geliştirilmiş ses üretimi */
+    float base_amplitude = 0.4f; // Sabit genlik seviyesi (0.0 - 1.0 arası)
+    float envelope_duration = y * 0.1f; // Yumuşak başlangıç ve bitiş için zarfın süresi
+
+    for(x = 0; x < s->audio_samples; x++)
+    {
+        // Ses zarfı (yumuşak başlangıç ve bitiş)
+        float envelope;
+        if (x < envelope_duration) {
+            // Başlangıçta yuavaş yükselme
+            envelope = (float)x / envelope_duration;
+        } else if (x >= (s->audio_samples - envelope_duration)) {
+            // Sonunda yuavaş azalma
+            envelope = (float)(s->audio_samples - x) / envelope_duration;
+        } else {
+            // Orta kısımda sabit genlik
+            envelope = 1.0f;
+        }
+
+        // Sine wave oluşturma
+        float sample = sin(x * d) * INT16_MAX * base_amplitude * envelope;
+        int16_t l = (int16_t)sample;
+
+        // Kanal kesintilerini koruyarak ses üretimi
+        if(x < y)
+        {
+            /* 0 - 640ms, interrupt left channel */
+            s->audio[x * 2 + 0] = 0;
+            s->audio[x * 2 + 1] = l;
+        }
+        else if(x >= y * 2 && x < y * 3)
+        {
+            /* 1280ms - 1920ms, interrupt right channel */
+            s->audio[x * 2 + 0] = l;
+            s->audio[x * 2 + 1] = 0;
+        }
+        else if(x >= y * 4 && x < y * 5)
+        {
+            /* 2560ms - 3200ms, interrupt right channel again */
+            s->audio[x * 2 + 0] = l;
+            s->audio[x * 2 + 1] = 0;
+        }
+        else
+        {
+            /* Use both channels for all other times */
+            s->audio[x * 2 + 0] = l; /* Left */
+            s->audio[x * 2 + 1] = l; /* Right */
+        }
+    }
+
+    /* Register the callback functions */
+    av->av_source_ctx = s;
+    av->read_video = _test_read_video;
+    av->read_audio = _test_read_audio;
+    av->close = _test_close;
+
+    return(HACKTV_OK);
+}
