@@ -155,8 +155,6 @@ void MainWindow::addOutputGroup()
     QVector<QPair<QString, QString>> devices = {
                                                 {"HackRF", "hackrf"},
                                                 {"RtlSdr", "rtlsdr"},
-                                                {"SoapySDR", "soapysdr"},
-                                                {"FL2000", "fl2k"},
                                                 };
 
     QLabel *outputLabel = new QLabel("Device:", this);
