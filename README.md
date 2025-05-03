@@ -11,8 +11,11 @@ Enabled Rx and Tx Mode. Video and FM Transmitter & FFt spectrum
 For macos qt.6.x desktop works.</b>
 
 HackTvLib creates library (HackTvLib.dll, libHackTvLib.a) for windows gui.
+
 HackTvLib creates library (libHackTvLib.1.0.0.dylib, libHackTvLib.1.0.dylib, libHackTvLib.1.dylib, libHackTvLib.dylib) for macos gui.
+
 You can compile HackTvGui with these libraries, they will be automaticaly copied to project Lib folder when you compile HackTvLib.
+
 
 ![HackTvGui Screenshot](hacktvgui_screen.png)
 
