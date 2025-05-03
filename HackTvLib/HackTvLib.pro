@@ -34,6 +34,13 @@ win32 {
     # Copy the DLL after building
     QMAKE_POST_LINK += $$QMAKE_COPY $$shell_path($$OUT_PWD/$(DESTDIR_TARGET)) $$shell_path($$DESTDIR/)
 
+    # Copy the static library (.a file)
+    CONFIG(debug, debug|release) {
+        QMAKE_POST_LINK += && $$QMAKE_COPY $$shell_path($$OUT_PWD/debug/libHackTvLibd.a) $$shell_path($$DESTDIR/)
+    } else {
+        QMAKE_POST_LINK += && $$QMAKE_COPY $$shell_path($$OUT_PWD/release/libHackTvLib.a) $$shell_path($$DESTDIR/)
+    }
+
     # Copy dependent DLLs for distribution (optional)
     # You might want to copy these only for release builds
     CONFIG(release, debug|release) {
@@ -71,6 +78,15 @@ win32 {
         QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/swscale-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
         QMAKE_POST_LINK += && (for %i in ($$MINGW_PATH/bin/swresample-*.dll) do copy "%i" $$shell_path($$DESTDIR/))
     }
+
+    # pacman -S mingw-w64-x86_64-ffmpeg \
+    #           mingw-w64-x86_64-libusb \
+    #           mingw-w64-x86_64-hackrf \
+    #           mingw-w64-x86_64-rtl-sdr \
+    #           mingw-w64-x86_64-fdk-aac \
+    #           mingw-w64-x86_64-fftw \
+    #           mingw-w64-x86_64-portaudio \
+    #           mingw-w64-x86_64-opus
 }
 
 macx {
