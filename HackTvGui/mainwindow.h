@@ -57,6 +57,7 @@ private slots:
     void onVgaSliderValueChanged(int value);
     void onRxAmpSliderValueChanged(int value);
     void updateDisplay(const QImage& image);
+    void exitApp();
 
 private:
     void setupUi();

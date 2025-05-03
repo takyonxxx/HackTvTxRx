@@ -4,7 +4,12 @@
 #include <QtConcurrent/QtConcurrent>
 #include <QFuture>
 #include "constants.h"
-#include "palbdemodulator.h"
+// #include "palbdemodulator.h"
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <tlhelp32.h>
+#endif
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
@@ -433,7 +438,7 @@ void MainWindow::addinputTypeGroup()
     QHBoxLayout *buttonLayout = new QHBoxLayout();
     executeButton = new QPushButton("Start", this);
     exitButton = new QPushButton("Exit", this);
-    connect(exitButton, &QPushButton::clicked, this, &MainWindow::close);
+    connect(exitButton, &QPushButton::clicked, this, &MainWindow::exitApp);
 
     buttonLayout->addWidget(executeButton);
     buttonLayout->addWidget(exitButton);
@@ -1280,4 +1285,25 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
     //                               Q_ARG(const QImage&, frame.image));
     // }
 
+}
+
+
+void MainWindow::exitApp()
+{
+    if(m_isProcessing && m_hackTvLib->stop())
+    {
+        m_isProcessing.store(false);
+    }
+
+#ifdef Q_OS_WIN
+    DWORD currentPID = GetCurrentProcessId();
+    HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, currentPID);
+    if (hProcess != NULL)
+    {
+        TerminateProcess(hProcess, 0);
+        CloseHandle(hProcess);
+    }
+#else
+    exit(0);
+#endif
 }
