@@ -8,7 +8,8 @@ Enabled Rx WFM && FFt spectrum
 
 Still continue to develop.
 
-<b>Please compile with Desktop Qt 6.x MinGW 64-bit</b>
+<b>Please compile for windows with Desktop Qt 6.x MinGW 64-bit</b>
+For macos qt.6.x desktop works.
 
 HackTvLib creates library (HackTvLib.dll)
 HackTvGui shows how you will use library
