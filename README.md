@@ -2,11 +2,13 @@
 
 This project is a clone of https://github.com/fsphil/hacktv with modifications for building on Windows. 
 
+Now macos supported.
+
 Enabled Rx WFM && FFt spectrum
 
 Still continue to develop.
 
-<b>Please compile with Desktop Qt 6.6x MinGW 64-bit</b>
+<b>Please compile with Desktop Qt 6.x MinGW 64-bit</b>
 
 HackTvLib creates library (HackTvLib.dll)
 HackTvGui shows how you will use library
