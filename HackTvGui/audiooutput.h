@@ -29,13 +29,14 @@ signals:
 private:
 
     static constexpr int SAMPLE_RATE = 48000;
-    static constexpr int CHANNEL_COUNT = 1;
+    static constexpr int CHANNEL_COUNT = 2;
     static constexpr int SAMPLE_SIZE = 16;
 
     QMutex *mutex{};
     bool m_abort {false};
 
     QAudioFormat m_format;
+    QAudioFormat m_inputFormat;
     QScopedPointer<QAudioSink> m_audioOutput;
     QIODevice *audioDevice;
     QByteArray buffer;

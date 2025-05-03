@@ -1,6 +1,7 @@
 QT       += core gui multimedia
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 CONFIG += c++17
+
 PARENT_DIR = $$absolute_path($$PWD/../)
 INCLUDEPATH += $$PARENT_DIR/include
 message($$PARENT_DIR)
@@ -8,7 +9,6 @@ message($$PARENT_DIR)
 win32 {
     WIN_LIB_DIR = $$absolute_path($$PARENT_DIR/lib/windows)
     INCLUDEPATH += $$PARENT_DIR/HackTvLib
-
     # Link to the import library
     LIBS += -L$$WIN_LIB_DIR -lHackTvLib
 }
