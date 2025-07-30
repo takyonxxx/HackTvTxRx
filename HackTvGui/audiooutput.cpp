@@ -1,4 +1,5 @@
 #include "audiooutput.h"
+#include <QMediaDevices>
 #include <QDebug>
 #include <QBuffer>
 
@@ -17,21 +18,63 @@ AudioOutput::AudioOutput(QObject *parent):
         m_format.setChannelCount(CHANNEL_COUNT);
         m_inputFormat = m_format;
 
-        m_audioOutput.reset(new QAudioSink(m_format));  // Device belirtme
+        // Check if audio devices are available before creating QAudioSink
+        QAudioDevice defaultDevice = QMediaDevices::defaultAudioOutput();
+        if (defaultDevice.isNull()) {
+            qDebug() << "No default audio output device available";
+            return;
+        }
+
+        // Check if the format is supported
+        if (!defaultDevice.isFormatSupported(m_format)) {
+            qDebug() << "Audio format not supported, trying to find nearest supported format";
+
+            // Get the preferred format from the device
+            QAudioFormat nearestFormat = defaultDevice.preferredFormat();
+
+            // Use a supported format
+            m_format = nearestFormat;
+            m_format.setSampleRate(SAMPLE_RATE); // Try to keep your preferred sample rate
+
+            if (!defaultDevice.isFormatSupported(m_format)) {
+                // Fall back to device's preferred format completely
+                m_format = nearestFormat;
+                qDebug() << "Using device preferred format completely";
+            }
+        }
+
+        // Create QAudioSink with explicit device
+        m_audioOutput.reset(new QAudioSink(defaultDevice, m_format));
 
         if (m_audioOutput) {
+            // Set buffer size before starting
             m_audioOutput->setBufferSize(1024 * 1024);
+
+            // Connect state change signal for debugging
+            connect(m_audioOutput.get(), &QAudioSink::stateChanged,
+                    this, &AudioOutput::handleAudioOutputStateChanged);
+
+            // Start the audio output
             audioDevice = m_audioOutput->start();
 
-            if (audioDevice) {
-                qDebug() << "Audio initialized successfully with default device";
+            if (audioDevice && audioDevice->isOpen()) {
+                qDebug() << "Audio initialized successfully";
+                qDebug() << "  Device:" << defaultDevice.description();
+                qDebug() << "  Buffer size:" << m_audioOutput->bufferSize();
             } else {
                 qDebug() << "Failed to start audio device";
+                if (m_audioOutput->error() != QAudio::NoError) {
+                    qDebug() << "Audio error:" << m_audioOutput->error();
+                }
             }
+        } else {
+            qDebug() << "Failed to create QAudioSink";
         }
 
     } catch (const std::exception& e) {
         qDebug() << "Exception in AudioOutput constructor:" << e.what();
+    } catch (...) {
+        qDebug() << "Unknown exception in AudioOutput constructor";
     }
 }
 
