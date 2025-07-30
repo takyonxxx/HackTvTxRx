@@ -91,6 +91,71 @@ macx {
                        install_name_tool -id @rpath/libHackTvLib.1.dylib libHackTvLib.1.0.0.dylib
 }
 
+linux {
+    # Linux specific configurations
+    DEFINES += __linux__
+
+    # Standard include paths for most distributions
+    INCLUDEPATH += /usr/include
+    INCLUDEPATH += /usr/include/libusb-1.0
+    INCLUDEPATH += /usr/local/include
+    INCLUDEPATH += /usr/local/include/libusb-1.0
+
+    # Standard library paths
+    LIBS += -L/usr/lib
+    LIBS += -L/usr/lib/x86_64-linux-gnu
+    LIBS += -L/usr/local/lib
+    LIBS += -L/lib/x86_64-linux-gnu
+
+    # Link to libraries
+    LIBS += -lusb-1.0 -lhackrf -lfftw3f -lfdk-aac -lopus -lportaudio -lrtlsdr
+
+    # FFmpeg libraries
+    LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
+
+    # Additional Linux-specific libraries
+    LIBS += -lpthread -lm -ldl
+
+    # Compiler and linker flags
+    QMAKE_CXXFLAGS += -fPIC
+    QMAKE_LFLAGS += -Wl,-rpath,\$$ORIGIN
+
+    # Define the target library directory
+    DESTDIR = $$PWD/../lib/linux
+
+    # Create the directory if it doesn't exist
+    !exists($$DESTDIR) {
+        system(mkdir -p $$DESTDIR)
+    }
+
+    # Set library version for Linux
+    VERSION = 1.0.0
+
+    # Post-build commands to create symlinks
+    QMAKE_POST_LINK += cd $$DESTDIR && \
+                       ln -sf libHackTvLib.so.1.0.0 libHackTvLib.so && \
+                       ln -sf libHackTvLib.so.1.0.0 libHackTvLib.so.1 && \
+                       ln -sf libHackTvLib.so.1.0.0 libHackTvLib.so.1.0
+
+    # Installation commands for system-wide installation (optional)
+    target.path = /usr/local/lib
+    headers.path = /usr/local/include/hacktvlib
+    headers.files = $$HEADERS
+    INSTALLS += target headers
+
+    # Package-specific configurations for different distributions
+
+    # Ubuntu/Debian package installation command:
+    # sudo apt install build-essential \
+    #                  libusb-1.0-0-dev libhackrf-dev libfftw3-dev \
+    #                  libosmo-fl2k-dev portaudio19-dev libfltk1.3-dev \
+    #                  libavcodec-dev libavdevice-dev libavfilter-dev \
+    #                  libavformat-dev libavutil-dev libswscale-dev \
+    #                  libswresample-dev libfdk-aac-dev libopus-dev \
+    #                  librtlsdr-dev
+
+}
+
 SOURCES += \
     hackrfdevice.cpp \
     hacktv/acp.c \
@@ -162,18 +227,3 @@ TRANSLATIONS += \
 
 DISTFILES += \
     hacktv/README.md
-
-#sudo apt install qt5-default qtmultimedia5-dev build-essential libusb-1.0-0-dev libhackrf-dev libfftw3-dev libosmo-fl2k-dev portaudio19-dev libfltk1.3-dev libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
-#brew install qt libusb hackrf fftw portaudio ffmpeg
-#export PATH="/usr/local/opt/qt/bin:$PATH"
-#brew link qt --force
-# pacman -S mingw-w64-x86_64-gcc
-# pacman -S mingw-w64-x86_64-qt5
-# pacman -S mingw-w64-x86_64-hackrf
-# pacman -S mingw-w64-x86_64-rtl-sdr
-# pacman -S mingw-w64-x86_64-ffmpeg
-# pacman -S mingw-w64-x86_64-portaudio
-# pacman -S mingw-w64-x86_64-fftw
-# pacman -S mingw-w64-x86_64-fdk-aac
-# pacman -S mingw-w64-x86_64-opus
-# pacman -S mingw-w64-x86_64-libusb

@@ -104,7 +104,7 @@ private:
     std::unique_ptr<HackTvLib> m_hackTvLib;
     std::unique_ptr<AudioOutput> audioOutput;
 
-    QThreadPool m_threadPool;
+    QThreadPool* m_threadPool;
     QTimer *logTimer;
     QString m_sSettingsFile;
     QStringList pendingLogs;

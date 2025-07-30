@@ -18,6 +18,7 @@ class AudioOutput: public QObject
 public:
     explicit AudioOutput(QObject *parent = nullptr);
     ~AudioOutput();
+    bool initializeAudio();
     void stop();
     void writeBuffer(const QByteArray &buffer);    
 public slots:

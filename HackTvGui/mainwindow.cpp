@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include <QApplication>
 #include <QFuture>
 #include <QLabel>
 #include <QtConcurrent/QtConcurrent>
@@ -13,8 +14,8 @@
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
-    m_hackTvLib(std::make_unique<HackTvLib>()),
-
+    m_hackTvLib(nullptr),  // Initialize as nullptr
+    m_threadPool(nullptr),
     m_frequency(DEFAULT_FREQUENCY),
     m_sampleRate(DEFAULT_SAMPLE_RATE),
     m_LowCutFreq(-1*int(DEFAULT_CUT_OFF)),
@@ -25,7 +26,9 @@ MainWindow::MainWindow(QWidget *parent)
 {
     QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
     m_sSettingsFile = homePath + "/hacktv_settings.ini";
-    m_threadPool.setMaxThreadCount(QThread::idealThreadCount());
+
+    // DON'T create thread pool here - wait until after UI setup
+    // m_threadPool.setMaxThreadCount(QThread::idealThreadCount()); // REMOVE THIS LINE
 
     sliderStyle = "QSlider::groove:horizontal { "
                   "border: 1px solid #999999; "
@@ -59,6 +62,9 @@ MainWindow::MainWindow(QWidget *parent)
     frequencyEdit->setText(QString::number(m_frequency));
 
     try {
+        // Create HackTvLib AFTER UI setup
+        m_hackTvLib = std::make_unique<HackTvLib>();
+
         m_hackTvLib->setLogCallback([this](const std::string& msg) {
             handleLog(msg);
         });
@@ -66,6 +72,12 @@ MainWindow::MainWindow(QWidget *parent)
             handleReceivedData(data, len);
         });
         m_hackTvLib->setMicEnabled(false);
+
+        // Create thread pool AFTER everything else is set up
+        m_threadPool = new QThreadPool(this);  // Pass 'this' as parent
+        if (m_threadPool) {
+            m_threadPool->setMaxThreadCount(QThread::idealThreadCount());
+        }
 
         audioOutput = std::make_unique<AudioOutput>();
         if (!audioOutput) {
@@ -93,12 +105,20 @@ MainWindow::MainWindow(QWidget *parent)
     logTimer->start(100);
 }
 
+// Update destructor:
 MainWindow::~MainWindow()
 {
     audioOutput.reset();
     fmDemodulator.reset();
     rationalResampler.reset();
     lowPassFilter.reset();
+
+    // Clean up thread pool
+    if (m_threadPool) {
+        m_threadPool->waitForDone(3000); // Wait max 3 seconds
+        delete m_threadPool;
+        m_threadPool = nullptr;
+    }
 }
 
 void MainWindow::setupUi()
@@ -345,6 +365,7 @@ void MainWindow::addOutputGroup()
         }
         saveSettings();
     });
+
     connect(txFilterSizeSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), [this](double value) {
         txFilterSizeSlider->setValue(static_cast<int>(value * 100));
         tx_filter_size = value;
@@ -749,11 +770,12 @@ void MainWindow::loadSettings()
 
 void MainWindow::handleSamples(const std::vector<std::complex<float>>& samples)
 {
-    QFuture<void> fftFuture = QtConcurrent::run(&m_threadPool, [this, samples]() {
+    // FIXED - Remove &m_threadPool parameter
+    QFuture<void> fftFuture = QtConcurrent::run([this, samples]() {
         this->processFft(samples);
     });
 
-    QFuture<void> demodFuture = QtConcurrent::run(&m_threadPool, [this, samples]() {
+    QFuture<void> demodFuture = QtConcurrent::run([this, samples]() {
         this->processDemod(samples);
     });
 
@@ -1170,7 +1192,7 @@ void MainWindow::onChannelChanged(int index)
 
 void MainWindow::processAudio(const std::vector<float>& demodulatedSamples)
 {
-    if (demodulatedSamples.empty())
+    if (demodulatedSamples.empty() || !audioOutput)
         return;
 
     audioOutput->processAudio(demodulatedSamples);
@@ -1178,7 +1200,7 @@ void MainWindow::processAudio(const std::vector<float>& demodulatedSamples)
 
 void MainWindow::handleReceivedData(const int8_t *data, size_t len)
 {
-    if (!m_isProcessing.load() || !data || len != 262144)
+    if (!m_isProcessing.load() || !data || len != 262144 || !m_threadPool)
         return;
 
     const int samples_count = len / 2;
@@ -1196,11 +1218,11 @@ void MainWindow::handleReceivedData(const int8_t *data, size_t len)
     }
 
     // Process FFT and demodulation in parallel, sharing the same data
-    QFuture<void> fftFuture = QtConcurrent::run(&m_threadPool, [this, samplesPtr]() {
+    QFuture<void> fftFuture = QtConcurrent::run(m_threadPool, [this, samplesPtr]() {
         this->processFft(*samplesPtr);
     });
 
-    QFuture<void> demodFuture = QtConcurrent::run(&m_threadPool, [this, samplesPtr]() {
+    QFuture<void> demodFuture = QtConcurrent::run(m_threadPool, [this, samplesPtr]() {
         this->processDemod(*samplesPtr);
     });
 }
@@ -1290,20 +1312,44 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 
 void MainWindow::exitApp()
 {
-    if(m_isProcessing && m_hackTvLib->stop())
-    {
-        m_isProcessing.store(false);
-    }
+    try {
+        // Stop HackTV processing first
+        if (m_isProcessing.load()) {
+            m_isProcessing.store(false);
+        }
+
+        if (m_hackTvLib) {
+            m_hackTvLib->stop();
+        }
+
+        // Stop any timers
+        if (logTimer) {
+            logTimer->stop();
+        }
+
+        QThread::msleep(50);
 
 #ifdef Q_OS_WIN
-    DWORD currentPID = GetCurrentProcessId();
-    HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, currentPID);
-    if (hProcess != NULL)
-    {
-        TerminateProcess(hProcess, 0);
-        CloseHandle(hProcess);
-    }
-#else
-    exit(0);
+        DWORD currentPID = GetCurrentProcessId();
+        HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, currentPID);
+        if (hProcess != NULL)
+        {
+            TerminateProcess(hProcess, 0);
+            CloseHandle(hProcess);
+        }
+#else \
+    // FIXED: Use Qt's proper shutdown instead of exit(0)
+        QApplication::quit();
 #endif
+
+    } catch (const std::exception& e) {
+        qDebug() << "Exception in exitApp:" << e.what();
+#ifdef Q_OS_WIN
+        // Force exit on Windows if there's an exception
+        std::exit(1);
+#else \
+    // Use Qt quit on Linux even if there's an exception
+        QApplication::quit();
+#endif
+    }
 }

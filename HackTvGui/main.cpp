@@ -8,8 +8,12 @@
 
 int main(int argc, char *argv[])
 {
-    QApplication a(argc, argv);
+    qputenv("QT_MEDIA_BACKEND", "ffmpeg");
+    qputenv("AV_LOG_FORCE_NOCOLOR", "1");
+    qputenv("LIBVA_DRIVER_NAME", "");
+    qputenv("VDPAU_DRIVER", "");
 
+    QApplication a(argc, argv);
     a.setWindowIcon(QIcon(":/ico/hacktv.ico"));
 
     a.setStyle(QStyleFactory::create("Fusion"));

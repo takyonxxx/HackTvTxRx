@@ -1,5 +1,4 @@
 #include <cmath>
-
 #ifndef _MSC_VER
 #include <sys/time.h>
 #else
@@ -39,6 +38,11 @@ int gettimeofday(struct timeval * tp, struct timezone * tzp)
 // Comment out to enable plotter debug messages
 //#define PLOTTER_DEBUG
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#define FONT_WIDTH(metrics, text) metrics.horizontalAdvance(text)
+#else
+#define FONT_WIDTH(metrics, text) metrics.width(text)
+#endif
 
 #define CUR_CUT_DELTA 5		//cursor capture delta in pixels
 #define FFT_MIN_DB     -160.f
@@ -52,6 +56,12 @@ int gettimeofday(struct timeval * tp, struct timezone * tzp)
 #define PLOTTER_CENTER_LINE_COLOR   0xFF788296
 #define PLOTTER_FILTER_LINE_COLOR   0xB0FF6060
 #define PLOTTER_FILTER_BOX_COLOR    0xFFA0A0A4
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#define GLOBAL_POS(event) event->globalPosition().toPoint()
+#else
+#define GLOBAL_POS(event) GLOBAL_POS(event)
+#endif
 
 static inline bool val_is_out_of_range(float val, float min, float max)
 {
@@ -258,7 +268,7 @@ void CPlotter::mouseMoveEvent(QMouseEvent* event)
 
                 m_CursorCaptured = CENTER;
                 if (m_TooltipsEnabled)
-                    QToolTip::showText(event->globalPos(),
+                    QToolTip::showText(GLOBAL_POS(event),
                                        QString("Demod: %1 kHz")
                                            .arg(m_DemodCenterFreq/1.e3f, 0, 'f', 3),
                                        this);
@@ -270,7 +280,7 @@ void CPlotter::mouseMoveEvent(QMouseEvent* event)
                     setCursor(QCursor(Qt::SizeFDiagCursor));
                 m_CursorCaptured = RIGHT;
                 if (m_TooltipsEnabled)
-                    QToolTip::showText(event->globalPos(),
+                    QToolTip::showText(GLOBAL_POS(event),
                                        QString("High cut: %1 Hz")
                                            .arg(m_DemodHiCutFreq),
                                        this);
@@ -283,7 +293,7 @@ void CPlotter::mouseMoveEvent(QMouseEvent* event)
                     setCursor(QCursor(Qt::SizeBDiagCursor));
                 m_CursorCaptured = LEFT;
                 if (m_TooltipsEnabled)
-                    QToolTip::showText(event->globalPos(),
+                    QToolTip::showText(GLOBAL_POS(event),
                                        QString("Low cut: %1 Hz")
                                            .arg(m_DemodLowCutFreq),
                                        this);
@@ -312,7 +322,7 @@ void CPlotter::mouseMoveEvent(QMouseEvent* event)
                     m_CursorCaptured = NOCAP;
                 }
                 if (m_TooltipsEnabled)
-                    QToolTip::showText(event->globalPos(),
+                    QToolTip::showText(GLOBAL_POS(event),
                                        QString("F: %1 kHz")
                                            .arg(freqFromX(pt.x())/1.e3f, 0, 'f', 3),
                                        this);
@@ -336,7 +346,7 @@ void CPlotter::mouseMoveEvent(QMouseEvent* event)
             QDateTime tt;
             tt.setMSecsSinceEpoch(msecFromY(pt.y()));
 
-            QToolTip::showText(event->globalPos(),
+            QToolTip::showText(GLOBAL_POS(event),
                                QString("%1\n%2 kHz")
                                    .arg(tt.toString("yyyy.MM.dd hh:mm:ss.zzz"))
                                    .arg(freqFromX(pt.x())/1.e3f, 0, 'f', 3),
@@ -1539,7 +1549,7 @@ void CPlotter::drawOverlay()
 #define VER_MARGIN 1
 
     // X and Y axis areas
-    m_YAxisWidth = metrics.horizontalAdvance("XXXX") + 2 * HOR_MARGIN;
+    m_YAxisWidth = FONT_WIDTH(metrics, "XXXX") + 2 * HOR_MARGIN;
     m_XAxisYCenter = h - metrics.height()/2;
     int xAxisHeight = metrics.height() + 2 * VER_MARGIN;
     int xAxisTop = h - xAxisHeight;
@@ -1583,7 +1593,7 @@ void CPlotter::drawOverlay()
     painter.setPen(QColor(PLOTTER_TEXT_COLOR));
     for (int i = 0; i <= m_HorDivs; i++)
     {
-        int tw = metrics.horizontalAdvance(m_HDivText[i]);
+        int tw = FONT_WIDTH(metrics, m_HDivText[i]);
         x = (int)((float)i*pixperdiv + adjoffset);
         if (x > m_YAxisWidth)
         {
@@ -1622,7 +1632,7 @@ void CPlotter::drawOverlay()
 
     // draw amplitude values (y axis)
     int dB = m_PandMaxdB;
-    m_YAxisWidth = metrics.horizontalAdvance("-120 ");
+    m_YAxisWidth = FONT_WIDTH(metrics, "-120 ");
     painter.setPen(QColor(PLOTTER_TEXT_COLOR));
     for (int i = 0; i < m_VerDivs; i++)
     {
