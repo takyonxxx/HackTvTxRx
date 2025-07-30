@@ -12,12 +12,6 @@ AudioOutput::AudioOutput(QObject *parent):
     try {
         mutex = new QMutex;
 
-        // Format ayarla
-        m_format.setSampleFormat(QAudioFormat::Int16);
-        m_format.setSampleRate(SAMPLE_RATE);
-        m_format.setChannelCount(CHANNEL_COUNT);
-        m_inputFormat = m_format;
-
         // Check if audio devices are available before creating QAudioSink
         QAudioDevice defaultDevice = QMediaDevices::defaultAudioOutput();
         if (defaultDevice.isNull()) {
@@ -25,22 +19,13 @@ AudioOutput::AudioOutput(QObject *parent):
             return;
         }
 
+        m_format = defaultDevice.preferredFormat();
+        m_inputFormat = m_format;
+
         // Check if the format is supported
         if (!defaultDevice.isFormatSupported(m_format)) {
-            qDebug() << "Audio format not supported, trying to find nearest supported format";
-
-            // Get the preferred format from the device
-            QAudioFormat nearestFormat = defaultDevice.preferredFormat();
-
-            // Use a supported format
-            m_format = nearestFormat;
-            m_format.setSampleRate(SAMPLE_RATE); // Try to keep your preferred sample rate
-
-            if (!defaultDevice.isFormatSupported(m_format)) {
-                // Fall back to device's preferred format completely
-                m_format = nearestFormat;
-                qDebug() << "Using device preferred format completely";
-            }
+            qDebug() << "Format not supported!";
+            return;
         }
 
         // Create QAudioSink with explicit device
@@ -116,7 +101,7 @@ void AudioOutput::handleAudioOutputStateChanged(QAudio::State newState)
 
 void AudioOutput::processAudio(const std::vector<float> &audioData)
 {
-    if (!audioDevice || !mutex || !m_audioOutput) {
+    if (!audioDevice || !mutex || !m_audioOutput || audioData.empty()) {
         return;
     }
 
@@ -128,28 +113,32 @@ void AudioOutput::processAudio(const std::vector<float> &audioData)
             // Convert mono float to stereo float
             std::vector<float> stereoData(audioData.size() * 2);
             for (size_t i = 0; i < audioData.size(); ++i) {
-                stereoData[i * 2] = audioData[i];      // Left channel
-                stereoData[i * 2 + 1] = audioData[i];  // Right channel (duplicate)
+                // Clamp input to valid range [-1.0, 1.0]
+                float clampedSample = std::max(-1.0f, std::min(1.0f, audioData[i]));
+                stereoData[i * 2] = clampedSample;      // Left channel
+                stereoData[i * 2 + 1] = clampedSample;  // Right channel (duplicate)
             }
 
             // Write directly as float
-            if (m_audioOutput->bytesFree() >= stereoData.size() * sizeof(float)) {
-                audioDevice->write(reinterpret_cast<const char*>(stereoData.data()),
-                                   stereoData.size() * sizeof(float));
+            qint64 bytesToWrite = stereoData.size() * sizeof(float);
+            if (m_audioOutput->bytesFree() >= bytesToWrite) {
+                audioDevice->write(reinterpret_cast<const char*>(stereoData.data()), bytesToWrite);
             }
         }
         else if (m_format.sampleFormat() == QAudioFormat::Int16 && m_format.channelCount() == 2) {
             // Convert mono float to stereo int16
             std::vector<qint16> stereoData(audioData.size() * 2);
             for (size_t i = 0; i < audioData.size(); ++i) {
-                qint16 sample = static_cast<qint16>(audioData[i] * 32767.0f);
+                // Clamp input to valid range [-1.0, 1.0] then convert to int16
+                float clampedSample = std::max(-1.0f, std::min(1.0f, audioData[i]));
+                qint16 sample = static_cast<qint16>(clampedSample * 32767.0f);
                 stereoData[i * 2] = sample;      // Left channel
                 stereoData[i * 2 + 1] = sample;  // Right channel (duplicate)
             }
 
-            if (m_audioOutput->bytesFree() >= stereoData.size() * sizeof(qint16)) {
-                audioDevice->write(reinterpret_cast<const char*>(stereoData.data()),
-                                   stereoData.size() * sizeof(qint16));
+            qint64 bytesToWrite = stereoData.size() * sizeof(qint16);
+            if (m_audioOutput->bytesFree() >= bytesToWrite) {
+                audioDevice->write(reinterpret_cast<const char*>(stereoData.data()), bytesToWrite);
             }
         }
         else if (m_format.sampleFormat() == QAudioFormat::Int16 && m_format.channelCount() == 1) {
@@ -157,7 +146,9 @@ void AudioOutput::processAudio(const std::vector<float> &audioData)
             buffer.resize(audioData.size() * sizeof(qint16));
             qint16* output = reinterpret_cast<qint16*>(buffer.data());
             for (size_t i = 0; i < audioData.size(); ++i) {
-                output[i] = static_cast<qint16>(audioData[i] * 32767.0f);
+                // Clamp input to valid range [-1.0, 1.0] then convert to int16
+                float clampedSample = std::max(-1.0f, std::min(1.0f, audioData[i]));
+                output[i] = static_cast<qint16>(clampedSample * 32767.0f);
             }
 
             if (m_audioOutput->bytesFree() >= buffer.size()) {
@@ -165,7 +156,9 @@ void AudioOutput::processAudio(const std::vector<float> &audioData)
             }
         }
         else {
-            qDebug() << "Unsupported audio format combination for conversion";
+            qDebug() << "Unsupported audio format combination for conversion:"
+                     << "Format:" << m_format.sampleFormat()
+                     << "Channels:" << m_format.channelCount();
         }
     } catch (const std::exception& e) {
         qDebug() << "Exception in processAudio:" << e.what();
@@ -174,14 +167,9 @@ void AudioOutput::processAudio(const std::vector<float> &audioData)
     }
 }
 
-void AudioOutput::stop()
-{
-    m_abort = true;
-}
-
 void AudioOutput::writeBuffer(const QByteArray &buffer)
 {
-    if (!m_abort && audioDevice && audioDevice->isOpen() && mutex)
+    if (!m_abort && audioDevice && audioDevice->isOpen() && mutex && !buffer.isEmpty())
     {
         try {
             QMutexLocker locker(mutex);
@@ -190,23 +178,39 @@ void AudioOutput::writeBuffer(const QByteArray &buffer)
             if (m_format.sampleFormat() == QAudioFormat::Float && m_format.channelCount() == 2 &&
                 m_inputFormat.sampleFormat() == QAudioFormat::Int16 && m_inputFormat.channelCount() == 1) {
 
+                // Validate buffer size
+                if (buffer.size() % sizeof(qint16) != 0) {
+                    qDebug() << "Invalid buffer size for int16 samples:" << buffer.size();
+                    return;
+                }
+
                 // Convert mono int16 to stereo float
                 const qint16* inputSamples = reinterpret_cast<const qint16*>(buffer.constData());
                 int numSamples = buffer.size() / sizeof(qint16);
 
                 std::vector<float> stereoFloat(numSamples * 2);
                 for (int i = 0; i < numSamples; ++i) {
-                    float sample = inputSamples[i] / 32768.0f;  // Convert to float [-1, 1]
+                    float sample = inputSamples[i] / 32767.0f;  // Fixed: was 32768
                     stereoFloat[i * 2] = sample;      // Left channel
                     stereoFloat[i * 2 + 1] = sample;  // Right channel (duplicate mono)
                 }
 
-                audioDevice->write(reinterpret_cast<const char*>(stereoFloat.data()),
-                                   stereoFloat.size() * sizeof(float));
+                qint64 bytesToWrite = stereoFloat.size() * sizeof(float);
+                if (m_audioOutput->bytesFree() >= bytesToWrite) {
+                    audioDevice->write(reinterpret_cast<const char*>(stereoFloat.data()), bytesToWrite);
+                } else {
+                    qDebug() << "Not enough free space in audio buffer:"
+                             << "Need:" << bytesToWrite << "Free:" << m_audioOutput->bytesFree();
+                }
             }
             else {
                 // Direct write if formats match
-                audioDevice->write(buffer);
+                if (m_audioOutput->bytesFree() >= buffer.size()) {
+                    audioDevice->write(buffer);
+                } else {
+                    qDebug() << "Not enough free space in audio buffer for direct write:"
+                             << "Need:" << buffer.size() << "Free:" << m_audioOutput->bytesFree();
+                }
             }
         } catch (const std::exception& e) {
             qDebug() << "Exception in writeBuffer:" << e.what();
