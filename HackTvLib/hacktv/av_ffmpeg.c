@@ -49,7 +49,7 @@
 
 /* Maximum length of the packet queue */
 /* Taken from ffplay.c */
-#define MAX_QUEUE_SIZE (15 * 1024 * 1024)
+#define MAX_QUEUE_SIZE (2 * 1024 * 1024)
 
 typedef struct __packet_queue_item_t {
 	
@@ -509,20 +509,39 @@ static void *_video_decode_thread(void *arg)
 			/* avcodec_send_packet() has failed, abort thread */
 			break;
 		}
-		
-		r = avcodec_receive_frame(s->video_codec_ctx, frame);
-		
-		if(r == 0)
-		{
-			/* We have received a frame! */
-			av_frame_ref(_frame_dbuffer_back_buffer(&s->in_video_buffer), frame);
-			_frame_dbuffer_ready(&s->in_video_buffer, 0);
-		}
-		else if(r != AVERROR(EAGAIN))
-		{
-			/* avcodec_receive_frame returned an EOF or error, abort thread */
-			break;
-		}
+
+        r = avcodec_receive_frame(s->video_codec_ctx, frame);
+
+        if(r == 0)
+        {
+            // Frame başarıyla decode edildi - ancak corrupt olabilir
+            if(frame->width > 0 && frame->height > 0)
+            {
+                av_frame_ref(_frame_dbuffer_back_buffer(&s->in_video_buffer), frame);
+                _frame_dbuffer_ready(&s->in_video_buffer, 0);
+            }
+            else
+            {
+                fprintf(stderr, "Warning: Received corrupt frame, skipping\n");
+            }
+        }
+        else if(r == AVERROR(EAGAIN))
+        {
+            // Normal durum - daha fazla packet gerekli
+            continue;
+        }
+        else if(r == AVERROR_EOF)
+        {
+            // Stream sonu
+            break;
+        }
+        else
+        {
+            // Diğer hatalar - sadece logla ve devam et
+            fprintf(stderr, "Warning: avcodec_receive_frame error: %d, continuing...\n", r);
+            av_usleep(1000); // 1ms bekle
+            continue;
+        }
 	}
 	
 	_frame_dbuffer_abort(&s->in_video_buffer);
@@ -536,134 +555,134 @@ static void *_video_decode_thread(void *arg)
 
 static void *_video_scaler_thread(void *arg)
 {
-	av_ffmpeg_t *s = (av_ffmpeg_t *) arg;
-	AVFrame *frame, *oframe;
-	AVRational ratio;
-	rational_t r;
-	int64_t pts;
-	
-	//fprintf(stderr, "_video_scaler_thread(): Starting\n");
-	
-	/* Fetch video frames and pass them through the scaler */
-	while((frame = _frame_dbuffer_flip(&s->in_video_buffer)) != NULL)
-	{
-		pts = frame->best_effort_timestamp;
-		
-		if(pts != AV_NOPTS_VALUE)
-		{
-			pts  = av_rescale_q(pts, s->video_stream->time_base, s->video_time_base);
-			pts -= s->video_start_time;
-			
-			if(pts < 0)
-			{
-				/* This frame is in the past. Skip it */
-				av_frame_unref(frame);
-				continue;
-			}
-			
-			while(pts > 0)
-			{
-				/* This frame is in the future. Repeat the previous one */
-				_frame_dbuffer_ready(&s->out_video_buffer, 1);
-				s->video_start_time++;
-				pts--;
-			}
-		}
-		
-		oframe = _frame_dbuffer_back_buffer(&s->out_video_buffer);
-		
-		ratio = av_guess_sample_aspect_ratio(s->format_ctx, s->video_stream, frame);
-		
-		if(ratio.num == 0 || ratio.den == 0)
-		{
-			/* Default to square pixels if the ratio looks odd */
-			ratio = (AVRational) { 1, 1 };
-		}
-		
-		r = av_calculate_frame_size(
-			s->av,
-			(rational_t) { frame->width, frame->height },
-			rational_mul(
-				(rational_t) { ratio.num, ratio.den },
-				(rational_t) { frame->width, frame->height }
-			)
-		);
-		
-		if(r.num != oframe->width ||
-		   r.den != oframe->height)
-		{
-			av_freep(&oframe->data[0]);
-			
-			oframe->format = AV_PIX_FMT_RGB32;
-			oframe->width = r.num;
-			oframe->height = r.den;
-			
-			int i = av_image_alloc(
-				oframe->data,
-				oframe->linesize,
-				oframe->width, oframe->height,
-				AV_PIX_FMT_RGB32, av_cpu_max_align()
-			);
-			memset(oframe->data[0], 0, i);
-		}
-		
-		/* Initialise / re-initialise software scaler */
-		s->sws_ctx = sws_getCachedContext(
-			s->sws_ctx,
-			frame->width,
-			frame->height,
-			frame->format,
-			oframe->width,
-			oframe->height,
-			AV_PIX_FMT_RGB32,
-			SWS_BICUBIC,
-			NULL,
-			NULL,
-			NULL
-		);
-		
-		if(!s->sws_ctx) break;
-		
-		sws_scale(
-			s->sws_ctx,
-			(uint8_t const * const *) frame->data,
-			frame->linesize,
-			0,
-			s->video_codec_ctx->height,
-			oframe->data,
-			oframe->linesize
-		);
-		
-		/* Adjust the pixel ratio for the scaled image */
-		av_reduce(
-			&oframe->sample_aspect_ratio.num,
-			&oframe->sample_aspect_ratio.den,
-			frame->width * ratio.num * oframe->height,
-			frame->height * ratio.den * oframe->width,
-			INT_MAX
-		);
-		
-		/* Copy some data to the scaled image */
+    av_ffmpeg_t *s = (av_ffmpeg_t *) arg;
+    AVFrame *frame, *oframe;
+    AVRational ratio;
+    rational_t r;
+    int64_t pts;
+
+    //fprintf(stderr, "_video_scaler_thread(): Starting\n");
+
+    /* Fetch video frames and pass them through the scaler */
+    while((frame = _frame_dbuffer_flip(&s->in_video_buffer)) != NULL)
+    {
+        pts = frame->best_effort_timestamp;
+
+        if(pts != AV_NOPTS_VALUE)
+        {
+            pts  = av_rescale_q(pts, s->video_stream->time_base, s->video_time_base);
+            pts -= s->video_start_time;
+
+            if(pts < 0)
+            {
+                /* This frame is in the past. Skip it */
+                av_frame_unref(frame);
+                continue;
+            }
+
+            while(pts > 0)
+            {
+                /* This frame is in the future. Repeat the previous one */
+                _frame_dbuffer_ready(&s->out_video_buffer, 1);
+                s->video_start_time++;
+                pts--;
+            }
+        }
+
+        oframe = _frame_dbuffer_back_buffer(&s->out_video_buffer);
+
+        ratio = av_guess_sample_aspect_ratio(s->format_ctx, s->video_stream, frame);
+
+        if(ratio.num == 0 || ratio.den == 0)
+        {
+            /* Default to square pixels if the ratio looks odd */
+            ratio = (AVRational) { 1, 1 };
+        }
+
+        r = av_calculate_frame_size(
+            s->av,
+            (rational_t) { frame->width, frame->height },
+            rational_mul(
+                (rational_t) { ratio.num, ratio.den },
+                (rational_t) { frame->width, frame->height }
+                )
+            );
+
+        if(r.num != oframe->width ||
+            r.den != oframe->height)
+        {
+            av_freep(&oframe->data[0]);
+
+            oframe->format = AV_PIX_FMT_RGB32;
+            oframe->width = r.num;
+            oframe->height = r.den;
+
+            int i = av_image_alloc(
+                oframe->data,
+                oframe->linesize,
+                oframe->width, oframe->height,
+                AV_PIX_FMT_RGB32, av_cpu_max_align()
+                );
+            memset(oframe->data[0], 0, i);
+        }
+
+        /* Initialise / re-initialise software scaler - ORIJINAL YÖNTEM */
+        s->sws_ctx = sws_getCachedContext(
+            s->sws_ctx,
+            frame->width,
+            frame->height,
+            frame->format,
+            oframe->width,
+            oframe->height,
+            AV_PIX_FMT_RGB32,
+            SWS_BICUBIC,
+            NULL,
+            NULL,
+            NULL
+        );
+
+        if(!s->sws_ctx) break;
+
+        sws_scale(
+            s->sws_ctx,
+            (uint8_t const * const *) frame->data,
+            frame->linesize,
+            0,
+            s->video_codec_ctx->height,
+            oframe->data,
+            oframe->linesize
+        );
+
+        /* Adjust the pixel ratio for the scaled image */
+        av_reduce(
+            &oframe->sample_aspect_ratio.num,
+            &oframe->sample_aspect_ratio.den,
+            frame->width * ratio.num * oframe->height,
+            frame->height * ratio.den * oframe->width,
+            INT_MAX
+            );
+
+        /* Copy some data to the scaled image */
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(58, 29, 100)
-		oframe->interlaced_frame = frame->flags & AV_FRAME_FLAG_INTERLACED ? 1 : 0;
-		oframe->top_field_first = frame->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST ? 1 : 0;
+        oframe->interlaced_frame = frame->flags & AV_FRAME_FLAG_INTERLACED ? 1 : 0;
+        oframe->top_field_first = frame->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST ? 1 : 0;
 #else
-		oframe->interlaced_frame = frame->interlaced_frame;
-		oframe->top_field_first = frame->top_field_first;
+        oframe->interlaced_frame = frame->interlaced_frame;
+        oframe->top_field_first = frame->top_field_first;
 #endif
-		
-		/* Done with the frame */
-		av_frame_unref(frame);
-		
-		_frame_dbuffer_ready(&s->out_video_buffer, 0);
-		s->video_start_time++;
-	}
-	
-	_frame_dbuffer_abort(&s->out_video_buffer);
-	
-	//fprintf(stderr, "_video_scaler_thread(): Ending\n");
-	
-	return(NULL);
+
+        /* Done with the frame */
+        av_frame_unref(frame);
+
+        _frame_dbuffer_ready(&s->out_video_buffer, 0);
+        s->video_start_time++;
+    }
+
+    _frame_dbuffer_abort(&s->out_video_buffer);
+
+    //fprintf(stderr, "_video_scaler_thread(): Ending\n");
+
+    return(NULL);
 }
 
 static int _ffmpeg_read_video(void *ctx, av_frame_t *frame)
@@ -979,361 +998,552 @@ static int _ffmpeg_close(void *ctx)
 
 int av_ffmpeg_open(av_t *av, char *input_url, char *format, char *options, float audio_gain)
 {
-	av_ffmpeg_t *s;
-	const AVInputFormat *fmt = NULL;
-	AVDictionary *opts = NULL;
-	const AVCodec *codec;
-	AVRational time_base;
+    av_ffmpeg_t *s;
+    const AVInputFormat *fmt = NULL;
+    AVDictionary *opts = NULL;
+
+    // Optimized FFmpeg options for low latency RTSP streaming
+    av_dict_set(&opts, "rtsp_transport", "tcp", 0);
+    av_dict_set(&opts, "max_delay", "50000", 0);          // Reduced to 50ms
+    av_dict_set(&opts, "buffer_size", "65536", 0);        // Increased buffer
+    av_dict_set(&opts, "fflags", "nobuffer+flush_packets+discardcorrupt", 0); // Discard corrupt packets
+    av_dict_set(&opts, "flags", "low_delay", 0);
+    av_dict_set(&opts, "probesize", "2000000", 0);        // Increased for HEVC
+    av_dict_set(&opts, "analyzeduration", "2000000", 0);  // Increased for HEVC
+    av_dict_set(&opts, "tune", "zerolatency", 0);         // Zero latency tuning
+    av_dict_set(&opts, "preset", "ultrafast", 0);         // Fastest preset
+    av_dict_set(&opts, "rtsp_flags", "prefer_tcp", 0);    // Force TCP
+    av_dict_set(&opts, "stimeout", "2000000", 0);         // 2 second timeout
+    av_dict_set(&opts, "allowed_media_types", "video+audio", 0); // Only video and audio
+    av_dict_set(&opts, "reorder_queue_size", "0", 0);     // Disable packet reordering for low latency
+
+    const AVCodec *codec;
+    AVRational time_base;
 #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(59, 24, 100)
-	AVChannelLayout dst_ch_layout = AV_CHANNEL_LAYOUT_STEREO;
+    AVChannelLayout dst_ch_layout = AV_CHANNEL_LAYOUT_STEREO;
 #endif
-	int64_t start_time = 0;
-	int r;
-	int i;
-	
-	s = calloc(1, sizeof(av_ffmpeg_t));
-	if(!s)
-	{
-		return(HACKTV_OUT_OF_MEMORY);
-	}
-	
-	s->av = av;
+    int64_t start_time = 0;
+    int r;
+    int i;
+
+    s = calloc(1, sizeof(av_ffmpeg_t));
+    if(!s)
+    {
+        return(HACKTV_OUT_OF_MEMORY);
+    }
+
+    s->av = av;
     s->audio_gain = audio_gain;
-	
-	/* Use 'pipe:' for stdin */
-	if(strcmp(input_url, "-") == 0)
-	{
-		input_url = "pipe:";
-	}
-	
-	if(format != NULL)
-	{
-		fmt = av_find_input_format(format);
-	}
-	
-	if(options)
-	{
-		av_dict_parse_string(&opts, options, "=", ":", 0);
-	}
-	
-	/* Open the video */
-	if((r = avformat_open_input(&s->format_ctx, input_url, fmt, &opts)) < 0)
-	{
-		fprintf(stderr, "Error opening file '%s'\n", input_url);
-		_print_ffmpeg_error(r);
-		return(HACKTV_ERROR);
-	}
-	
-	/* Read stream info from the file */
-	if(avformat_find_stream_info(s->format_ctx, NULL) < 0)
-	{
-		fprintf(stderr, "Error reading stream information from file\n");
-		return(HACKTV_ERROR);
-	}
-	
-	/* Dump some useful information to stderr */
-	fprintf(stderr, "Opening '%s'...\n", input_url);
-	av_dump_format(s->format_ctx, 0, input_url, 0);
-	
-	/* Select the video stream */
-	/* TODO: Allow the user to select streams by number or name, */
-	/*       selection would need to be made per-file? */
-	i = av_find_best_stream(s->format_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-	s->video_stream = (i >= 0 ? s->format_ctx->streams[i] : NULL);
-	
-	/* Select the audio stream if required */
-	i = av_find_best_stream(s->format_ctx, AVMEDIA_TYPE_AUDIO, -1, i, NULL, 0);
-	s->audio_stream = (i >= 0 && av->sample_rate.num > 0 ? s->format_ctx->streams[i] : NULL);
-	
-	/* At minimum we need either a video or audio stream */
-	if(s->video_stream == NULL && s->audio_stream == NULL)
-	{
-		fprintf(stderr, "No video or audio streams found\n");
-		return(HACKTV_ERROR);
-	}
-	
-	if(s->video_stream != NULL)
-	{
-		fprintf(stderr, "Using video stream %d.\n", s->video_stream->index);
-		
-		/* Create the video's time_base using the current TV mode's frames per second.
-		 * Numerator and denominator are swapped as ffmpeg uses seconds per frame. */
-		s->video_time_base.num = av->frame_rate.den;
-		s->video_time_base.den = av->frame_rate.num;
-		
-		/* Use the video's start time as the reference */
-		time_base = s->video_stream->time_base;
-		start_time = s->video_stream->start_time;
-		
-		/* Get a pointer to the codec context for the video stream */
-		s->video_codec_ctx = avcodec_alloc_context3(NULL);
-		if(!s->video_codec_ctx)
-		{
-			return(HACKTV_OUT_OF_MEMORY);
-		}
-		
-		if(avcodec_parameters_to_context(s->video_codec_ctx, s->video_stream->codecpar) < 0)
-		{
-			return(HACKTV_ERROR);
-		}
-		
-		s->video_codec_ctx->thread_count = 0; /* Let ffmpeg decide number of threads */
-		
-		/* Find the decoder for the video stream */
-		codec = avcodec_find_decoder(s->video_codec_ctx->codec_id);
-		if(codec == NULL)
-		{
-			fprintf(stderr, "Unsupported video codec\n");
-			return(HACKTV_ERROR);
-		}
-		
-		/* Open video codec */
-		if(avcodec_open2(s->video_codec_ctx, codec, NULL) < 0)
-		{
-			fprintf(stderr, "Error opening video codec\n");
-			return(HACKTV_ERROR);
-		}
-		
-		/* Initialise SWS context for software scaling */
-		s->sws_ctx = sws_getContext(
-			s->video_codec_ctx->width,
-			s->video_codec_ctx->height,
-			s->video_codec_ctx->pix_fmt,
-			av->width,
-			av->height,
-			AV_PIX_FMT_RGB32,
-			SWS_BICUBIC,
-			NULL,
-			NULL,
-			NULL
-		);
-		
-		if(!s->sws_ctx)
-		{
-			return(HACKTV_OUT_OF_MEMORY);
-		}
-		
-		s->video_eof = 0;
-	}
-	else
-	{
-		fprintf(stderr, "No video streams found.\n");
-	}
-	
-	if(s->audio_stream != NULL)
-	{
-		fprintf(stderr, "Using audio stream %d.\n", s->audio_stream->index);
-		
-		/* Get a pointer to the codec context for the video stream */
-		s->audio_codec_ctx = avcodec_alloc_context3(NULL);
-		if(!s->audio_codec_ctx)
-		{
-			return(HACKTV_ERROR);
-		}
-		
-		if(avcodec_parameters_to_context(s->audio_codec_ctx, s->audio_stream->codecpar) < 0)
-		{
-			return(HACKTV_ERROR);
-		}
-		
-		s->audio_codec_ctx->thread_count = 0; /* Let ffmpeg decide number of threads */
-		
-		/* Find the decoder for the audio stream */
-		codec = avcodec_find_decoder(s->audio_codec_ctx->codec_id);
-		if(codec == NULL)
-		{
-			fprintf(stderr, "Unsupported audio codec\n");
-			return(HACKTV_ERROR);
-		}
-		
-		/* Open audio codec */
-		if(avcodec_open2(s->audio_codec_ctx, codec, NULL) < 0)
-		{
-			fprintf(stderr, "Error opening audio codec\n");
-			return(HACKTV_ERROR);
-		}
-		
-		/* Create the audio time_base using the source sample rate */
-		s->audio_time_base.num = 1;
-		s->audio_time_base.den = s->audio_codec_ctx->sample_rate;
-		
-		/* Use the audio's start time as the reference if no video was detected */
-		if(s->video_stream == NULL)
-		{
-			time_base = s->audio_stream->time_base;
-			start_time = s->audio_stream->start_time;
-		}
-		
-		/* Prepare the resampler */
-		s->swr_ctx = swr_alloc();
-		if(!s->swr_ctx)
-		{
-			return(HACKTV_OUT_OF_MEMORY);
-		}
-		
+
+    /* Use 'pipe:' for stdin */
+    if(strcmp(input_url, "-") == 0)
+    {
+        input_url = "pipe:";
+    }
+
+    if(format != NULL)
+    {
+        fmt = av_find_input_format(format);
+    }
+
+    // Parse additional options from parameter
+    if(options)
+    {
+        av_dict_parse_string(&opts, options, "=", ":", 0);
+    }
+
+    /* Open the video */
+    if((r = avformat_open_input(&s->format_ctx, input_url, fmt, &opts)) < 0)
+    {
+        fprintf(stderr, "Error opening file '%s'\n", input_url);
+        _print_ffmpeg_error(r);
+        av_dict_free(&opts);
+        free(s);
+        return(HACKTV_ERROR);
+    }
+
+    // Set format context flags for low latency
+    s->format_ctx->flags |= AVFMT_FLAG_NONBLOCK;
+    s->format_ctx->flags |= AVFMT_FLAG_NOBUFFER;
+
+    /* Read stream info from the file */
+    if(avformat_find_stream_info(s->format_ctx, NULL) < 0)
+    {
+        fprintf(stderr, "Error reading stream information from file\n");
+        avformat_close_input(&s->format_ctx);
+        free(s);
+        return(HACKTV_ERROR);
+    }
+
+    /* Dump some useful information to stderr */
+    fprintf(stderr, "Opening '%s'...\n", input_url);
+    av_dump_format(s->format_ctx, 0, input_url, 0);
+
+    /* Select the video stream */
+    i = av_find_best_stream(s->format_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+    s->video_stream = (i >= 0 ? s->format_ctx->streams[i] : NULL);
+
+    /* Select the audio stream if required */
+    i = av_find_best_stream(s->format_ctx, AVMEDIA_TYPE_AUDIO, -1, i, NULL, 0);
+    s->audio_stream = (i >= 0 && av->sample_rate.num > 0 ? s->format_ctx->streams[i] : NULL);
+
+    /* At minimum we need either a video or audio stream */
+    if(s->video_stream == NULL && s->audio_stream == NULL)
+    {
+        fprintf(stderr, "No video or audio streams found\n");
+        avformat_close_input(&s->format_ctx);
+        free(s);
+        return(HACKTV_ERROR);
+    }
+
+    if(s->video_stream != NULL)
+    {
+        fprintf(stderr, "Using video stream %d.\n", s->video_stream->index);
+
+        // Debug codec information
+        fprintf(stderr, "Video codec: %s, size: %dx%d, pix_fmt: %s\n",
+                avcodec_get_name(s->video_stream->codecpar->codec_id),
+                s->video_stream->codecpar->width,
+                s->video_stream->codecpar->height,
+                av_get_pix_fmt_name(s->video_stream->codecpar->format));
+
+        /* Create the video's time_base using the current TV mode's frames per second */
+        s->video_time_base.num = av->frame_rate.den;
+        s->video_time_base.den = av->frame_rate.num;
+
+        /* Use the video's start time as the reference */
+        time_base = s->video_stream->time_base;
+        start_time = s->video_stream->start_time;
+
+        /* Get a pointer to the codec context for the video stream */
+        s->video_codec_ctx = avcodec_alloc_context3(NULL);
+        if(!s->video_codec_ctx)
+        {
+            avformat_close_input(&s->format_ctx);
+            free(s);
+            return(HACKTV_OUT_OF_MEMORY);
+        }
+
+        if(avcodec_parameters_to_context(s->video_codec_ctx, s->video_stream->codecpar) < 0)
+        {
+            avcodec_free_context(&s->video_codec_ctx);
+            avformat_close_input(&s->format_ctx);
+            free(s);
+            return(HACKTV_ERROR);
+        }
+
+        // Optimize codec context for low latency
+        s->video_codec_ctx->thread_count = 4; // Use multiple threads
+        s->video_codec_ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+        s->video_codec_ctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
+        s->video_codec_ctx->flags2 |= AV_CODEC_FLAG2_FAST;
+
+        // Special handling for HEVC
+        if(s->video_codec_ctx->codec_id == AV_CODEC_ID_HEVC)
+        {
+            fprintf(stderr, "HEVC codec detected, applying optimizations...\n");
+        }
+
+        /* Find the decoder for the video stream */
+        codec = avcodec_find_decoder(s->video_codec_ctx->codec_id);
+        if(codec == NULL)
+        {
+            fprintf(stderr, "Unsupported video codec: %s\n",
+                    avcodec_get_name(s->video_codec_ctx->codec_id));
+
+            // Try software HEVC decoder if available
+            if(s->video_codec_ctx->codec_id == AV_CODEC_ID_HEVC)
+            {
+                fprintf(stderr, "Trying software HEVC decoder...\n");
+                codec = avcodec_find_decoder_by_name("libx265");
+                if(!codec) {
+                    codec = avcodec_find_decoder_by_name("hevc");
+                }
+            }
+
+            if(codec == NULL)
+            {
+                avcodec_free_context(&s->video_codec_ctx);
+                avformat_close_input(&s->format_ctx);
+                free(s);
+                return(HACKTV_ERROR);
+            }
+        }
+
+        // Set codec options for low latency and HEVC stability
+        AVDictionary *codec_opts = NULL;
+        av_dict_set(&codec_opts, "tune", "zerolatency", 0);
+        av_dict_set(&codec_opts, "preset", "ultrafast", 0);
+        av_dict_set(&codec_opts, "delay", "0", 0);
+
+        // HEVC specific options for stability
+        if(s->video_codec_ctx->codec_id == AV_CODEC_ID_HEVC)
+        {
+            av_dict_set(&codec_opts, "strict_poc", "1", 0); // Strict POC checking
+            av_dict_set(&codec_opts, "output_corrupt", "0", 0); // Don't output corrupt frames
+            av_dict_set(&codec_opts, "error_concealment", "1", 0); // Enable error concealment
+            av_dict_set(&codec_opts, "threads", "4", 0); // Explicit thread count for HEVC
+        }
+
+        /* Open video codec */
+        if(avcodec_open2(s->video_codec_ctx, codec, &codec_opts) < 0)
+        {
+            fprintf(stderr, "Error opening video codec\n");
+            av_dict_free(&codec_opts);
+            avcodec_free_context(&s->video_codec_ctx);
+            avformat_close_input(&s->format_ctx);
+            free(s);
+            return(HACKTV_ERROR);
+        }
+        av_dict_free(&codec_opts);
+
+        // Handle unknown pixel format
+        enum AVPixelFormat src_pix_fmt = s->video_codec_ctx->pix_fmt;
+        if(src_pix_fmt == AV_PIX_FMT_NONE)
+        {
+            fprintf(stderr, "Unknown pixel format, defaulting to YUV420P\n");
+            src_pix_fmt = AV_PIX_FMT_YUV420P;
+        }
+
+        // Set proper color range and space parameters
+        enum AVColorRange src_range = s->video_codec_ctx->color_range;
+        enum AVColorSpace src_colorspace = s->video_codec_ctx->colorspace;
+
+        if(src_range == AVCOL_RANGE_UNSPECIFIED)
+        {
+            src_range = AVCOL_RANGE_MPEG; // Default to limited range
+        }
+
+        if(src_colorspace == AVCOL_SPC_UNSPECIFIED)
+        {
+            src_colorspace = AVCOL_SPC_BT709; // Default to BT.709
+        }
+
+        /* Initialize SWS context for software scaling */
+        s->sws_ctx = sws_getContext(
+            s->video_codec_ctx->width,
+            s->video_codec_ctx->height,
+            src_pix_fmt,
+            av->width,
+            av->height,
+            AV_PIX_FMT_RGB32,
+            SWS_FAST_BILINEAR, // Faster than SWS_BICUBIC
+            NULL,
+            NULL,
+            NULL
+            );
+
+        // Set color range and colorspace parameters
+        if(s->sws_ctx)
+        {
+            int *inv_table, *table, srcRange, dstRange, brightness, contrast, saturation;
+
+            inv_table = sws_getCoefficients(src_colorspace);
+            srcRange = (src_range == AVCOL_RANGE_JPEG) ? 1 : 0;
+            dstRange = 1; // RGB is always full range
+            brightness = contrast = saturation = 1 << 16; // 1.0 in fixed point
+
+            sws_setColorspaceDetails(s->sws_ctx, inv_table, srcRange,
+                                     inv_table, dstRange, brightness, contrast, saturation);
+        }
+
+        if(!s->sws_ctx)
+        {
+            avcodec_free_context(&s->video_codec_ctx);
+            avformat_close_input(&s->format_ctx);
+            free(s);
+            return(HACKTV_OUT_OF_MEMORY);
+        }
+
+        s->video_eof = 0;
+    }
+    else
+    {
+        fprintf(stderr, "No video streams found.\n");
+    }
+
+    if(s->audio_stream != NULL)
+    {
+        fprintf(stderr, "Using audio stream %d.\n", s->audio_stream->index);
+
+        /* Get a pointer to the codec context for the audio stream */
+        s->audio_codec_ctx = avcodec_alloc_context3(NULL);
+        if(!s->audio_codec_ctx)
+        {
+            if(s->video_codec_ctx) avcodec_free_context(&s->video_codec_ctx);
+            if(s->sws_ctx) sws_freeContext(s->sws_ctx);
+            avformat_close_input(&s->format_ctx);
+            free(s);
+            return(HACKTV_ERROR);
+        }
+
+        if(avcodec_parameters_to_context(s->audio_codec_ctx, s->audio_stream->codecpar) < 0)
+        {
+            avcodec_free_context(&s->audio_codec_ctx);
+            if(s->video_codec_ctx) avcodec_free_context(&s->video_codec_ctx);
+            if(s->sws_ctx) sws_freeContext(s->sws_ctx);
+            avformat_close_input(&s->format_ctx);
+            free(s);
+            return(HACKTV_ERROR);
+        }
+
+        s->audio_codec_ctx->thread_count = 2; // Use multiple threads for audio
+
+        /* Find the decoder for the audio stream */
+        codec = avcodec_find_decoder(s->audio_codec_ctx->codec_id);
+        if(codec == NULL)
+        {
+            fprintf(stderr, "Unsupported audio codec\n");
+            avcodec_free_context(&s->audio_codec_ctx);
+            if(s->video_codec_ctx) avcodec_free_context(&s->video_codec_ctx);
+            if(s->sws_ctx) sws_freeContext(s->sws_ctx);
+            avformat_close_input(&s->format_ctx);
+            free(s);
+            return(HACKTV_ERROR);
+        }
+
+        /* Open audio codec */
+        if(avcodec_open2(s->audio_codec_ctx, codec, NULL) < 0)
+        {
+            fprintf(stderr, "Error opening audio codec\n");
+            avcodec_free_context(&s->audio_codec_ctx);
+            if(s->video_codec_ctx) avcodec_free_context(&s->video_codec_ctx);
+            if(s->sws_ctx) sws_freeContext(s->sws_ctx);
+            avformat_close_input(&s->format_ctx);
+            free(s);
+            return(HACKTV_ERROR);
+        }
+
+        /* Create the audio time_base using the source sample rate */
+        s->audio_time_base.num = 1;
+        s->audio_time_base.den = s->audio_codec_ctx->sample_rate;
+
+        /* Use the audio's start time as the reference if no video was detected */
+        if(s->video_stream == NULL)
+        {
+            time_base = s->audio_stream->time_base;
+            start_time = s->audio_stream->start_time;
+        }
+
+        /* Prepare the resampler */
+        s->swr_ctx = swr_alloc();
+        if(!s->swr_ctx)
+        {
+            avcodec_free_context(&s->audio_codec_ctx);
+            if(s->video_codec_ctx) avcodec_free_context(&s->video_codec_ctx);
+            if(s->sws_ctx) sws_freeContext(s->sws_ctx);
+            avformat_close_input(&s->format_ctx);
+            free(s);
+            return(HACKTV_OUT_OF_MEMORY);
+        }
+
 #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(59, 24, 100)
-		av_opt_set_chlayout(s->swr_ctx, "in_chlayout",     &s->audio_codec_ctx->ch_layout, 0);
-		av_opt_set_int(s->swr_ctx, "in_sample_rate",       s->audio_codec_ctx->sample_rate, 0);
-		av_opt_set_sample_fmt(s->swr_ctx, "in_sample_fmt", s->audio_codec_ctx->sample_fmt, 0);
-		
-		av_opt_set_chlayout(s->swr_ctx, "out_chlayout",    &dst_ch_layout, 0);
+        av_opt_set_chlayout(s->swr_ctx, "in_chlayout", &s->audio_codec_ctx->ch_layout, 0);
+        av_opt_set_int(s->swr_ctx, "in_sample_rate", s->audio_codec_ctx->sample_rate, 0);
+        av_opt_set_sample_fmt(s->swr_ctx, "in_sample_fmt", s->audio_codec_ctx->sample_fmt, 0);
+
+        av_opt_set_chlayout(s->swr_ctx, "out_chlayout", &dst_ch_layout, 0);
 #else
-		if(!s->audio_codec_ctx->channel_layout)
-		{
-			/* Set the default layout for codecs that don't specify any */
-			s->audio_codec_ctx->channel_layout = av_get_default_channel_layout(s->audio_codec_ctx->channels);
-		}
-		
-		av_opt_set_int(s->swr_ctx, "in_channel_layout",    s->audio_codec_ctx->channel_layout, 0);
-		av_opt_set_int(s->swr_ctx, "in_sample_rate",       s->audio_codec_ctx->sample_rate, 0);
-		av_opt_set_sample_fmt(s->swr_ctx, "in_sample_fmt", s->audio_codec_ctx->sample_fmt, 0);
-		
-		av_opt_set_int(s->swr_ctx, "out_channel_layout",    AV_CH_LAYOUT_STEREO, 0);
+        if(!s->audio_codec_ctx->channel_layout)
+        {
+            /* Set the default layout for codecs that don't specify any */
+            s->audio_codec_ctx->channel_layout = av_get_default_channel_layout(s->audio_codec_ctx->channels);
+        }
+
+        av_opt_set_int(s->swr_ctx, "in_channel_layout", s->audio_codec_ctx->channel_layout, 0);
+        av_opt_set_int(s->swr_ctx, "in_sample_rate", s->audio_codec_ctx->sample_rate, 0);
+        av_opt_set_sample_fmt(s->swr_ctx, "in_sample_fmt", s->audio_codec_ctx->sample_fmt, 0);
+
+        av_opt_set_int(s->swr_ctx, "out_channel_layout", AV_CH_LAYOUT_STEREO, 0);
 #endif
-		
-		av_opt_set_int(s->swr_ctx, "out_sample_rate",       av->sample_rate.num / av->sample_rate.den, 0);
-		av_opt_set_sample_fmt(s->swr_ctx, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
-		
-		if(swr_init(s->swr_ctx) < 0)
-		{
-			fprintf(stderr, "Failed to initialise the resampling context\n");
-			return(HACKTV_ERROR);
-		}
-		
-		s->audio_eof = 0;
-	}
-	else
-	{
-		fprintf(stderr, "No audio streams found.\n");
-	}
-	
-	if(start_time == AV_NOPTS_VALUE)
-	{
-		start_time = 0;
-	}
-	
-	/* Calculate the start time for each stream */
-	if(s->video_stream != NULL)
-	{
-		s->video_start_time = av_rescale_q(start_time, time_base, s->video_time_base);
-	}
-	
-	if(s->audio_stream != NULL)
-	{
-		s->audio_start_time = av_rescale_q(start_time, time_base, s->audio_time_base);
-	}
-	
-	/* Register the callback functions */
-	av->av_source_ctx = s;
-	av->read_video = _ffmpeg_read_video;
-	av->read_audio = _ffmpeg_read_audio;
-	av->eof = _ffmpeg_eof;
-	av->close = _ffmpeg_close;
-	
-	/* Start the threads */
-	s->thread_abort = 0;
-	pthread_mutex_init(&s->mutex, NULL);
-	pthread_cond_init(&s->cond, NULL);
-	_packet_queue_init(s, &s->video_queue);
-	_packet_queue_init(s, &s->audio_queue);
-	
-	if(s->video_stream != NULL)
-	{
-		_frame_dbuffer_init(&s->in_video_buffer);
-		_frame_dbuffer_init(&s->out_video_buffer);
-		
-		/* Allocate memory for the output frame buffers */
-		for(i = 0; i < 2; i++)
-		{
-			s->out_video_buffer.frame[i]->width = av->width;
-			s->out_video_buffer.frame[i]->height = av->height;
-			
-			r = av_image_alloc(
-				s->out_video_buffer.frame[i]->data,
-				s->out_video_buffer.frame[i]->linesize,
-				av->width, av->height,
-				AV_PIX_FMT_RGB32, av_cpu_max_align()
-			);
-		}
-		
-		r = pthread_create(&s->video_decode_thread, NULL, &_video_decode_thread, (void *) s);
-		if(r != 0)
-		{
-			fprintf(stderr, "Error starting video decoder thread.\n");
-			return(HACKTV_ERROR);
-		}
-		
-		r = pthread_create(&s->video_scaler_thread, NULL, &_video_scaler_thread, (void *) s);
-		if(r != 0)
-		{
-			fprintf(stderr, "Error starting video scaler thread.\n");
-			return(HACKTV_ERROR);
-		}
-	}
-	
-	if(s->audio_stream != NULL)
-	{
-		_frame_dbuffer_init(&s->in_audio_buffer);
-		_frame_dbuffer_init(&s->out_audio_buffer);
-		
-		/* Calculate the number of samples needed for output */
-		s->out_frame_size = av_rescale_q_rnd(
-			s->audio_codec_ctx->frame_size, /* Can this be trusted? */
-			(AVRational) { av->sample_rate.num, av->sample_rate.den },
-			(AVRational) { s->audio_codec_ctx->sample_rate, 1 },
-			AV_ROUND_UP
-		);
-		
-		if(s->out_frame_size <= 0)
-		{
-			s->out_frame_size = av->sample_rate.num / av->sample_rate.den;
-		}
-		
-		/* Calculate the allowed error in input samples, +/- 20ms */
-		s->allowed_error = av_rescale_q(AV_TIME_BASE * 0.020, AV_TIME_BASE_Q, s->audio_time_base);
-		
-		for(i = 0; i < 2; i++)
-		{
-			s->out_audio_buffer.frame[i]->format = AV_SAMPLE_FMT_S16;
+
+        av_opt_set_int(s->swr_ctx, "out_sample_rate", av->sample_rate.num / av->sample_rate.den, 0);
+        av_opt_set_sample_fmt(s->swr_ctx, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+
+        if(swr_init(s->swr_ctx) < 0)
+        {
+            fprintf(stderr, "Failed to initialise the resampling context\n");
+            swr_free(&s->swr_ctx);
+            avcodec_free_context(&s->audio_codec_ctx);
+            if(s->video_codec_ctx) avcodec_free_context(&s->video_codec_ctx);
+            if(s->sws_ctx) sws_freeContext(s->sws_ctx);
+            avformat_close_input(&s->format_ctx);
+            free(s);
+            return(HACKTV_ERROR);
+        }
+
+        s->audio_eof = 0;
+    }
+    else
+    {
+        fprintf(stderr, "No audio streams found.\n");
+    }
+
+    if(start_time == AV_NOPTS_VALUE)
+    {
+        start_time = 0;
+    }
+
+    /* Calculate the start time for each stream */
+    if(s->video_stream != NULL)
+    {
+        s->video_start_time = av_rescale_q(start_time, time_base, s->video_time_base);
+    }
+
+    if(s->audio_stream != NULL)
+    {
+        s->audio_start_time = av_rescale_q(start_time, time_base, s->audio_time_base);
+    }
+
+    /* Register the callback functions */
+    av->av_source_ctx = s;
+    av->read_video = _ffmpeg_read_video;
+    av->read_audio = _ffmpeg_read_audio;
+    av->eof = _ffmpeg_eof;
+    av->close = _ffmpeg_close;
+
+    /* Start the threads */
+    s->thread_abort = 0;
+    pthread_mutex_init(&s->mutex, NULL);
+    pthread_cond_init(&s->cond, NULL);
+    _packet_queue_init(s, &s->video_queue);
+    _packet_queue_init(s, &s->audio_queue);
+
+    if(s->video_stream != NULL)
+    {
+        _frame_dbuffer_init(&s->in_video_buffer);
+        _frame_dbuffer_init(&s->out_video_buffer);
+
+        /* Allocate memory for the output frame buffers */
+        for(i = 0; i < 2; i++)
+        {
+            s->out_video_buffer.frame[i]->width = av->width;
+            s->out_video_buffer.frame[i]->height = av->height;
+
+            r = av_image_alloc(
+                s->out_video_buffer.frame[i]->data,
+                s->out_video_buffer.frame[i]->linesize,
+                av->width, av->height,
+                AV_PIX_FMT_RGB32, av_cpu_max_align()
+                );
+        }
+
+        // Set high priority for video threads
+        pthread_attr_t attr;
+        struct sched_param param;
+
+        pthread_attr_init(&attr);
+        pthread_attr_setschedpolicy(&attr, SCHED_FIFO);
+        param.sched_priority = 50;
+        pthread_attr_setschedparam(&attr, &param);
+
+        r = pthread_create(&s->video_decode_thread, &attr, &_video_decode_thread, (void *) s);
+        if(r != 0)
+        {
+            fprintf(stderr, "Error starting video decoder thread.\n");
+            pthread_attr_destroy(&attr);
+            _ffmpeg_close(s);
+            return(HACKTV_ERROR);
+        }
+
+        r = pthread_create(&s->video_scaler_thread, &attr, &_video_scaler_thread, (void *) s);
+        if(r != 0)
+        {
+            fprintf(stderr, "Error starting video scaler thread.\n");
+            pthread_attr_destroy(&attr);
+            _ffmpeg_close(s);
+            return(HACKTV_ERROR);
+        }
+
+        pthread_attr_destroy(&attr);
+    }
+
+    if(s->audio_stream != NULL)
+    {
+        _frame_dbuffer_init(&s->in_audio_buffer);
+        _frame_dbuffer_init(&s->out_audio_buffer);
+
+        /* Calculate the number of samples needed for output - smaller buffer for low latency */
+        s->out_frame_size = av_rescale_q_rnd(
+            s->audio_codec_ctx->frame_size,
+            (AVRational) { av->sample_rate.num, av->sample_rate.den },
+            (AVRational) { s->audio_codec_ctx->sample_rate, 1 },
+            AV_ROUND_UP
+            );
+
+        if(s->out_frame_size <= 0)
+        {
+            s->out_frame_size = av->sample_rate.num / (av->sample_rate.den * 8); // Even smaller buffer
+        }
+
+        /* Calculate the allowed error in input samples, +/- 2ms for lower latency */
+        s->allowed_error = av_rescale_q(AV_TIME_BASE * 0.002, AV_TIME_BASE_Q, s->audio_time_base);
+
+        for(i = 0; i < 2; i++)
+        {
+            s->out_audio_buffer.frame[i]->format = AV_SAMPLE_FMT_S16;
 #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(59, 24, 100)
-			s->out_audio_buffer.frame[i]->ch_layout = (AVChannelLayout) AV_CHANNEL_LAYOUT_STEREO;
+            s->out_audio_buffer.frame[i]->ch_layout = (AVChannelLayout) AV_CHANNEL_LAYOUT_STEREO;
 #else
-			s->out_audio_buffer.frame[i]->channel_layout = AV_CH_LAYOUT_STEREO;
+            s->out_audio_buffer.frame[i]->channel_layout = AV_CH_LAYOUT_STEREO;
 #endif
-			s->out_audio_buffer.frame[i]->sample_rate = av->sample_rate.num / av->sample_rate.den;
-			s->out_audio_buffer.frame[i]->nb_samples = s->out_frame_size;
-			
-			r = av_frame_get_buffer(s->out_audio_buffer.frame[i], 0);
-			if(r < 0)
-			{
-				fprintf(stderr, "Error allocating output audio buffer %d\n", i);
-				return(HACKTV_OUT_OF_MEMORY);
-			}
-		}
-		
-		r = pthread_create(&s->audio_decode_thread, NULL, &_audio_decode_thread, (void *) s);
-		if(r != 0)
-		{
-			fprintf(stderr, "Error starting audio decoder thread.\n");
-			return(HACKTV_ERROR);
-		}
-		
-		r = pthread_create(&s->audio_scaler_thread, NULL, &_audio_scaler_thread, (void *) s);
-		if(r != 0)
-		{
-			fprintf(stderr, "Error starting audio resampler thread.\n");
-			return(HACKTV_ERROR);
-		}
-	}
-	
-	r = pthread_create(&s->input_thread, NULL, &_input_thread, (void *) s);
-	if(r != 0)
-	{
-		fprintf(stderr, "Error starting input thread.\n");
-		return(HACKTV_ERROR);
-	}
-	
-	return(HACKTV_OK);
+            s->out_audio_buffer.frame[i]->sample_rate = av->sample_rate.num / av->sample_rate.den;
+            s->out_audio_buffer.frame[i]->nb_samples = s->out_frame_size;
+
+            r = av_frame_get_buffer(s->out_audio_buffer.frame[i], 0);
+            if(r < 0)
+            {
+                fprintf(stderr, "Error allocating output audio buffer %d\n", i);
+                _ffmpeg_close(s);
+                return(HACKTV_OUT_OF_MEMORY);
+            }
+        }
+
+        // Set high priority for audio threads
+        pthread_attr_t attr;
+        struct sched_param param;
+
+        pthread_attr_init(&attr);
+        pthread_attr_setschedpolicy(&attr, SCHED_FIFO);
+        param.sched_priority = 55; // Higher priority than video
+        pthread_attr_setschedparam(&attr, &param);
+
+        r = pthread_create(&s->audio_decode_thread, &attr, &_audio_decode_thread, (void *) s);
+        if(r != 0)
+        {
+            fprintf(stderr, "Error starting audio decoder thread.\n");
+            pthread_attr_destroy(&attr);
+            _ffmpeg_close(s);
+            return(HACKTV_ERROR);
+        }
+
+        r = pthread_create(&s->audio_scaler_thread, &attr, &_audio_scaler_thread, (void *) s);
+        if(r != 0)
+        {
+            fprintf(stderr, "Error starting audio resampler thread.\n");
+            pthread_attr_destroy(&attr);
+            _ffmpeg_close(s);
+            return(HACKTV_ERROR);
+        }
+
+        pthread_attr_destroy(&attr);
+    }
+
+    // Set normal priority for input thread
+    r = pthread_create(&s->input_thread, NULL, &_input_thread, (void *) s);
+    if(r != 0)
+    {
+        fprintf(stderr, "Error starting input thread.\n");
+        _ffmpeg_close(s);
+        return(HACKTV_ERROR);
+    }
+
+    // Free the options dictionary
+    av_dict_free(&opts);
+
+    fprintf(stderr, "FFmpeg initialization completed successfully\n");
+
+    return(HACKTV_OK);
 }
 
 void av_ffmpeg_init(void)
