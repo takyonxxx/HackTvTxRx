@@ -157,7 +157,7 @@ void MainWindow::setCurrentSampleRate(int sampleRate)
     } else {
         // If the exact sample rate is not found, find the closest one
         int closestIndex = 0;
-        int smallestDiff = std::numeric_limits<int>::max();
+        int smallestDiff = (std::numeric_limits<int>::max)();
         for (int i = 0; i < sampleRateCombo->count(); ++i) {
             int diff = std::abs(sampleRateCombo->itemData(i).toInt() - sampleRate);
             if (diff < smallestDiff) {
@@ -423,7 +423,7 @@ void MainWindow::addinputTypeGroup()
     inputTypeGroup = new QGroupBox("Input Type", this);
     QVBoxLayout *inputTypeLayout = new QVBoxLayout(inputTypeGroup);
     inputTypeCombo = new QComboBox(this);
-    inputTypeCombo->addItems({ "Fm Transmitter", "File", "Test", "FFmpeg"});
+    inputTypeCombo->addItems({ "Fm Transmitter", "File", "Test", "Video Stream"});
     inputTypeLayout->addWidget(inputTypeCombo);
 
     // Input file group
@@ -437,7 +437,7 @@ void MainWindow::addinputTypeGroup()
 
     // FFmpeg options
     ffmpegOptionsEdit = new QLineEdit(this);
-    ffmpegOptionsEdit->setText("rtsp://localhost:8554/live");
+    ffmpegOptionsEdit->setText("rtsp://192.168.2.249:554/stream1");
     ffmpegOptionsEdit->setVisible(false);  // Initially hidden
     inputTypeLayout->addWidget(ffmpegOptionsEdit);
 

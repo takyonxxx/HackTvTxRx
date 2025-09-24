@@ -9,6 +9,35 @@ AudioOutput::AudioOutput(QObject *parent):
     m_abort(false),
     audioDevice(nullptr)
 {
+    initializeAudio();
+}
+
+AudioOutput::~AudioOutput()
+{
+    try {
+        if (audioDevice) {
+            audioDevice->close();
+            audioDevice = nullptr;
+        }
+
+        if (m_audioOutput) {
+            m_audioOutput->stop();
+            m_audioOutput.reset();
+        }
+
+        if (mutex) {
+            delete mutex;
+            mutex = nullptr;
+        }
+    } catch (const std::exception& e) {
+        qDebug() << "Exception in AudioOutput destructor:" << e.what();
+    } catch (...) {
+        qDebug() << "Unknown exception in AudioOutput destructor";
+    }
+}
+
+bool AudioOutput::initializeAudio()
+{
     try {
         mutex = new QMutex;
 
@@ -16,7 +45,7 @@ AudioOutput::AudioOutput(QObject *parent):
         QAudioDevice defaultDevice = QMediaDevices::defaultAudioOutput();
         if (defaultDevice.isNull()) {
             qDebug() << "No default audio output device available";
-            return;
+            return false;
         }
 
         m_format = defaultDevice.preferredFormat();
@@ -25,7 +54,7 @@ AudioOutput::AudioOutput(QObject *parent):
         // Check if the format is supported
         if (!defaultDevice.isFormatSupported(m_format)) {
             qDebug() << "Format not supported!";
-            return;
+            return false;
         }
 
         // Create QAudioSink with explicit device
@@ -57,39 +86,14 @@ AudioOutput::AudioOutput(QObject *parent):
         }
 
     } catch (const std::exception& e) {
+        return false;
         qDebug() << "Exception in AudioOutput constructor:" << e.what();
     } catch (...) {
+        return false;
         qDebug() << "Unknown exception in AudioOutput constructor";
     }
-}
 
-AudioOutput::~AudioOutput()
-{
-    try {
-        if (audioDevice) {
-            audioDevice->close();
-            audioDevice = nullptr;
-        }
-
-        if (m_audioOutput) {
-            m_audioOutput->stop();
-            m_audioOutput.reset();
-        }
-
-        if (mutex) {
-            delete mutex;
-            mutex = nullptr;
-        }
-    } catch (const std::exception& e) {
-        qDebug() << "Exception in AudioOutput destructor:" << e.what();
-    } catch (...) {
-        qDebug() << "Unknown exception in AudioOutput destructor";
-    }
-}
-
-bool AudioOutput::initializeAudio()
-{
-
+    return true;
 }
 
 void AudioOutput::handleAudioOutputStateChanged(QAudio::State newState)
