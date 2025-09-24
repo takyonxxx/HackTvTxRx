@@ -49,7 +49,7 @@
 
 /* Maximum length of the packet queue */
 /* Taken from ffplay.c */
-#define MAX_QUEUE_SIZE (2 * 1024 * 1024)
+#define MAX_QUEUE_SIZE (4 * 1024 * 1024)
 
 typedef struct __packet_queue_item_t {
 	
@@ -472,85 +472,77 @@ static void *_input_thread(void *arg)
 
 static void *_video_decode_thread(void *arg)
 {
-	av_ffmpeg_t *s = (av_ffmpeg_t *) arg;
-	AVPacket pkt, *ppkt = NULL;
-	AVFrame *frame;
-	int r;
-	
-	//fprintf(stderr, "_video_decode_thread(): Starting\n");
-	
-	frame = av_frame_alloc();
-	
-	/* Fetch video packets from the queue and decode */
-	while(s->thread_abort == 0)
-	{
-		if(ppkt == NULL)
-		{
-			r = _packet_queue_read(s, &s->video_queue, &pkt);
-			if(r == -2)
-			{
-				/* Thread is aborting */
-				break;
-			}
-			
-			ppkt = (r >= 0 ? &pkt : NULL);
-		}
-		
-		r = avcodec_send_packet(s->video_codec_ctx, ppkt);
-		
-		if(ppkt != NULL && r != AVERROR(EAGAIN))
-		{
-			av_packet_unref(ppkt);
-			ppkt = NULL;
-		}
-		
-		if(r < 0 && r != AVERROR(EAGAIN))
-		{
-			/* avcodec_send_packet() has failed, abort thread */
-			break;
-		}
+    av_ffmpeg_t *s = (av_ffmpeg_t *) arg;
+    AVPacket pkt, *ppkt = NULL;
+    AVFrame *frame;
+    int r, consecutive_errors = 0;
+
+    frame = av_frame_alloc();
+
+    while(s->thread_abort == 0)
+    {
+        if(ppkt == NULL)
+        {
+            r = _packet_queue_read(s, &s->video_queue, &pkt);
+            if(r == -2) break;
+            ppkt = (r >= 0 ? &pkt : NULL);
+        }
+
+        r = avcodec_send_packet(s->video_codec_ctx, ppkt);
+
+        if(ppkt != NULL && r != AVERROR(EAGAIN))
+        {
+            av_packet_unref(ppkt);
+            ppkt = NULL;
+        }
+
+        if(r < 0 && r != AVERROR(EAGAIN))
+        {
+            consecutive_errors++;
+            if(consecutive_errors > 10)
+            {
+                fprintf(stderr, "Too many decoder errors, flushing\n");
+                avcodec_flush_buffers(s->video_codec_ctx);
+                consecutive_errors = 0;
+            }
+            continue;
+        }
 
         r = avcodec_receive_frame(s->video_codec_ctx, frame);
 
         if(r == 0)
         {
-            // Frame başarıyla decode edildi - ancak corrupt olabilir
+            consecutive_errors = 0;
+            // Frame başarıyla alındı
             if(frame->width > 0 && frame->height > 0)
             {
                 av_frame_ref(_frame_dbuffer_back_buffer(&s->in_video_buffer), frame);
                 _frame_dbuffer_ready(&s->in_video_buffer, 0);
             }
-            else
-            {
-                fprintf(stderr, "Warning: Received corrupt frame, skipping\n");
-            }
         }
         else if(r == AVERROR(EAGAIN))
         {
-            // Normal durum - daha fazla packet gerekli
+            // Normal durum
             continue;
-        }
-        else if(r == AVERROR_EOF)
-        {
-            // Stream sonu
-            break;
         }
         else
         {
-            // Diğer hatalar - sadece logla ve devam et
-            fprintf(stderr, "Warning: avcodec_receive_frame error: %d, continuing...\n", r);
-            av_usleep(1000); // 1ms bekle
+            // POC veya diğer hatalar
+            consecutive_errors++;
+            if(consecutive_errors > 5)
+            {
+                fprintf(stderr, "Flushing decoder due to errors\n");
+                avcodec_flush_buffers(s->video_codec_ctx);
+                consecutive_errors = 0;
+            }
+            av_usleep(1000);
             continue;
         }
-	}
-	
-	_frame_dbuffer_abort(&s->in_video_buffer);
-	
-	av_frame_free(&frame);
-	
-	//fprintf(stderr, "_video_decode_thread(): Ending\n");
-	
-	return(NULL);
+    }
+
+    _frame_dbuffer_abort(&s->in_video_buffer);
+    av_frame_free(&frame);
+    return(NULL);
 }
 
 static void *_video_scaler_thread(void *arg)
@@ -560,12 +552,12 @@ static void *_video_scaler_thread(void *arg)
     AVRational ratio;
     rational_t r;
     int64_t pts;
-
-    //fprintf(stderr, "_video_scaler_thread(): Starting\n");
+    int frame_count = 0;
 
     /* Fetch video frames and pass them through the scaler */
     while((frame = _frame_dbuffer_flip(&s->in_video_buffer)) != NULL)
     {
+        frame_count++;
         pts = frame->best_effort_timestamp;
 
         if(pts != AV_NOPTS_VALUE)
@@ -575,7 +567,6 @@ static void *_video_scaler_thread(void *arg)
 
             if(pts < 0)
             {
-                /* This frame is in the past. Skip it */
                 av_frame_unref(frame);
                 continue;
             }
@@ -608,8 +599,7 @@ static void *_video_scaler_thread(void *arg)
                 )
             );
 
-        if(r.num != oframe->width ||
-            r.den != oframe->height)
+        if(r.num != oframe->width || r.den != oframe->height)
         {
             av_freep(&oframe->data[0]);
 
@@ -623,35 +613,111 @@ static void *_video_scaler_thread(void *arg)
                 oframe->width, oframe->height,
                 AV_PIX_FMT_RGB32, av_cpu_max_align()
                 );
-            memset(oframe->data[0], 0, i);
+            if(i < 0)
+            {
+                fprintf(stderr, "Failed to allocate output frame buffer\n");
+                av_frame_unref(frame);
+                break;
+            }
+            memset(oframe->data[0], 0x80, i); // Gray instead of black for debug
         }
 
-        /* Initialise / re-initialise software scaler - ORIJINAL YÖNTEM */
+        /* Check if input frame has valid data */
+        if(!frame->data[0] || frame->width <= 0 || frame->height <= 0)
+        {
+            fprintf(stderr, "Invalid input frame data\n");
+            av_frame_unref(frame);
+            continue;
+        }
+
+        /* DEBUG: Input frame data kontrolü */
+        uint8_t *y_data = frame->data[0];
+        uint8_t *u_data = frame->data[1];
+        uint8_t *v_data = frame->data[2];
+
+        /* Check if frame data is all zeros or invalid */
+        int y_sum = 0;
+        for(int i = 0; i < 16; i++) y_sum += y_data[i];
+
+        if(y_sum == 0)
+        {
+            fprintf(stderr, "WARNING: Input frame Y data is all zeros - frame %d\n", frame_count);
+        }
+        else if(y_sum == 16 * 255)
+        {
+            fprintf(stderr, "WARNING: Input frame Y data is all 255 - frame %d\n", frame_count);
+        }
+
+        /* Handle pixel format properly */
+        enum AVPixelFormat src_format = frame->format;
+        int src_range = 0; // Limited range by default
+
+        /* Convert deprecated YUVJ420P to YUV420P */
+        if(src_format == AV_PIX_FMT_YUVJ420P)
+        {
+            src_format = AV_PIX_FMT_YUV420P;
+            src_range = 1; // Full range for YUVJ
+        }
+
+        /* Create/update SWS context */
         s->sws_ctx = sws_getCachedContext(
             s->sws_ctx,
             frame->width,
             frame->height,
-            frame->format,
+            src_format,
             oframe->width,
             oframe->height,
             AV_PIX_FMT_RGB32,
-            SWS_BICUBIC,
+            SWS_BICUBIC, // Keep BICUBIC for quality
             NULL,
             NULL,
             NULL
-        );
+            );
 
-        if(!s->sws_ctx) break;
+        if(!s->sws_ctx)
+        {
+            fprintf(stderr, "Failed to create SWS context for frame %d\n", frame_count);
+            av_frame_unref(frame);
+            break;
+        }
 
-        sws_scale(
+        /* Set colorspace details for YUVJ420P conversion */
+        if(frame->format == AV_PIX_FMT_YUVJ420P)
+        {
+            int *inv_table = sws_getCoefficients(SWS_CS_ITU709); // BT.709
+            int srcRange = 1; // Full range for YUVJ (0-255)
+            int dstRange = 1; // Full range for RGB (0-255)
+            int brightness = 0;    // 0 instead of 1<<16
+            int contrast = 1 << 16;   // 1.0
+            int saturation = 1 << 16; // 1.0
+
+            int ret = sws_setColorspaceDetails(s->sws_ctx,
+                                               inv_table, srcRange,    // Source: YUVJ full range
+                                               inv_table, dstRange,    // Dest: RGB full range
+                                               brightness, contrast, saturation);
+
+            if(ret < 0)
+            {
+                fprintf(stderr, "Failed to set colorspace details: %d\n", ret);
+            }
+        }
+
+        int scaled_height = sws_scale(
             s->sws_ctx,
             (uint8_t const * const *) frame->data,
             frame->linesize,
             0,
-            s->video_codec_ctx->height,
+            frame->height,
             oframe->data,
             oframe->linesize
-        );
+            );
+
+        if(scaled_height <= 0)
+        {
+            fprintf(stderr, "sws_scale failed for frame %d, returned %d\n", frame_count, scaled_height);
+            av_frame_unref(frame);
+            continue;
+        }
 
         /* Adjust the pixel ratio for the scaled image */
         av_reduce(
@@ -671,7 +737,7 @@ static void *_video_scaler_thread(void *arg)
         oframe->top_field_first = frame->top_field_first;
 #endif
 
-        /* Done with the frame */
+        /* Done with the input frame */
         av_frame_unref(frame);
 
         _frame_dbuffer_ready(&s->out_video_buffer, 0);
@@ -680,55 +746,53 @@ static void *_video_scaler_thread(void *arg)
 
     _frame_dbuffer_abort(&s->out_video_buffer);
 
-    //fprintf(stderr, "_video_scaler_thread(): Ending\n");
-
     return(NULL);
 }
 
 static int _ffmpeg_read_video(void *ctx, av_frame_t *frame)
 {
-	av_ffmpeg_t *s = ctx;
-	AVFrame *avframe;
-	
-	av_frame_init(frame, 0, 0, NULL, 0, 0);
-	
-	if(s->video_stream == NULL)
-	{
-		return(AV_OK);
-	}
-	
-	avframe = _frame_dbuffer_flip(&s->out_video_buffer);
-	if(!avframe)
-	{
-		/* EOF or abort */
-		s->video_eof = 1;
-		return(AV_OK);
-	}
-	
-	/* Return image ratio */
-	if(avframe->sample_aspect_ratio.num > 0 &&
-	   avframe->sample_aspect_ratio.den > 0)
-	{
-		frame->pixel_aspect_ratio = (rational_t) {
-			avframe->sample_aspect_ratio.num,
-			avframe->sample_aspect_ratio.den
-		};
-	}
-	
-	/* Return interlace status */
-	if(avframe->interlaced_frame)
-	{
-		frame->interlaced = avframe->top_field_first ? 1 : 2;
-	}
-	
-	/* Set the pointer to the framebuffer */
-	frame->width = avframe->width;
-	frame->height = avframe->height;
-	frame->framebuffer = (uint32_t *) avframe->data[0];
-	frame->pixel_stride = 1;
-	frame->line_stride = avframe->linesize[0] / sizeof(uint32_t);
-	
-	return(AV_OK);
+    av_ffmpeg_t *s = ctx;
+    AVFrame *avframe;
+
+    av_frame_init(frame, 0, 0, NULL, 0, 0);
+
+    if(s->video_stream == NULL)
+    {
+        return(AV_OK);
+    }
+
+    avframe = _frame_dbuffer_flip(&s->out_video_buffer);
+    if(!avframe)
+    {
+        /* EOF or abort */
+        s->video_eof = 1;
+        return(AV_OK);
+    }
+
+    /* Return image ratio */
+    if(avframe->sample_aspect_ratio.num > 0 &&
+        avframe->sample_aspect_ratio.den > 0)
+    {
+        frame->pixel_aspect_ratio = (rational_t) {
+            avframe->sample_aspect_ratio.num,
+            avframe->sample_aspect_ratio.den
+        };
+    }
+
+    /* Return interlace status */
+    if(avframe->interlaced_frame)
+    {
+        frame->interlaced = avframe->top_field_first ? 1 : 2;
+    }
+
+    /* Set the pointer to the framebuffer */
+    frame->width = avframe->width;
+    frame->height = avframe->height;
+    frame->framebuffer = (uint32_t *) avframe->data[0];
+    frame->pixel_stride = 1;
+    frame->line_stride = avframe->linesize[0] / sizeof(uint32_t);
+
+    return(AV_OK);
 }
 
 static void *_audio_decode_thread(void *arg)
@@ -1002,20 +1066,15 @@ int av_ffmpeg_open(av_t *av, char *input_url, char *format, char *options, float
     const AVInputFormat *fmt = NULL;
     AVDictionary *opts = NULL;
 
-    // Optimized FFmpeg options for low latency RTSP streaming
     av_dict_set(&opts, "rtsp_transport", "tcp", 0);
-    av_dict_set(&opts, "max_delay", "50000", 0);          // Reduced to 50ms
-    av_dict_set(&opts, "buffer_size", "65536", 0);        // Increased buffer
-    av_dict_set(&opts, "fflags", "nobuffer+flush_packets+discardcorrupt", 0); // Discard corrupt packets
+    av_dict_set(&opts, "max_delay", "500000", 0);      // 0.5 saniye
+    av_dict_set(&opts, "buffer_size", "1048576", 0);   // 1MB buffer
+    av_dict_set(&opts, "fflags", "nobuffer+discardcorrupt", 0);
     av_dict_set(&opts, "flags", "low_delay", 0);
-    av_dict_set(&opts, "probesize", "2000000", 0);        // Increased for HEVC
-    av_dict_set(&opts, "analyzeduration", "2000000", 0);  // Increased for HEVC
-    av_dict_set(&opts, "tune", "zerolatency", 0);         // Zero latency tuning
-    av_dict_set(&opts, "preset", "ultrafast", 0);         // Fastest preset
-    av_dict_set(&opts, "rtsp_flags", "prefer_tcp", 0);    // Force TCP
-    av_dict_set(&opts, "stimeout", "2000000", 0);         // 2 second timeout
-    av_dict_set(&opts, "allowed_media_types", "video+audio", 0); // Only video and audio
-    av_dict_set(&opts, "reorder_queue_size", "0", 0);     // Disable packet reordering for low latency
+    av_dict_set(&opts, "probesize", "5000000", 0);     // 5MB
+    av_dict_set(&opts, "analyzeduration", "5000000", 0); // 5MB
+    av_dict_set(&opts, "skip_frame", "nokey", 0);      // Sadece keyframe'ler
+    av_dict_set(&opts, "threads", "1", 0);             // Single thread HEVC için
 
     const AVCodec *codec;
     AVRational time_base;

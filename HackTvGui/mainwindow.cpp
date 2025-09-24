@@ -14,7 +14,7 @@
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
-    m_hackTvLib(nullptr),  // Initialize as nullptr
+    m_hackTvLib(nullptr),
     m_threadPool(nullptr),
     m_frequency(DEFAULT_FREQUENCY),
     m_sampleRate(DEFAULT_SAMPLE_RATE),
@@ -26,9 +26,6 @@ MainWindow::MainWindow(QWidget *parent)
 {
     QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
     m_sSettingsFile = homePath + "/hacktv_settings.ini";
-
-    // DON'T create thread pool here - wait until after UI setup
-    // m_threadPool.setMaxThreadCount(QThread::idealThreadCount()); // REMOVE THIS LINE
 
     sliderStyle = "QSlider::groove:horizontal { "
                   "border: 1px solid #999999; "
@@ -43,8 +40,10 @@ MainWindow::MainWindow(QWidget *parent)
                   "margin: -2px 0; "
                   "border-radius: 3px; "
                   "}";
+
     labelStyle = "QLabel { background-color: #ad6d0a ; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }";
 
+    // Settings handling
     try {
         if (QFile::exists(m_sSettingsFile)) {
             qDebug() << "Settings file exists, loading settings";
@@ -57,24 +56,13 @@ MainWindow::MainWindow(QWidget *parent)
         qDebug() << "Exception caught:" << e.what();
     }
 
+    // UI SETUP FIRST - CRITICAL!
     setupUi();
-
     frequencyEdit->setText(QString::number(m_frequency));
 
+    // Initialize safe components first
     try {
-        // Create HackTvLib AFTER UI setup
-        m_hackTvLib = std::make_unique<HackTvLib>();
-
-        m_hackTvLib->setLogCallback([this](const std::string& msg) {
-            handleLog(msg);
-        });
-        m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
-            handleReceivedData(data, len);
-        });
-        m_hackTvLib->setMicEnabled(false);
-
-        // Create thread pool AFTER everything else is set up
-        m_threadPool = new QThreadPool(this);  // Pass 'this' as parent
+        m_threadPool = new QThreadPool(this);
         if (m_threadPool) {
             m_threadPool->setMaxThreadCount(QThread::idealThreadCount());
         }
@@ -83,18 +71,11 @@ MainWindow::MainWindow(QWidget *parent)
         if (!audioOutput) {
             throw std::runtime_error("Failed to create AudioOutput");
         }
-
-        // palbDemodulator = new PALBDemodulator(m_sampleRate);
-    }
-    catch (const std::exception& e) {
-        qDebug() << "Exception in createHackTvLib:" << e.what();
-        QMessageBox::critical(this, "HackTvLib Error", QString("Failed to create HackTvLib: %1").arg(e.what()));
-    }
-    catch (...) {
-        qDebug() << "Unknown exception in createHackTvLib";
-        QMessageBox::critical(this, "HackTvLib Error", "An unknown error occurred while creating HackTvLib");
+    } catch (const std::exception& e) {
+        qDebug() << "Exception creating safe components:" << e.what();
     }
 
+    // Complete UI setup
     setCurrentSampleRate(m_sampleRate);
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
     cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
@@ -103,21 +84,133 @@ MainWindow::MainWindow(QWidget *parent)
     logTimer = new QTimer(this);
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
     logTimer->start(100);
+
+    // CRITICAL: Initialize HackTvLib much later, after everything else is stable
+    QTimer::singleShot(50, this, [this]() {
+        initializeHackTvLibWithRetry();
+    });
 }
 
-// Update destructor:
 MainWindow::~MainWindow()
 {
-    audioOutput.reset();
-    fmDemodulator.reset();
-    rationalResampler.reset();
-    lowPassFilter.reset();
+    // Prevent destructor from running during shutdown
+    if (m_shuttingDown.load()) {
+        return;
+    }
 
-    // Clean up thread pool
-    if (m_threadPool) {
-        m_threadPool->waitForDone(3000); // Wait max 3 seconds
-        delete m_threadPool;
-        m_threadPool = nullptr;
+    m_shuttingDown.store(true);
+
+    try {
+        qDebug() << "MainWindow destructor starting...";
+
+        // Stop timers first
+        if (logTimer) {
+            logTimer->stop();
+        }
+
+        // Stop processing
+        m_isProcessing.store(false);
+
+        // Wait briefly for threads
+        if (m_threadPool) {
+            m_threadPool->waitForDone(500);
+        }
+
+        // Clean up in reverse order of creation
+        fmDemodulator.reset();
+        rationalResampler.reset();
+        lowPassFilter.reset();
+        audioOutput.reset();
+        m_hackTvLib.reset();
+
+        // Thread pool last
+        if (m_threadPool) {
+            delete m_threadPool;
+            m_threadPool = nullptr;
+        }
+
+        qDebug() << "MainWindow destructor completed";
+
+    } catch (...) {
+        // Don't throw from destructor
+        qDebug() << "Exception in destructor - ignored";
+    }
+}
+
+void MainWindow::initializeHackTvLibWithRetry() {
+    const int MAX_RETRIES = 3;
+    const int RETRY_DELAY = 1000; // 1 second
+    static int retryCount = 0;
+
+    try {
+        qDebug() << QString("Attempting to initialize HackTvLib (attempt %1/%2)").arg(retryCount + 1).arg(MAX_RETRIES);
+
+        // Create with timeout wrapper
+        std::unique_ptr<HackTvLib> tempLib;
+        bool success = false;
+
+        // Try initialization in a separate thread with timeout
+        std::thread initThread([&tempLib, &success]() {
+            try {
+                tempLib = std::make_unique<HackTvLib>();
+                success = true;
+            } catch (...) {
+                success = false;
+            }
+        });
+
+        // Wait for initialization or timeout
+        if (initThread.joinable()) {
+            initThread.join();
+        }
+
+        if (success && tempLib) {
+            m_hackTvLib = std::move(tempLib);
+
+            // Set callbacks
+            m_hackTvLib->setLogCallback([this](const std::string& msg) {
+                handleLog(msg);
+            });
+
+            m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
+                handleReceivedData(data, len);
+            });
+
+            m_hackTvLib->setMicEnabled(false);
+
+            qDebug() << "HackTvLib initialized successfully";
+            retryCount = 0; // Reset retry count on success
+
+        } else {
+            throw std::runtime_error("Failed to create HackTvLib instance");
+        }
+
+    } catch (const std::exception& e) {
+        qDebug() << QString("HackTvLib initialization failed (attempt %1): %2").arg(retryCount + 1).arg(e.what());
+
+        retryCount++;
+        if (retryCount < MAX_RETRIES) {
+            qDebug() << QString("Retrying HackTvLib initialization in %1ms...").arg(RETRY_DELAY * retryCount);
+            QTimer::singleShot(RETRY_DELAY * retryCount, this, [this]() {
+                initializeHackTvLibWithRetry();
+            });
+        } else {
+            qDebug() << "Maximum retry attempts reached. HackTvLib will not be available.";
+
+            // Show warning but don't crash
+            QTimer::singleShot(0, [this, e]() {
+                QMessageBox::warning(this, "HackRF Initialization Failed",
+                                     QString("Failed to initialize HackRF library after %1 attempts: %2\n\n"
+                                             "The application will continue without HackRF functionality.\n\n"
+                                             "Please check that:\n"
+                                             "• HackRF device is connected\n"
+                                             "• Required DLL files are present\n"
+                                             "• No other software is using HackRF")
+                                         .arg(MAX_RETRIES).arg(e.what()));
+            });
+
+            retryCount = 0; // Reset for next time
+        }
     }
 }
 
@@ -1309,25 +1402,57 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 
 }
 
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    qDebug() << "Window close event received";
+
+    // Call safe shutdown instead of default close
+    event->ignore(); // Prevent default close
+
+    // Do safe shutdown
+    exitApp();
+}
 
 void MainWindow::exitApp()
 {
+    // Prevent multiple exit calls
+    if (m_shuttingDown.exchange(true)) {
+        return;
+    }
+
     try {
-        // Stop HackTV processing first
+
+        // 1. Stop all timers first
+        if (logTimer) {
+            logTimer->stop();
+            logTimer->deleteLater();
+            logTimer = nullptr;
+        }
+
+        // 2. Stop processing
         if (m_isProcessing.load()) {
+            qDebug() << "Stopping processing...";
             m_isProcessing.store(false);
         }
 
-        if (m_hackTvLib) {
-            m_hackTvLib->stop();
+        // 3. Wait for threads to finish
+        if (m_threadPool) {
+            m_threadPool->waitForDone(500); // Reduced timeout
         }
 
-        // Stop any timers
-        if (logTimer) {
-            logTimer->stop();
+        audioOutput.reset();
+        fmDemodulator.reset();
+        rationalResampler.reset();
+        lowPassFilter.reset();
+        m_hackTvLib.reset();
+
+        // 8. Clean thread pool
+        if (m_threadPool) {
+            delete m_threadPool;
+            m_threadPool = nullptr;
         }
 
-        QThread::msleep(50);
+        qDebug() << "Exiting...";
 
 #ifdef Q_OS_WIN
         DWORD currentPID = GetCurrentProcessId();
@@ -1338,7 +1463,7 @@ void MainWindow::exitApp()
             CloseHandle(hProcess);
         }
 #else \
-    // FIXED: Use Qt's proper shutdown instead of exit(0)
+        // FIXED: Use Qt's proper shutdown instead of exit(0)
         QApplication::quit();
 #endif
 
@@ -1348,8 +1473,15 @@ void MainWindow::exitApp()
         // Force exit on Windows if there's an exception
         std::exit(1);
 #else \
-    // Use Qt quit on Linux even if there's an exception
+        // Use Qt quit on Linux even if there's an exception
         QApplication::quit();
 #endif
+
+    } catch (const std::exception& e) {
+        qDebug() << "Exception during shutdown:" << e.what();
+        std::exit(0);
+    } catch (...) {
+        qDebug() << "Unknown exception during shutdown";
+        std::exit(0);
     }
 }

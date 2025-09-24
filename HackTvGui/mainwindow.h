@@ -60,6 +60,8 @@ private slots:
     void exitApp();
 
 private:
+    std::atomic<bool> m_shuttingDown{false};
+    void initializeHackTvLibWithRetry();
     void setupUi();
     void addOutputGroup();
     void addinputTypeGroup();
@@ -149,6 +151,10 @@ private:
     TVDisplay *tvDisplay;
     QImage currentFrame;
     PALBDemodulator *palbDemodulator;
+
+protected:
+    void closeEvent(QCloseEvent *event) override;
+
 };
 
 #endif // MAINWINDOW_H
