@@ -78,13 +78,14 @@ MainWindow::MainWindow(QWidget *parent)
     }
 
     // Complete UI setup
-    setCurrentSampleRate(m_sampleRate);
+    setCurrentSampleRate(DEFAULT_SAMPLE_RATE);
+
+    palbDemodulator = new PALBDemodulator(m_sampleRate);
+    palFrameBuffer = new FrameBuffer(m_sampleRate, 0.04);
+
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
     cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
     freqCtrl->setFrequency(m_frequency);
-
-    palbDemodulator = new PALBDemodulator(m_sampleRate);
-    palFrameBuffer = new FrameBuffer(640000);
 
     logTimer = new QTimer(this);
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
@@ -259,6 +260,8 @@ void MainWindow::setupUi()
 
 void MainWindow::setCurrentSampleRate(int sampleRate)
 {
+    m_sampleRate = sampleRate;
+
     int index = sampleRateCombo->findData(sampleRate);
     if (index != -1) {
         sampleRateCombo->setCurrentIndex(index);
@@ -1200,6 +1203,15 @@ void MainWindow::onSampleRateChanged(int index)
         cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
         m_hackTvLib->setSampleRate(m_sampleRate);
         saveSettings();
+
+        if (palbDemodulator) {
+            palbDemodulator->setSampleRate(m_sampleRate);
+        }
+
+        // YENİ: FrameBuffer'ı güncelle
+        if (palFrameBuffer) {
+            palFrameBuffer->setSampleRate(m_sampleRate);
+        }
     }
 }
 
@@ -1424,69 +1436,44 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 
             // Eğer bir demodulation zaten devam ediyorsa, bu frame'i atla
             if (palDemodulationInProgress.loadAcquire() > 0) {
-                qWarning() << "*** PAL demodulation in progress, SKIPPING frame ***";
                 palFrameBuffer->getFrame(); // Buffer'dan çıkar
                 return;
             }
 
-            qDebug() << "\n*** FULL PAL FRAME READY - Starting demodulation ***";
-
             palDemodulationInProgress.ref();
-            qDebug() << "Demodulation counter:" << palDemodulationInProgress.loadAcquire();
-
             auto fullFrame = palFrameBuffer->getFrame();
 
             if (fullFrame.empty()) {
-                qWarning() << "ERROR: getFrame() returned empty vector!";
                 palDemodulationInProgress.deref();
                 return;
             }
 
-            qDebug() << "Full frame size:" << fullFrame.size() << "samples";
-
             // CRITICAL: Wrap fullFrame in shared_ptr for safe lambda capture
             auto fullFramePtr = std::make_shared<std::vector<std::complex<float>>>(std::move(fullFrame));
 
-            QtConcurrent::run([this, fullFramePtr]() {
+            // Ignore the returned QFuture (we don't need it)
+            (void)QtConcurrent::run([this, fullFramePtr]() {
                 try {
-                    qDebug() << "=== Background thread started ===";
 
                     auto frame = palbDemodulator->demodulate(*fullFramePtr);
 
-                    qDebug() << "=== Background demodulation complete ===";
-
                     if (!frame.image.isNull()) {
-                        // Thread-safe: Copy image before passing to main thread
                         QImage imageCopy = frame.image.copy();
 
                         QMetaObject::invokeMethod(this, "updateDisplay",
                                                   Qt::QueuedConnection,
                                                   Q_ARG(const QImage&, imageCopy));
-                        qDebug() << "Image updated successfully!";
-                    } else {
-                        qWarning() << "Demodulated image is null!";
                     }
                 }
                 catch (const std::exception& e) {
-                    qCritical() << "Exception in PAL thread:" << e.what();
+                    qCritical() << "Exception in PAL demodulation thread:" << e.what();
                 }
                 catch (...) {
-                    qCritical() << "Unknown exception in PAL thread!";
+                    qCritical() << "Unknown exception in PAL demodulation thread!";
                 }
 
                 palDemodulationInProgress.deref();
-                qDebug() << "Demodulation finished, counter:" << palDemodulationInProgress.loadAcquire();
             });
-
-            qDebug() << "*** PAL FRAME PROCESSING Started in background ***\n";
-        }
-        else {
-            static int progressCounter = 0;
-            if (++progressCounter % 10 == 0) {
-                qDebug() << "Collecting samples:"
-                         << palFrameBuffer->size() << "/ 640000"
-                         << "(" << (palFrameBuffer->size() * 100 / 640000) << "%)";
-            }
         }
     }
 }

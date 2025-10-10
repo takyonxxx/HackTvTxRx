@@ -15,18 +15,31 @@
 class FrameBuffer
 {
 public:
-    explicit FrameBuffer(size_t targetSize = 640000)
-        : m_targetSize(targetSize)
+    explicit FrameBuffer(double sampleRate = 16e6, double frameDuration = 0.04)
+        : m_sampleRate(sampleRate)
+        , m_frameDuration(frameDuration)
     {
-        m_buffer.reserve(targetSize * 2);  // Ekstra alan ayır
-        qDebug() << "FrameBuffer created with target size:" << targetSize;
+        updateTargetSize();
     }
 
-    // Yeni buffer ekle - thread-safe ve güvenli
+    // Sample rate ayarla ve target size'ı otomatik hesapla
+    void setSampleRate(double sampleRate)
+    {
+        m_sampleRate = sampleRate;
+        updateTargetSize();
+    }
+
+    // Frame süresi ayarla (varsayılan 0.04 = 40ms PAL frame)
+    void setFrameDuration(double duration)
+    {
+        m_frameDuration = duration;
+        updateTargetSize();
+    }
+
+    // Yeni buffer ekle
     void addBuffer(const std::vector<std::complex<float>>& newData)
     {
         if (newData.empty()) {
-            qWarning() << "Attempted to add empty buffer!";
             return;
         }
 
@@ -34,16 +47,11 @@ public:
         const size_t MAX_BUFFER_SIZE = 10000000; // 10M örnek = ~80MB
 
         if (m_buffer.size() + newData.size() > MAX_BUFFER_SIZE) {
-            qWarning() << "Buffer overflow protection triggered!";
-            qWarning() << "Current size:" << m_buffer.size()
-                       << "Trying to add:" << newData.size();
-            // Buffer'ı sıfırla
             m_buffer.clear();
             qWarning() << "Buffer cleared to prevent overflow";
         }
 
         try {
-            // Güvenli ekleme
             m_buffer.insert(m_buffer.end(), newData.begin(), newData.end());
         }
         catch (const std::exception& e) {
@@ -62,21 +70,18 @@ public:
     std::vector<std::complex<float>> getFrame()
     {
         if (m_buffer.size() < m_targetSize) {
-            qWarning() << "Frame not ready! Size:" << m_buffer.size()
-                       << "Target:" << m_targetSize;
             return std::vector<std::complex<float>>();
         }
 
-        // GÜVENLI YÖNTEM: İlk targetSize kadar örneği kopyala
+        // İlk targetSize kadar örneği kopyala
         std::vector<std::complex<float>> frame;
         frame.reserve(m_targetSize);
 
-        // Manuel kopyalama ile güvenli transfer
         for (size_t i = 0; i < m_targetSize && i < m_buffer.size(); ++i) {
             frame.push_back(m_buffer[i]);
         }
 
-        // Kalanları yeni buffer'a taşı (erase yerine swap kullan)
+        // Kalanları yeni buffer'a taşı
         std::vector<std::complex<float>> remainingBuffer;
         if (m_buffer.size() > m_targetSize) {
             remainingBuffer.reserve(m_buffer.size() - m_targetSize);
@@ -85,10 +90,7 @@ public:
             }
         }
 
-        // Swap ile güvenli değiştir
         m_buffer.swap(remainingBuffer);
-
-        qDebug() << "Frame extracted. Remaining in buffer:" << m_buffer.size();
 
         return frame;
     }
@@ -97,7 +99,6 @@ public:
     void clear()
     {
         m_buffer.clear();
-        qDebug() << "FrameBuffer cleared";
     }
 
     // Mevcut buffer boyutu
@@ -112,6 +113,18 @@ public:
         return m_targetSize;
     }
 
+    // Sample rate
+    double sampleRate() const
+    {
+        return m_sampleRate;
+    }
+
+    // Frame duration
+    double frameDuration() const
+    {
+        return m_frameDuration;
+    }
+
     // Doluluk yüzdesi
     float fillPercentage() const
     {
@@ -119,8 +132,23 @@ public:
     }
 
 private:
+    void updateTargetSize()
+    {
+        // targetSize = sampleRate * frameDuration
+        m_targetSize = static_cast<size_t>(m_sampleRate * m_frameDuration);
+
+        // Buffer'ı reserve et (2x güvenlik için)
+        m_buffer.reserve(m_targetSize * 2);
+
+        qDebug() << "FrameBuffer: targetSize updated to" << m_targetSize
+                 << "samples (" << (m_frameDuration * 1000) << "ms at"
+                 << (m_sampleRate / 1e6) << "MHz)";
+    }
+
     std::vector<std::complex<float>> m_buffer;
     size_t m_targetSize;
+    double m_sampleRate;
+    double m_frameDuration;
 };
 
 class PALBDemodulator : public QObject
