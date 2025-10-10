@@ -285,7 +285,7 @@ void MainWindow::processAudio(const std::vector<float>& demodulatedSamples)
     if (demodulatedSamples.empty() || !audioOutput)
         return;
 
-    audioOutput->processAudio(demodulatedSamples);
+    audioOutput->enqueueAudio(demodulatedSamples);
 }
 
 void MainWindow::handleReceivedData(const int8_t *data, size_t len)
@@ -319,98 +319,115 @@ void MainWindow::handleReceivedData(const int8_t *data, size_t len)
 
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-    // Audio demodulation (FM için - mevcut kodunuz)
-    // if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
-    // {
-    //     try {
-    //         std::vector<std::complex<float>> filteredSamples;
-    //         filteredSamples.reserve(samples.size());
-    //         filteredSamples = lowPassFilter->apply(samples);
+    // --- FREKANS KONTROLÜ ---
+    // 87 MHz - 108 MHz: FM Radyo bandı
+    // 45 MHz - 860 MHz: PAL-B TV bandı
+    constexpr double FM_BAND_LOW = 87e6;
+    constexpr double FM_BAND_HIGH = 108e6;
+    constexpr double PAL_BAND_LOW = 45e6;
+    constexpr double PAL_BAND_HIGH = 860e6;
 
-    //         auto resampledSamples = rationalResampler->resample(std::move(filteredSamples));
-    //         auto demodulatedSamples = fmDemodulator->demodulate(std::move(resampledSamples));
-
-    //         if (!demodulatedSamples.empty()) {
-    //             for (auto& sample : demodulatedSamples) {
-    //                 sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
-    //             }
-
-    //             QMetaObject::invokeMethod(this, "processAudio",
-    //                                       Qt::QueuedConnection,
-    //                                       Q_ARG(std::vector<float>, std::move(demodulatedSamples)));
-    //         }
-    //     }
-    //     catch (const std::exception& e) {
-    //         qDebug() << "Exception in signal processing chain:" << e.what();
-    //     }
-    // }
-
-    // PAL Video Audio Demodulation with FrameBuffer
-    if (palbDemodulator && palFrameBuffer && audioOutput)
+    // --- FM AUDIO DEMODULATION ---
+    if (m_frequency >= FM_BAND_LOW && m_frequency <= FM_BAND_HIGH)
     {
-        palFrameBuffer->addBuffer(samples);
+        if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
+        {
+            try {
+                std::vector<std::complex<float>> filteredSamples;
+                filteredSamples.reserve(samples.size());
+                filteredSamples = lowPassFilter->apply(samples);
 
-        if (palFrameBuffer->isFrameReady()) {
-            // ATOMIK KONTROL
-            int expected = 0;
-            if (!palDemodulationInProgress.testAndSetAcquire(expected, 1)) {
-                palFrameBuffer->getFrame();
-                return;
-            }
+                auto resampledSamples = rationalResampler->resample(std::move(filteredSamples));
+                auto demodulatedSamples = fmDemodulator->demodulate(std::move(resampledSamples));
 
-            auto fullFrame = palFrameBuffer->getFrame();
-
-            if (fullFrame.empty()) {
-                palDemodulationInProgress.storeRelease(0);
-                return;
-            }
-
-            auto fullFramePtr = std::make_shared<std::vector<std::complex<float>>>(std::move(fullFrame));
-
-            (void)QtConcurrent::run(m_threadPool, [this, fullFramePtr]() {
-                struct DemodulationGuard {
-                    QAtomicInt& counter;
-                    DemodulationGuard(QAtomicInt& c) : counter(c) {}
-                    ~DemodulationGuard() { counter.storeRelease(0); }
-                } guard(palDemodulationInProgress);
-
-                try {
-                    auto frame = palbDemodulator->demodulate(*fullFramePtr);
-
-                    // VIDEO: Update display
-                    if (!frame.image.isNull()) {
-                        QImage imageCopy = frame.image.copy();
-                        QMetaObject::invokeMethod(this, "updateDisplay",
-                                                  Qt::QueuedConnection,
-                                                  Q_ARG(const QImage&, imageCopy));
+                if (!demodulatedSamples.empty()) {
+                    for (auto& sample : demodulatedSamples) {
+                        sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
                     }
 
-                    // AUDIO: Process PAL-B TV audio ✅
-                    if (!frame.audio.empty()) {
-                        // PAL-B audio output sample rate
-                        // After demodulation: workingSampleRate / decimationFactor
-                        // Typically 8 MHz / 2 = 4 MHz, then decimated further
+                    QMetaObject::invokeMethod(this, "processAudio",
+                                              Qt::QueuedConnection,
+                                              Q_ARG(std::vector<float>, std::move(demodulatedSamples)));
+                }
+            }
+            catch (const std::exception& e) {
+                qDebug() << "Exception in FM signal processing chain:" << e.what();
+            }
+        }
+        return; // FM işleme bitti, PAL kısmına geçme
+    }
 
-                        // Apply gain and clamp
-                        std::vector<float> audioSamples = frame.audio;
-                        for (auto& sample : audioSamples) {
-                            sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
+    // --- PAL-B VIDEO + AUDIO DEMODULATION ---
+    if (m_frequency >= PAL_BAND_LOW && m_frequency <= PAL_BAND_HIGH)
+    {
+        if (palbDemodulator && palFrameBuffer && audioOutput)
+        {
+            palFrameBuffer->addBuffer(samples);
+
+            if (palFrameBuffer->isFrameReady()) {
+                // ATOMIK KONTROL
+                int expected = 0;
+                if (!palDemodulationInProgress.testAndSetAcquire(expected, 1)) {
+                    palFrameBuffer->getFrame();
+                    return;
+                }
+
+                auto fullFrame = palFrameBuffer->getFrame();
+
+                if (fullFrame.empty()) {
+                    palDemodulationInProgress.storeRelease(0);
+                    return;
+                }
+
+                auto fullFramePtr = std::make_shared<std::vector<std::complex<float>>>(std::move(fullFrame));
+
+                (void)QtConcurrent::run(m_threadPool, [this, fullFramePtr]() {
+                    struct DemodulationGuard {
+                        QAtomicInt& counter;
+                        DemodulationGuard(QAtomicInt& c) : counter(c) {}
+                        ~DemodulationGuard() { counter.storeRelease(0); }
+                    } guard(palDemodulationInProgress);
+
+                    try {
+                        auto frame = palbDemodulator->demodulate(*fullFramePtr);
+
+                        // --- VIDEO ---
+                        if (!frame.image.isNull()) {
+                            QImage imageCopy = frame.image.copy();
+                            QMetaObject::invokeMethod(this, "updateDisplay",
+                                                      Qt::QueuedConnection,
+                                                      Q_ARG(const QImage&, imageCopy));
                         }
 
-                        qDebug() << audioSamples.size();
+                        if (!frame.audio.empty()) {
+                            const size_t minChunkSize = 16384; // 16k örnek, queue için yeterli
+                            std::vector<float> buffer;
+                            buffer.reserve(minChunkSize * 2);
 
-                        QMetaObject::invokeMethod(this, "processAudio",
-                                                  Qt::QueuedConnection,
-                                                  Q_ARG(std::vector<float>, std::move(audioSamples)));
+                            for (size_t i = 0; i < frame.audio.size(); i++) {
+                                buffer.push_back(frame.audio[i] * audioGain);
+
+                                if (buffer.size() >= minChunkSize) {
+                                    audioOutput->enqueueAudio(buffer);
+                                    buffer.clear();
+                                }
+                            }
+
+                            // Kalan örnekleri gönder
+                            if (!buffer.empty()) {
+                                audioOutput->enqueueAudio(buffer);
+                            }
+                        }
+
                     }
-                }
-                catch (const std::exception& e) {
-                    qCritical() << "Exception in PAL demodulation thread:" << e.what();
-                }
-                catch (...) {
-                    qCritical() << "Unknown exception in PAL demodulation thread!";
-                }
-            });
+                    catch (const std::exception& e) {
+                        qCritical() << "Exception in PAL demodulation thread:" << e.what();
+                    }
+                    catch (...) {
+                        qCritical() << "Unknown exception in PAL demodulation thread!";
+                    }
+                });
+            }
         }
     }
 }

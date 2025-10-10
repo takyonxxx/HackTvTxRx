@@ -313,23 +313,20 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
 
         // --- AUDIO PROCESSING ---
         auto shiftedAudio = frequencyShift(samples, AUDIO_CARRIER);
+        auto filteredAudio = complexLowPassFilter(shiftedAudio, 150e3f);
 
-        // Band genişliği: yaklaşık 150 kHz (mono FM ses)
-        float audioBandwidth = 150e3f;
-        auto filteredAudio = complexLowPassFilter(shiftedAudio, audioBandwidth);
+        float targetAudioSampleRate = 50e3f;
+        int audioDecimationFactor = 2 * std::max(1, static_cast<int>(std::round(sampleRate / targetAudioSampleRate))) / 3;
 
-        // Decimation faktörü: 8 MHz / 160 = 50 kHz
-        int audioDecimationFactor = 160;
         auto decimatedAudio = decimateComplex(filteredAudio, audioDecimationFactor);
 
-        // FM demodülasyon
+        // FM demodülasyon (yeni saf diff versiyonu)
         frame.audio = fmDemodulateYDiff(decimatedAudio);
 
-        // Optional: DC offset & normalize
-        float sum = std::accumulate(frame.audio.begin(), frame.audio.end(), 0.0f);
-        float mean = sum / frame.audio.size();
-        for (auto& s : frame.audio)
-            s = std::clamp((s - mean) * 2.0f, -1.0f, 1.0f);
+        int audioGain = 1.0f;
+
+        // Normalize & gain
+        for(auto &s : frame.audio) s = std::clamp(s * audioGain, -1.0f, 1.0f);
     }
     catch (const std::exception& e) {
         qCritical() << "EXCEPTION in PAL demodulation:" << e.what();
@@ -445,28 +442,19 @@ std::vector<std::complex<float>> PALBDemodulator::complexLowPassFilter(
             return signal;
         }
 
-        std::vector<std::complex<float>> filtered = signal;
+        std::vector<std::complex<float>> filtered(signal.size());
 
-        for (size_t i = validStart; i < validEnd; ++i) {
+        // Padding zeros
+        std::vector<std::complex<float>> padded(signal.size() + numTaps, {0.0f, 0.0f});
+        std::copy(signal.begin(), signal.end(), padded.begin() + center);
+
+        for (size_t i = 0; i < signal.size(); ++i) {
             std::complex<float> sum(0.0f, 0.0f);
-            bool validSample = true;
-
             for (int j = 0; j < numTaps; ++j) {
-                size_t idx = i - center + j;
-
-                if (idx >= signal.size()) {
-                    validSample = false;
-                    break;
-                }
-
-                sum += signal[idx] * h[j];
+                sum += padded[i + j] * h[j];
             }
-
-            if (validSample) {
-                filtered[i] = sum;
-            }
+            filtered[i] = sum;
         }
-
         return filtered;
     }
     catch (const std::bad_alloc& e) {
@@ -570,31 +558,27 @@ std::vector<float> PALBDemodulator::fmDemodulateYDiff(
     const std::vector<std::complex<float>>& signal)
 {
     std::vector<float> demodulated(signal.size());
+    if(signal.empty()) return demodulated;
 
-    for (size_t i = 0; i < signal.size(); ++i)
-    {
-        float sampleNorm = std::abs(signal[i]);
-        if (sampleNorm < 1e-10f) {
-            demodulated[i] = 0.0f;
-            continue;
-        }
+    float prevPhase = std::arg(signal[0]);
 
-        float sampleNormI = signal[i].real() / sampleNorm;
-        float sampleNormQ = signal[i].imag() / sampleNorm;
+    for (size_t i = 1; i < signal.size(); ++i) {
+        float phase = std::arg(signal[i]);
+        float diff = phase - prevPhase;
 
-        float sample = m_fltBufferI[0] * (sampleNormQ - m_fltBufferQ[1]);
-        sample -= m_fltBufferQ[0] * (sampleNormI - m_fltBufferI[1]);
+        // Wrap -pi..pi
+        if(diff > M_PI) diff -= 2*M_PI;
+        if(diff < -M_PI) diff += 2*M_PI;
 
-        sample += 2.0f;
-        sample /= 4.0f;
+        demodulated[i] = diff;
+        prevPhase = phase;
+    }
 
-        m_fltBufferI[1] = m_fltBufferI[0];
-        m_fltBufferQ[1] = m_fltBufferQ[0];
-
-        m_fltBufferI[0] = sampleNormI;
-        m_fltBufferQ[0] = sampleNormQ;
-
-        demodulated[i] = sample;
+    // Normalize
+    float maxVal = 0.0f;
+    for(auto s : demodulated) maxVal = std::max(maxVal, std::abs(s));
+    if(maxVal > 1e-6f) {
+        for(auto &s : demodulated) s /= maxVal;
     }
 
     return demodulated;
