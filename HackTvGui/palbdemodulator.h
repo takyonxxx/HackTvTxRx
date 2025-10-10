@@ -3,12 +3,9 @@
 
 #include <QObject>
 #include <QImage>
-#include <QDebug>
-#include <complex>
+#include <QMutex>
 #include <vector>
 #include <array>
-
-#include <vector>
 #include <complex>
 #include <QDebug>
 
@@ -186,7 +183,10 @@ private:
     std::array<float, 6> m_fltBufferI;
     std::array<float, 6> m_fltBufferQ;
 
-    // Helper functions
+    // Thread safety
+    QMutex m_mutex;
+
+    // Helper functions - Signal Processing
     std::vector<std::complex<float>> frequencyShift(
         const std::vector<std::complex<float>>& signal,
         double shiftFreq);
@@ -197,6 +197,7 @@ private:
     std::vector<float> amDemodulate(
         const std::vector<std::complex<float>>& signal);
 
+    // Filter functions
     std::vector<float> lowPassFilter(
         const std::vector<float>& signal,
         float cutoffFreq);
@@ -205,16 +206,28 @@ private:
         const std::vector<std::complex<float>>& signal,
         float cutoffFreq);
 
+    std::vector<float> designLowPassFIR(
+        int numTaps,
+        float cutoffFreq,
+        float sampleRate);
+
+    // Decimation functions
     std::vector<float> decimate(
         const std::vector<float>& signal,
         int factor);
 
+    std::vector<std::complex<float>> decimateComplex(
+        const std::vector<std::complex<float>>& signal,
+        int factor);
+
+    // Signal conditioning
     std::vector<float> removeDCOffset(
         const std::vector<float>& signal);
 
     std::vector<float> applyAGC(
         const std::vector<float>& signal);
 
+    // Sync and timing functions
     bool detectVerticalSync(
         const std::vector<float>& signal,
         size_t& syncStart);
@@ -222,19 +235,30 @@ private:
     std::vector<float> removeVBI(
         const std::vector<float>& signal);
 
+    std::vector<std::complex<float>> removeVBIComplex(
+        const std::vector<std::complex<float>>& signal);
+
     std::vector<float> timingRecovery(
         const std::vector<float>& signal);
 
+    std::vector<std::complex<float>> timingRecoveryComplex(
+        const std::vector<std::complex<float>>& signal);
+
+    // Chroma extraction and color processing
+    std::pair<std::vector<float>, std::vector<float>> extractChroma(
+        const std::vector<std::complex<float>>& signal,
+        size_t targetSize);
+
+    // Image conversion functions
     QImage convertToImage(
         const std::vector<float>& videoSignal,
         float brightness,
         float contrast);
 
-    // Helper for creating FIR filter coefficients
-    std::vector<float> designLowPassFIR(
-        int numTaps,
-        float cutoffFreq,
-        float sampleRate);
+    QImage convertYUVtoRGB(
+        const std::vector<float>& luma,
+        const std::vector<float>& chromaU,
+        const std::vector<float>& chromaV);
 };
 
 #endif // PALBDEMODULATOR_H
