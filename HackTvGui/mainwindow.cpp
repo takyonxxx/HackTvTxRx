@@ -5,7 +5,7 @@
 #include <QtConcurrent/QtConcurrent>
 #include <QFuture>
 #include "constants.h"
-// #include "palbdemodulator.h"
+#include "palbdemodulator.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -80,6 +80,8 @@ MainWindow::MainWindow(QWidget *parent)
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
     cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
     freqCtrl->setFrequency(m_frequency);
+
+    palbDemodulator = new PALBDemodulator(m_sampleRate);
 
     logTimer = new QTimer(this);
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
@@ -1391,14 +1393,14 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
         qDebug() << "Exception in signal processing chain:" << e.what();
     }
 
-    // if(palbDemodulator)
-    // {
-    //     auto frame = palbDemodulator->demodulate(samples);
+    if(palbDemodulator)
+    {
+        auto frame = palbDemodulator->demodulate(samples);
 
-    //     QMetaObject::invokeMethod(this, "updateDisplay",
-    //                               Qt::QueuedConnection,
-    //                               Q_ARG(const QImage&, frame.image));
-    // }
+        QMetaObject::invokeMethod(this, "updateDisplay",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(const QImage&, frame.image));
+    }
 
 }
 
