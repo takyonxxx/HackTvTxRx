@@ -280,6 +280,161 @@ void MainWindow::setCurrentSampleRate(int sampleRate)
     }
 }
 
+void MainWindow::processAudio(const std::vector<float>& demodulatedSamples)
+{
+    if (demodulatedSamples.empty() || !audioOutput)
+        return;
+
+    audioOutput->processAudio(demodulatedSamples);
+}
+
+void MainWindow::handleReceivedData(const int8_t *data, size_t len)
+{
+    if (!m_isProcessing.load() || !data || len != 262144 || !m_threadPool)
+        return;
+
+    const int samples_count = len / 2;
+
+    // Create a shared pointer to a single vector
+    auto samplesPtr = std::make_shared<std::vector<std::complex<float>>>(samples_count);
+
+// Fill the vector with IQ samples
+#pragma omp parallel for
+    for (int i = 0; i < samples_count; i++) {
+        (*samplesPtr)[i] = std::complex<float>(
+            static_cast<int8_t>(data[i * 2]) / 128.0f,
+            static_cast<int8_t>(data[i * 2 + 1]) / 128.0f
+            );
+    }
+
+    // Process FFT and demodulation in parallel, sharing the same data
+    QFuture<void> fftFuture = QtConcurrent::run(m_threadPool, [this, samplesPtr]() {
+        this->processFft(*samplesPtr);
+    });
+
+    QFuture<void> demodFuture = QtConcurrent::run(m_threadPool, [this, samplesPtr]() {
+        this->processDemod(*samplesPtr);
+    });
+}
+
+void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
+{
+    // Audio demodulation (FM için - mevcut kodunuz)
+    if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
+    {
+        try {
+            std::vector<std::complex<float>> filteredSamples;
+            filteredSamples.reserve(samples.size());
+            filteredSamples = lowPassFilter->apply(samples);
+
+            auto resampledSamples = rationalResampler->resample(std::move(filteredSamples));
+            auto demodulatedSamples = fmDemodulator->demodulate(std::move(resampledSamples));
+
+            if (!demodulatedSamples.empty()) {
+                for (auto& sample : demodulatedSamples) {
+                    sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
+                }
+
+                QMetaObject::invokeMethod(this, "processAudio",
+                                          Qt::QueuedConnection,
+                                          Q_ARG(std::vector<float>, std::move(demodulatedSamples)));
+            }
+        }
+        catch (const std::exception& e) {
+            qDebug() << "Exception in signal processing chain:" << e.what();
+        }
+    }
+
+    // PAL Video Demodulation with FrameBuffer
+    if (palbDemodulator && palFrameBuffer)
+    {
+        palFrameBuffer->addBuffer(samples);
+
+        if (palFrameBuffer->isFrameReady()) {
+
+            // Eğer bir demodulation zaten devam ediyorsa, bu frame'i atla
+            if (palDemodulationInProgress.loadAcquire() > 0) {
+                palFrameBuffer->getFrame(); // Buffer'dan çıkar
+                return;
+            }
+
+            palDemodulationInProgress.ref();
+            auto fullFrame = palFrameBuffer->getFrame();
+
+            if (fullFrame.empty()) {
+                palDemodulationInProgress.deref();
+                return;
+            }
+
+            // CRITICAL: Wrap fullFrame in shared_ptr for safe lambda capture
+            auto fullFramePtr = std::make_shared<std::vector<std::complex<float>>>(std::move(fullFrame));
+
+            // Ignore the returned QFuture (we don't need it)
+            (void)QtConcurrent::run([this, fullFramePtr]() {
+                try {
+
+                    auto frame = palbDemodulator->demodulate(*fullFramePtr);
+
+                    if (!frame.image.isNull()) {
+                        QImage imageCopy = frame.image.copy();
+
+                        QMetaObject::invokeMethod(this, "updateDisplay",
+                                                  Qt::QueuedConnection,
+                                                  Q_ARG(const QImage&, imageCopy));
+                    }
+                }
+                catch (const std::exception& e) {
+                    qCritical() << "Exception in PAL demodulation thread:" << e.what();
+                }
+                catch (...) {
+                    qCritical() << "Unknown exception in PAL demodulation thread!";
+                }
+
+                palDemodulationInProgress.deref();
+            });
+        }
+    }
+}
+
+void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
+{
+    // Protect FFT processing with mutex to prevent concurrent access to shared resources
+    static QMutex fftMutex;
+    QMutexLocker locker(&fftMutex);
+
+    int fft_size = 2048;
+    std::vector<float> fft_output(fft_size);
+    float signal_level_dbfs;
+
+    // Process FFT calculations
+    getFft(samples, fft_output, signal_level_dbfs, fft_size);
+
+    // Use invokeMethod to update UI components from the main thread
+    QMetaObject::invokeMethod(cMeter, "setLevel",
+                              Qt::QueuedConnection,
+                              Q_ARG(float, signal_level_dbfs));
+
+    // Create a copy of the data for thread safety
+    float* fft_data = new float[fft_size];
+    std::memcpy(fft_data, fft_output.data(), fft_size * sizeof(float));
+
+    // Update the plotter in the main thread
+    QMetaObject::invokeMethod(this, "updatePlotter",
+                              Qt::QueuedConnection,
+                              Q_ARG(float*, fft_data),
+                              Q_ARG(int, fft_size));
+}
+
+// Add this method to your MainWindow class
+void MainWindow::updatePlotter(float* fft_data, int size)
+{
+    // This runs in the main thread
+    cPlotter->setNewFttData(fft_data, fft_data, size);
+
+    // Clean up the memory we allocated
+    delete[] fft_data;
+}
+
 void MainWindow::addOutputGroup()
 {
     // Output device group
@@ -1321,161 +1476,6 @@ void MainWindow::onChannelChanged(int index)
         m_hackTvLib->setFrequency(m_frequency);
     }
     saveSettings();
-}
-
-void MainWindow::processAudio(const std::vector<float>& demodulatedSamples)
-{
-    if (demodulatedSamples.empty() || !audioOutput)
-        return;
-
-    audioOutput->processAudio(demodulatedSamples);
-}
-
-void MainWindow::handleReceivedData(const int8_t *data, size_t len)
-{
-    if (!m_isProcessing.load() || !data || len != 262144 || !m_threadPool)
-        return;
-
-    const int samples_count = len / 2;
-
-    // Create a shared pointer to a single vector
-    auto samplesPtr = std::make_shared<std::vector<std::complex<float>>>(samples_count);
-
-// Fill the vector with IQ samples
-#pragma omp parallel for
-    for (int i = 0; i < samples_count; i++) {
-        (*samplesPtr)[i] = std::complex<float>(
-            static_cast<int8_t>(data[i * 2]) / 128.0f,
-            static_cast<int8_t>(data[i * 2 + 1]) / 128.0f
-            );
-    }
-
-    // Process FFT and demodulation in parallel, sharing the same data
-    QFuture<void> fftFuture = QtConcurrent::run(m_threadPool, [this, samplesPtr]() {
-        this->processFft(*samplesPtr);
-    });
-
-    QFuture<void> demodFuture = QtConcurrent::run(m_threadPool, [this, samplesPtr]() {
-        this->processDemod(*samplesPtr);
-    });
-}
-
-void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
-{
-    // Protect FFT processing with mutex to prevent concurrent access to shared resources
-    static QMutex fftMutex;
-    QMutexLocker locker(&fftMutex);
-
-    int fft_size = 2048;
-    std::vector<float> fft_output(fft_size);
-    float signal_level_dbfs;
-
-    // Process FFT calculations
-    getFft(samples, fft_output, signal_level_dbfs, fft_size);
-
-    // Use invokeMethod to update UI components from the main thread
-    QMetaObject::invokeMethod(cMeter, "setLevel",
-                              Qt::QueuedConnection,
-                              Q_ARG(float, signal_level_dbfs));
-
-    // Create a copy of the data for thread safety
-    float* fft_data = new float[fft_size];
-    std::memcpy(fft_data, fft_output.data(), fft_size * sizeof(float));
-
-    // Update the plotter in the main thread
-    QMetaObject::invokeMethod(this, "updatePlotter",
-                              Qt::QueuedConnection,
-                              Q_ARG(float*, fft_data),
-                              Q_ARG(int, fft_size));
-}
-
-// Add this method to your MainWindow class
-void MainWindow::updatePlotter(float* fft_data, int size)
-{
-    // This runs in the main thread
-    cPlotter->setNewFttData(fft_data, fft_data, size);
-
-    // Clean up the memory we allocated
-    delete[] fft_data;
-}
-
-void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
-{
-    // Audio demodulation (FM için - mevcut kodunuz)
-    if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
-    {
-        try {
-            std::vector<std::complex<float>> filteredSamples;
-            filteredSamples.reserve(samples.size());
-            filteredSamples = lowPassFilter->apply(samples);
-
-            auto resampledSamples = rationalResampler->resample(std::move(filteredSamples));
-            auto demodulatedSamples = fmDemodulator->demodulate(std::move(resampledSamples));
-
-            if (!demodulatedSamples.empty()) {
-                for (auto& sample : demodulatedSamples) {
-                    sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
-                }
-
-                QMetaObject::invokeMethod(this, "processAudio",
-                                          Qt::QueuedConnection,
-                                          Q_ARG(std::vector<float>, std::move(demodulatedSamples)));
-            }
-        }
-        catch (const std::exception& e) {
-            qDebug() << "Exception in signal processing chain:" << e.what();
-        }
-    }
-
-    // PAL Video Demodulation with FrameBuffer
-    if (palbDemodulator && palFrameBuffer)
-    {
-        palFrameBuffer->addBuffer(samples);
-
-        if (palFrameBuffer->isFrameReady()) {
-
-            // Eğer bir demodulation zaten devam ediyorsa, bu frame'i atla
-            if (palDemodulationInProgress.loadAcquire() > 0) {
-                palFrameBuffer->getFrame(); // Buffer'dan çıkar
-                return;
-            }
-
-            palDemodulationInProgress.ref();
-            auto fullFrame = palFrameBuffer->getFrame();
-
-            if (fullFrame.empty()) {
-                palDemodulationInProgress.deref();
-                return;
-            }
-
-            // CRITICAL: Wrap fullFrame in shared_ptr for safe lambda capture
-            auto fullFramePtr = std::make_shared<std::vector<std::complex<float>>>(std::move(fullFrame));
-
-            // Ignore the returned QFuture (we don't need it)
-            (void)QtConcurrent::run([this, fullFramePtr]() {
-                try {
-
-                    auto frame = palbDemodulator->demodulate(*fullFramePtr);
-
-                    if (!frame.image.isNull()) {
-                        QImage imageCopy = frame.image.copy();
-
-                        QMetaObject::invokeMethod(this, "updateDisplay",
-                                                  Qt::QueuedConnection,
-                                                  Q_ARG(const QImage&, imageCopy));
-                    }
-                }
-                catch (const std::exception& e) {
-                    qCritical() << "Exception in PAL demodulation thread:" << e.what();
-                }
-                catch (...) {
-                    qCritical() << "Unknown exception in PAL demodulation thread!";
-                }
-
-                palDemodulationInProgress.deref();
-            });
-        }
-    }
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
