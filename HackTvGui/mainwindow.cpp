@@ -4,6 +4,7 @@
 #include <QLabel>
 #include <QtConcurrent/QtConcurrent>
 #include <QFuture>
+#include <memory>
 #include "constants.h"
 #include "palbdemodulator.h"
 
@@ -22,7 +23,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_HiCutFreq(DEFAULT_CUT_OFF),
     defaultWidth(1024),
     defaultHeight(780),
-    m_isProcessing(false)
+    m_isProcessing(false),
+    palDemodulationInProgress(0)
 {
     QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
     m_sSettingsFile = homePath + "/hacktv_settings.ini";
@@ -82,6 +84,7 @@ MainWindow::MainWindow(QWidget *parent)
     freqCtrl->setFrequency(m_frequency);
 
     palbDemodulator = new PALBDemodulator(m_sampleRate);
+    palFrameBuffer = new FrameBuffer(640000);
 
     logTimer = new QTimer(this);
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
@@ -104,6 +107,16 @@ MainWindow::~MainWindow()
 
     try {
         qDebug() << "MainWindow destructor starting...";
+
+        if (palFrameBuffer) {
+            delete palFrameBuffer;
+            palFrameBuffer = nullptr;
+        }
+
+        if (palbDemodulator) {
+            delete palbDemodulator;
+            palbDemodulator = nullptr;
+        }
 
         // Stop timers first
         if (logTimer) {
@@ -880,7 +893,11 @@ void MainWindow::handleSamples(const std::vector<std::complex<float>>& samples)
 
 void MainWindow::updateDisplay(const QImage& image)
 {
-    tvDisplay->updateDisplay(image);
+    // Thread-safe: QImage'i kopyala
+    if (!image.isNull()) {
+        QImage safeCopy = image.copy();
+        tvDisplay->updateDisplay(safeCopy);
+    }
 }
 
 void MainWindow::onFreqCtrl_setFrequency(qint64 freq)
@@ -915,9 +932,16 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
 
 void MainWindow::executeCommand()
 {
+    if (palFrameBuffer) {
+        palFrameBuffer->clear();
+        qDebug() << "PAL FrameBuffer cleared on stop";
+    }
+
     if (executeButton->text() == "Start")
     {
-        QStringList args = buildCommand();
+        palDemodulationInProgress.storeRelease(0);
+
+        QStringList args = buildCommand();        
 
         if(mode == "rx")
         {
@@ -958,6 +982,8 @@ void MainWindow::executeCommand()
     {
         try
         {
+            palDemodulationInProgress.storeRelease(0);
+
             m_isProcessing.store(false);
 
             if(m_hackTvLib->stop())
@@ -1363,45 +1389,106 @@ void MainWindow::updatePlotter(float* fft_data, int size)
 
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-    if (!lowPassFilter || !rationalResampler || !fmDemodulator || !audioOutput)
-        return;
-
-    try {
-        // Pre-allocate output buffers with reserved capacity to reduce allocations
-        std::vector<std::complex<float>> filteredSamples;
-        filteredSamples.reserve(samples.size());
-
-        // Use move semantics to avoid copies
-        filteredSamples = lowPassFilter->apply(samples);
-        auto resampledSamples = rationalResampler->resample(std::move(filteredSamples));
-        auto demodulatedSamples = fmDemodulator->demodulate(std::move(resampledSamples));
-
-        if (demodulatedSamples.empty())
-            return;
-
-        // Process in-place to avoid copies
-        for (auto& sample : demodulatedSamples) {
-            sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
-        }
-
-        // Use std::move to avoid another copy
-        QMetaObject::invokeMethod(this, "processAudio",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(std::vector<float>, std::move(demodulatedSamples)));
-    }
-    catch (const std::exception& e) {
-        qDebug() << "Exception in signal processing chain:" << e.what();
-    }
-
-    if(palbDemodulator)
+    // Audio demodulation (FM için - mevcut kodunuz)
+    if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
     {
-        auto frame = palbDemodulator->demodulate(samples);
+        try {
+            std::vector<std::complex<float>> filteredSamples;
+            filteredSamples.reserve(samples.size());
+            filteredSamples = lowPassFilter->apply(samples);
 
-        QMetaObject::invokeMethod(this, "updateDisplay",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(const QImage&, frame.image));
+            auto resampledSamples = rationalResampler->resample(std::move(filteredSamples));
+            auto demodulatedSamples = fmDemodulator->demodulate(std::move(resampledSamples));
+
+            if (!demodulatedSamples.empty()) {
+                for (auto& sample : demodulatedSamples) {
+                    sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
+                }
+
+                QMetaObject::invokeMethod(this, "processAudio",
+                                          Qt::QueuedConnection,
+                                          Q_ARG(std::vector<float>, std::move(demodulatedSamples)));
+            }
+        }
+        catch (const std::exception& e) {
+            qDebug() << "Exception in signal processing chain:" << e.what();
+        }
     }
 
+    // PAL Video Demodulation with FrameBuffer
+    if (palbDemodulator && palFrameBuffer)
+    {
+        palFrameBuffer->addBuffer(samples);
+
+        if (palFrameBuffer->isFrameReady()) {
+
+            // Eğer bir demodulation zaten devam ediyorsa, bu frame'i atla
+            if (palDemodulationInProgress.loadAcquire() > 0) {
+                qWarning() << "*** PAL demodulation in progress, SKIPPING frame ***";
+                palFrameBuffer->getFrame(); // Buffer'dan çıkar
+                return;
+            }
+
+            qDebug() << "\n*** FULL PAL FRAME READY - Starting demodulation ***";
+
+            palDemodulationInProgress.ref();
+            qDebug() << "Demodulation counter:" << palDemodulationInProgress.loadAcquire();
+
+            auto fullFrame = palFrameBuffer->getFrame();
+
+            if (fullFrame.empty()) {
+                qWarning() << "ERROR: getFrame() returned empty vector!";
+                palDemodulationInProgress.deref();
+                return;
+            }
+
+            qDebug() << "Full frame size:" << fullFrame.size() << "samples";
+
+            // CRITICAL: Wrap fullFrame in shared_ptr for safe lambda capture
+            auto fullFramePtr = std::make_shared<std::vector<std::complex<float>>>(std::move(fullFrame));
+
+            QtConcurrent::run([this, fullFramePtr]() {
+                try {
+                    qDebug() << "=== Background thread started ===";
+
+                    auto frame = palbDemodulator->demodulate(*fullFramePtr);
+
+                    qDebug() << "=== Background demodulation complete ===";
+
+                    if (!frame.image.isNull()) {
+                        // Thread-safe: Copy image before passing to main thread
+                        QImage imageCopy = frame.image.copy();
+
+                        QMetaObject::invokeMethod(this, "updateDisplay",
+                                                  Qt::QueuedConnection,
+                                                  Q_ARG(const QImage&, imageCopy));
+                        qDebug() << "Image updated successfully!";
+                    } else {
+                        qWarning() << "Demodulated image is null!";
+                    }
+                }
+                catch (const std::exception& e) {
+                    qCritical() << "Exception in PAL thread:" << e.what();
+                }
+                catch (...) {
+                    qCritical() << "Unknown exception in PAL thread!";
+                }
+
+                palDemodulationInProgress.deref();
+                qDebug() << "Demodulation finished, counter:" << palDemodulationInProgress.loadAcquire();
+            });
+
+            qDebug() << "*** PAL FRAME PROCESSING Started in background ***\n";
+        }
+        else {
+            static int progressCounter = 0;
+            if (++progressCounter % 10 == 0) {
+                qDebug() << "Collecting samples:"
+                         << palFrameBuffer->size() << "/ 640000"
+                         << "(" << (palFrameBuffer->size() * 100 / 640000) << "%)";
+            }
+        }
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)

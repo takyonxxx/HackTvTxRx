@@ -151,6 +151,9 @@ private:
     TVDisplay *tvDisplay;
     QImage currentFrame;
     PALBDemodulator *palbDemodulator;
+    FrameBuffer* palFrameBuffer;
+    QAtomicInt palDemodulationInProgress;
+
 
 protected:
     void closeEvent(QCloseEvent *event) override;
