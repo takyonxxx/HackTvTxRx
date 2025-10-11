@@ -399,25 +399,25 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
                                                       Q_ARG(const QImage&, imageCopy));
                         }
 
-                        if (!frame.audio.empty()) {
-                            const size_t minChunkSize = 16384; // 16k örnek, queue için yeterli
-                            std::vector<float> buffer;
-                            buffer.reserve(minChunkSize * 2);
+                        // if (!frame.audio.empty()) {
+                        //     const size_t minChunkSize = 16384; // 16k örnek, queue için yeterli
+                        //     std::vector<float> buffer;
+                        //     buffer.reserve(minChunkSize * 2);
 
-                            for (size_t i = 0; i < frame.audio.size(); i++) {
-                                buffer.push_back(frame.audio[i] * audioGain);
+                        //     for (size_t i = 0; i < frame.audio.size(); i++) {
+                        //         buffer.push_back(frame.audio[i] * audioGain);
 
-                                if (buffer.size() >= minChunkSize) {
-                                    audioOutput->enqueueAudio(buffer);
-                                    buffer.clear();
-                                }
-                            }
+                        //         if (buffer.size() >= minChunkSize) {
+                        //             audioOutput->enqueueAudio(buffer);
+                        //             buffer.clear();
+                        //         }
+                        //     }
 
-                            // Kalan örnekleri gönder
-                            if (!buffer.empty()) {
-                                audioOutput->enqueueAudio(buffer);
-                            }
-                        }
+                        //     // Kalan örnekleri gönder
+                        //     if (!buffer.empty()) {
+                        //         audioOutput->enqueueAudio(buffer);
+                        //     }
+                        // }
 
                     }
                     catch (const std::exception& e) {
@@ -752,6 +752,7 @@ void MainWindow::addinputTypeGroup()
     QHBoxLayout *logLayout = new QHBoxLayout(logGroup);
     logLayout->addWidget(logBrowser);
     tvDisplay = new TVDisplay(this);
+    tvDisplay->setMinimumHeight(300);
     logLayout->addWidget(tvDisplay);
     logLayout->setStretchFactor(logBrowser, 1);  // Changed from 1 to 2
     logLayout->setStretchFactor(tvDisplay, 1);   // Changed from 2 to 1
