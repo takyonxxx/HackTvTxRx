@@ -3,17 +3,20 @@
 
 #include <QObject>
 #include <QImage>
+#include <QList>
 #include <QMutex>
 #include <vector>
 #include <array>
 #include <complex>
 #include <QDebug>
+#include <atomic>
 
 class FrameBuffer
 {
 public:
     explicit FrameBuffer(double sampleRate = 16e6, double frameDuration = 0.04)
-        : m_sampleRate(sampleRate)
+        : m_targetSize(0)
+        , m_sampleRate(sampleRate)
         , m_frameDuration(frameDuration)
     {
         updateTargetSize();
@@ -37,25 +40,30 @@ public:
             return;
         }
 
-        const size_t MAX_BUFFER_SIZE = 10000000;
+        const qsizetype MAX_BUFFER_SIZE = 10000000;
 
-        if (m_buffer.size() + newData.size() > MAX_BUFFER_SIZE) {
-            m_buffer.clear();
-            qWarning() << "Buffer cleared to prevent overflow";
+        // Reserve space to avoid reallocation
+        if (m_buffer.capacity() < MAX_BUFFER_SIZE) {
+            m_buffer.reserve(MAX_BUFFER_SIZE);
         }
 
-        try {
-            m_buffer.insert(m_buffer.end(), newData.begin(), newData.end());
+        // Efficiently append data
+        qsizetype oldSize = m_buffer.size();
+        m_buffer.resize(oldSize + newData.size());
+        std::copy(newData.begin(), newData.end(), m_buffer.begin() + oldSize);
+
+        // Trim from front if exceeded maximum
+        if (m_buffer.size() > MAX_BUFFER_SIZE) {
+            qsizetype excess = m_buffer.size() - MAX_BUFFER_SIZE;
+            m_buffer.remove(0, excess);
         }
-        catch (const std::exception& e) {
-            qCritical() << "Exception in addBuffer:" << e.what();
-            m_buffer.clear();
-        }
+
+        m_bufferSize.store(m_buffer.size(), std::memory_order_release);
     }
 
     bool isFrameReady() const
     {
-        return m_buffer.size() >= m_targetSize;
+        return m_bufferSize.load(std::memory_order_acquire) >= m_targetSize.load(std::memory_order_acquire);
     }
 
     std::vector<std::complex<float>> getFrame()
@@ -64,22 +72,14 @@ public:
             return std::vector<std::complex<float>>();
         }
 
-        std::vector<std::complex<float>> frame;
-        frame.reserve(m_targetSize);
+        // Extract frame efficiently
+        qsizetype target = m_targetSize.load(std::memory_order_acquire);
+        std::vector<std::complex<float>> frame(target);
+        std::copy(m_buffer.begin(), m_buffer.begin() + target, frame.begin());
 
-        for (size_t i = 0; i < m_targetSize && i < m_buffer.size(); ++i) {
-            frame.push_back(m_buffer[i]);
-        }
-
-        std::vector<std::complex<float>> remainingBuffer;
-        if (m_buffer.size() > m_targetSize) {
-            remainingBuffer.reserve(m_buffer.size() - m_targetSize);
-            for (size_t i = m_targetSize; i < m_buffer.size(); ++i) {
-                remainingBuffer.push_back(m_buffer[i]);
-            }
-        }
-
-        m_buffer.swap(remainingBuffer);
+        // Remove extracted samples from front
+        m_buffer.remove(0, target);
+        m_bufferSize.store(m_buffer.size(), std::memory_order_release);
 
         return frame;
     }
@@ -87,16 +87,17 @@ public:
     void clear()
     {
         m_buffer.clear();
+        m_bufferSize.store(0, std::memory_order_release);
     }
 
-    size_t size() const
+    qsizetype size() const
     {
-        return m_buffer.size();
+        return m_bufferSize.load(std::memory_order_acquire);
     }
 
-    size_t targetSize() const
+    qsizetype targetSize() const
     {
-        return m_targetSize;
+        return m_targetSize.load(std::memory_order_acquire);
     }
 
     double sampleRate() const
@@ -111,18 +112,28 @@ public:
 
     float fillPercentage() const
     {
-        return (static_cast<float>(m_buffer.size()) / m_targetSize) * 100.0f;
+        qsizetype target = m_targetSize.load(std::memory_order_acquire);
+        if (target == 0) return 0.0f;
+        qsizetype current = m_bufferSize.load(std::memory_order_acquire);
+        return (static_cast<float>(current) / target) * 100.0f;
     }
 
 private:
     void updateTargetSize()
     {
-        m_targetSize = static_cast<size_t>(m_sampleRate * m_frameDuration);
-        m_buffer.reserve(m_targetSize * 2);
+        qsizetype newTargetSize = static_cast<qsizetype>(m_sampleRate * m_frameDuration);
+        m_targetSize.store(newTargetSize, std::memory_order_release);
+
+        // Reserve space for multiple frames
+        const qsizetype RESERVE_SIZE = newTargetSize * 3;
+        if (m_buffer.capacity() < RESERVE_SIZE) {
+            m_buffer.reserve(RESERVE_SIZE);
+        }
     }
 
-    std::vector<std::complex<float>> m_buffer;
-    size_t m_targetSize;
+    QList<std::complex<float>> m_buffer;
+    std::atomic<qsizetype> m_targetSize{0};
+    std::atomic<qsizetype> m_bufferSize{0};
     double m_sampleRate;
     double m_frameDuration;
 };

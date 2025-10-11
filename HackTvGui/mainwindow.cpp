@@ -86,9 +86,9 @@ MainWindow::MainWindow(QWidget *parent)
     palbDemodulator->setLineDuration(64e-6);      // 64 mikrosaniye (STANDART)
     palbDemodulator->setPixelsPerLine(720);       // CCIR-601 standardı
     palbDemodulator->setVisibleLines(576);        // 625 toplam - 49 VBI = 576
-    palbDemodulator->setVBILines(0);             // Üst VBI (toplam ~49 satır)
+    palbDemodulator->setVBILines(25);             // Üst VBI (toplam ~49 satır)
     palbDemodulator->setHorizontalOffset(0.1625); // ~16.25% (4.7µs sync + 5.7µs back porch)
-    palbDemodulator->setDecimationFactor(2);      // Genelde 2x
+    palbDemodulator->setDecimationFactor(3);      // Genelde 2x
     palbDemodulator->setVideoCarrier(5.5e6);      // 5.5 MHz (Türkiye için)
 
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
@@ -407,25 +407,25 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
                                                       Q_ARG(const QImage&, imageCopy));
                         }
 
-                        // if (!frame.audio.empty()) {
-                        //     const size_t minChunkSize = 16384; // 16k örnek, queue için yeterli
-                        //     std::vector<float> buffer;
-                        //     buffer.reserve(minChunkSize * 2);
+                        if (!frame.audio.empty()) {
+                            const size_t minChunkSize = 16384; // 16k örnek, queue için yeterli
+                            std::vector<float> buffer;
+                            buffer.reserve(minChunkSize * 2);
 
-                        //     for (size_t i = 0; i < frame.audio.size(); i++) {
-                        //         buffer.push_back(frame.audio[i] * audioGain);
+                            for (size_t i = 0; i < frame.audio.size(); i++) {
+                                buffer.push_back(frame.audio[i] * audioGain);
 
-                        //         if (buffer.size() >= minChunkSize) {
-                        //             audioOutput->enqueueAudio(buffer);
-                        //             buffer.clear();
-                        //         }
-                        //     }
+                                if (buffer.size() >= minChunkSize) {
+                                    audioOutput->enqueueAudio(buffer);
+                                    buffer.clear();
+                                }
+                            }
 
-                        //     // Kalan örnekleri gönder
-                        //     if (!buffer.empty()) {
-                        //         audioOutput->enqueueAudio(buffer);
-                        //     }
-                        // }
+                            // Kalan örnekleri gönder
+                            if (!buffer.empty()) {
+                                audioOutput->enqueueAudio(buffer);
+                            }
+                        }
 
                     }
                     catch (const std::exception& e) {
@@ -760,7 +760,7 @@ void MainWindow::addinputTypeGroup()
     QHBoxLayout *logLayout = new QHBoxLayout(logGroup);
     logLayout->addWidget(logBrowser);
     tvDisplay = new TVDisplay(this);
-    tvDisplay->setMinimumHeight(300);
+    tvDisplay->setMinimumHeight(350);
     logLayout->addWidget(tvDisplay);
     logLayout->setStretchFactor(logBrowser, 1);  // Changed from 1 to 2
     logLayout->setStretchFactor(tvDisplay, 1);   // Changed from 2 to 1
