@@ -1,10 +1,10 @@
-# HackTvRxTx QT 6.x Library And Gui Project
+# HackTvRxTx QT 6.x Library And Gui Project Analog Tv Pal B/G Receiver 
 
 This project is a clone of https://github.com/fsphil/hacktv with modifications for building on Windows. 
 
 Now macos supported.
 
-Enabled Rx and Tx Mode. Video and FM Transmitter & FFt spectrum
+Enabled Rx and Tx Mode. Video and FM Transmitter & FFt spectrum & Analog Tv Pal B/G Receiver 
 
 <b>Please compile for windows with Desktop Qt 6.x MinGW 64-bit
 
