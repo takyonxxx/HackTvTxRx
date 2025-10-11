@@ -1,4 +1,4 @@
-# HackTvRxTx QT 6.x Library And Gui Project
+# HackTvRxTx QT 6.x Library And Gui Project Analog Tv Pal B/G Receiver 
 
 This project is a clone of https://github.com/fsphil/hacktv with modifications for building on Windows. 
 
