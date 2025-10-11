@@ -51,7 +51,6 @@ private slots:
     void on_plotter_newFilterFreq(int low, int high);
     void handleSamples(const std::vector<std::complex<float>>& samples);
     void updateLogDisplay();
-    void processAudio(const std::vector<float>& demodulatedSamples);
     void onVolumeSliderValueChanged(int value);
     void onLnaSliderValueChanged(int value);
     void onVgaSliderValueChanged(int value);
@@ -152,7 +151,8 @@ private:
     QImage currentFrame;
     PALBDemodulator *palbDemodulator;
     FrameBuffer* palFrameBuffer;
-    QAtomicInt palDemodulationInProgress;
+    QAtomicInt palDemodulationInProgress{0};
+    QAtomicInt audioDemodulationInProgress{0};
 
 
 protected:

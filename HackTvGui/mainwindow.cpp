@@ -66,7 +66,8 @@ MainWindow::MainWindow(QWidget *parent)
     try {
         m_threadPool = new QThreadPool(this);
         if (m_threadPool) {
-            m_threadPool->setMaxThreadCount(QThread::idealThreadCount());
+            //m_threadPool->setMaxThreadCount(QThread::idealThreadCount());
+             m_threadPool->setMaxThreadCount(4); // Video + Audio + spare
         }
 
         audioOutput = std::make_unique<AudioOutput>();
@@ -81,15 +82,21 @@ MainWindow::MainWindow(QWidget *parent)
     setCurrentSampleRate(DEFAULT_SAMPLE_RATE);
 
     palbDemodulator = new PALBDemodulator(m_sampleRate);
-    palFrameBuffer = new FrameBuffer(m_sampleRate, 0.04);
+    palFrameBuffer = new FrameBuffer(m_sampleRate, 0.04); // 0.02s = 1 field
+    palbDemodulator->setSampleRate(m_sampleRate);
 
-    palbDemodulator->setLineDuration(64e-6);      // 64 mikrosaniye (STANDART)
-    palbDemodulator->setPixelsPerLine(720);       // CCIR-601 standardı
-    palbDemodulator->setVisibleLines(576);        // 625 toplam - 49 VBI = 576
-    palbDemodulator->setVBILines(25);             // Üst VBI (toplam ~49 satır)
-    palbDemodulator->setHorizontalOffset(0.1625); // ~16.25% (4.7µs sync + 5.7µs back porch)
-    palbDemodulator->setDecimationFactor(3);      // Genelde 2x
-    palbDemodulator->setVideoCarrier(5.5e6);      // 5.5 MHz (Türkiye için)
+    palbDemodulator->setVideoCarrier(5.5e6);
+    palbDemodulator->setPixelsPerLine(720);
+    palbDemodulator->setVisibleLines(288);
+    palbDemodulator->setVBILines(25);
+    palbDemodulator->setLineDuration(64e-6);
+    palbDemodulator->setHorizontalOffset(0.16);
+    palbDemodulator->setDecimationFactor(2);
+    palbDemodulator->setDeinterlace(true);
+    palbDemodulator->setAGCAttack(0.01f);
+    palbDemodulator->setAGCDecay(0.001f);
+    palbDemodulator->setVSyncThreshold(0.3f);
+
 
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
     cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
@@ -158,6 +165,56 @@ MainWindow::~MainWindow()
     } catch (...) {
         // Don't throw from destructor
         qDebug() << "Exception in destructor - ignored";
+    }
+}
+
+void MainWindow::setupUi()
+{
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    QWidget *centralWidget = new QWidget(this);
+    mainLayout = new QVBoxLayout(centralWidget);
+    resize(defaultWidth, defaultHeight);
+
+    addOutputGroup();
+    addRxGroup();
+    addModeGroup();
+    addinputTypeGroup();
+    setCentralWidget(centralWidget);
+
+    // Connect signals and slots
+    connect(executeButton, &QPushButton::clicked, this, &MainWindow::executeCommand);
+    connect(chooseFileButton, &QPushButton::clicked, this, &MainWindow::chooseFile);
+    connect(inputTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onInputTypeChanged);
+    connect(rxtxCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onRxTxTypeChanged);
+    connect(sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onSampleRateChanged);
+
+    //rxtxCombo->setCurrentIndex(0);
+    onRxTxTypeChanged(0);
+}
+
+void MainWindow::setCurrentSampleRate(int sampleRate)
+{
+    m_sampleRate = sampleRate;
+
+    int index = sampleRateCombo->findData(sampleRate);
+    if (index != -1) {
+        sampleRateCombo->setCurrentIndex(index);
+    } else {
+        // If the exact sample rate is not found, find the closest one
+        int closestIndex = 0;
+        int smallestDiff = (std::numeric_limits<int>::max)();
+        for (int i = 0; i < sampleRateCombo->count(); ++i) {
+            int diff = std::abs(sampleRateCombo->itemData(i).toInt() - sampleRate);
+            if (diff < smallestDiff) {
+                smallestDiff = diff;
+                closestIndex = i;
+            }
+        }
+        sampleRateCombo->setCurrentIndex(closestIndex);
     }
 }
 
@@ -238,64 +295,6 @@ void MainWindow::initializeHackTvLibWithRetry() {
     }
 }
 
-void MainWindow::setupUi()
-{
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-
-    QWidget *centralWidget = new QWidget(this);
-    mainLayout = new QVBoxLayout(centralWidget);
-    resize(defaultWidth, defaultHeight);
-
-    addOutputGroup();
-    addRxGroup();
-    addModeGroup();
-    addinputTypeGroup();
-    setCentralWidget(centralWidget);
-
-    // Connect signals and slots
-    connect(executeButton, &QPushButton::clicked, this, &MainWindow::executeCommand);
-    connect(chooseFileButton, &QPushButton::clicked, this, &MainWindow::chooseFile);
-    connect(inputTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onInputTypeChanged);
-    connect(rxtxCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onRxTxTypeChanged);
-    connect(sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onSampleRateChanged);
-
-    //rxtxCombo->setCurrentIndex(0);
-    onRxTxTypeChanged(0);
-}
-
-void MainWindow::setCurrentSampleRate(int sampleRate)
-{
-    m_sampleRate = sampleRate;
-
-    int index = sampleRateCombo->findData(sampleRate);
-    if (index != -1) {
-        sampleRateCombo->setCurrentIndex(index);
-    } else {
-        // If the exact sample rate is not found, find the closest one
-        int closestIndex = 0;
-        int smallestDiff = (std::numeric_limits<int>::max)();
-        for (int i = 0; i < sampleRateCombo->count(); ++i) {
-            int diff = std::abs(sampleRateCombo->itemData(i).toInt() - sampleRate);
-            if (diff < smallestDiff) {
-                smallestDiff = diff;
-                closestIndex = i;
-            }
-        }
-        sampleRateCombo->setCurrentIndex(closestIndex);
-    }
-}
-
-void MainWindow::processAudio(const std::vector<float>& demodulatedSamples)
-{
-    if (demodulatedSamples.empty() || !audioOutput)
-        return;
-
-    audioOutput->enqueueAudio(demodulatedSamples);
-}
-
 void MainWindow::handleReceivedData(const int8_t *data, size_t len)
 {
     if (!m_isProcessing.load() || !data || len != 262144 || !m_threadPool)
@@ -327,114 +326,138 @@ void MainWindow::handleReceivedData(const int8_t *data, size_t len)
 
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-    // --- FREKANS KONTROLÜ ---
-    // 87 MHz - 108 MHz: FM Radyo bandı
-    // 45 MHz - 860 MHz: PAL-B TV bandı
+    // ========================================================================
+    // FREQUENCY BAND DEFINITIONS
+    // ========================================================================
     constexpr double FM_BAND_LOW = 87e6;
     constexpr double FM_BAND_HIGH = 108e6;
     constexpr double PAL_BAND_LOW = 45e6;
     constexpr double PAL_BAND_HIGH = 860e6;
 
-    // --- FM AUDIO DEMODULATION ---
+    // ========================================================================
+    // FM RADIO DEMODULATION (87-108 MHz)
+    // ========================================================================
     if (m_frequency >= FM_BAND_LOW && m_frequency <= FM_BAND_HIGH)
     {
         if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
         {
             try {
-                std::vector<std::complex<float>> filteredSamples;
-                filteredSamples.reserve(samples.size());
-                filteredSamples = lowPassFilter->apply(samples);
+                // Apply low-pass filter
+                auto filteredSamples = lowPassFilter->apply(samples);
 
+                // Resample to audio rate
                 auto resampledSamples = rationalResampler->resample(std::move(filteredSamples));
+
+                // FM demodulation
                 auto demodulatedSamples = fmDemodulator->demodulate(std::move(resampledSamples));
 
                 if (!demodulatedSamples.empty()) {
+                    // Apply gain and clipping in-place
                     for (auto& sample : demodulatedSamples) {
                         sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
                     }
 
-                    QMetaObject::invokeMethod(this, "processAudio",
-                                              Qt::QueuedConnection,
-                                              Q_ARG(std::vector<float>, std::move(demodulatedSamples)));
+                    audioOutput->enqueueAudio(demodulatedSamples);
                 }
+            }
+            catch (const std::bad_alloc& e) {
+                qCritical() << "OUT OF MEMORY in FM processing:" << e.what();
             }
             catch (const std::exception& e) {
-                qDebug() << "Exception in FM signal processing chain:" << e.what();
+                qCritical() << "Exception in FM signal processing:" << e.what();
             }
         }
-        return; // FM işleme bitti, PAL kısmına geçme
+        return;
     }
 
-    // --- PAL-B VIDEO + AUDIO DEMODULATION ---
+    // ========================================================================
+    // PAL-B TV DEMODULATION (45-860 MHz)
+    // ========================================================================
     if (m_frequency >= PAL_BAND_LOW && m_frequency <= PAL_BAND_HIGH)
     {
-        if (palbDemodulator && palFrameBuffer && audioOutput)
-        {
-            palFrameBuffer->addBuffer(samples);
+        if (!palbDemodulator || !palFrameBuffer || !audioOutput) {
+            return;
+        }
 
-            if (palFrameBuffer->isFrameReady()) {
-                // ATOMIK KONTROL
-                int expected = 0;
-                if (!palDemodulationInProgress.testAndSetAcquire(expected, 1)) {
-                    palFrameBuffer->getFrame();
-                    return;
+        palFrameBuffer->addBuffer(samples);
+
+        // Audio processing öncelikli - daha sık çalış
+        if (palFrameBuffer->size() >= palFrameBuffer->targetSize() / 2) {
+            // AUDIO-ONLY PROCESSING (hızlı, her yarım frame'de)
+
+            int expectedAudio = 0;
+            if (audioDemodulationInProgress.testAndSetAcquire(expectedAudio, 1)) {
+
+                // Yarım frame al (audio için yeterli)
+                auto halfFrame = palFrameBuffer->getHalfFrame();
+
+                if (!halfFrame.empty()) {
+                    auto halfFramePtr = std::make_shared<std::vector<std::complex<float>>>(
+                        std::move(halfFrame)
+                        );
+
+                    // HIGH PRIORITY THREAD - Sadece audio
+                    QtConcurrent::run(QThreadPool::globalInstance(), [this, halfFramePtr]() {
+                        struct Guard {
+                            QAtomicInt& counter;
+                            Guard(QAtomicInt& c) : counter(c) {}
+                            ~Guard() { counter.storeRelease(0); }
+                        } guard(audioDemodulationInProgress);
+
+                        try {
+                            auto audio = palbDemodulator->demodulateAudioOnly(*halfFramePtr);
+
+                            if (!audio.empty()) {
+                                for (auto& sample : audio) {
+                                    sample = std::clamp(sample * audioGain, -1.0f, 1.0f);
+                                }
+                                audioOutput->enqueueAudio(std::move(audio));
+                            }
+                        }
+                        catch (const std::exception& e) {
+                            qCritical() << "Audio demodulation error:" << e.what();
+                        }
+                    });
                 }
+            }
+        }
+
+        // Video processing - daha az sıklıkta (tam frame)
+        if (palFrameBuffer->isFrameReady()) {
+
+            int expectedVideo = 0;
+            if (palDemodulationInProgress.testAndSetAcquire(expectedVideo, 1)) {
 
                 auto fullFrame = palFrameBuffer->getFrame();
 
-                if (fullFrame.empty()) {
-                    palDemodulationInProgress.storeRelease(0);
-                    return;
+                if (!fullFrame.empty()) {
+                    auto fullFramePtr = std::make_shared<std::vector<std::complex<float>>>(
+                        std::move(fullFrame)
+                        );
+
+                    // NORMAL PRIORITY THREAD - Sadece video
+                    QtConcurrent::run(m_threadPool, [this, fullFramePtr]() {
+                        struct Guard {
+                            QAtomicInt& counter;
+                            Guard(QAtomicInt& c) : counter(c) {}
+                            ~Guard() { counter.storeRelease(0); }
+                        } guard(palDemodulationInProgress);
+
+                        try {
+                            auto image = palbDemodulator->demodulateVideoOnly(*fullFramePtr);
+
+                            if (!image.isNull()) {
+                                QImage imageCopy = image.copy();
+                                QMetaObject::invokeMethod(this, "updateDisplay",
+                                                          Qt::QueuedConnection,
+                                                          Q_ARG(const QImage&, imageCopy));
+                            }
+                        }
+                        catch (const std::exception& e) {
+                            qCritical() << "Video demodulation error:" << e.what();
+                        }
+                    });
                 }
-
-                auto fullFramePtr = std::make_shared<std::vector<std::complex<float>>>(std::move(fullFrame));
-
-                (void)QtConcurrent::run(m_threadPool, [this, fullFramePtr]() {
-                    struct DemodulationGuard {
-                        QAtomicInt& counter;
-                        DemodulationGuard(QAtomicInt& c) : counter(c) {}
-                        ~DemodulationGuard() { counter.storeRelease(0); }
-                    } guard(palDemodulationInProgress);
-
-                    try {
-                        auto frame = palbDemodulator->demodulate(*fullFramePtr);
-
-                        // --- VIDEO ---
-                        if (!frame.image.isNull()) {
-                            QImage imageCopy = frame.image.copy();
-                            QMetaObject::invokeMethod(this, "updateDisplay",
-                                                      Qt::QueuedConnection,
-                                                      Q_ARG(const QImage&, imageCopy));
-                        }
-
-                        if (!frame.audio.empty()) {
-                            const size_t minChunkSize = 16384; // 16k örnek, queue için yeterli
-                            std::vector<float> buffer;
-                            buffer.reserve(minChunkSize * 2);
-
-                            for (size_t i = 0; i < frame.audio.size(); i++) {
-                                buffer.push_back(frame.audio[i] * audioGain);
-
-                                if (buffer.size() >= minChunkSize) {
-                                    audioOutput->enqueueAudio(buffer);
-                                    buffer.clear();
-                                }
-                            }
-
-                            // Kalan örnekleri gönder
-                            if (!buffer.empty()) {
-                                audioOutput->enqueueAudio(buffer);
-                            }
-                        }
-
-                    }
-                    catch (const std::exception& e) {
-                        qCritical() << "Exception in PAL demodulation thread:" << e.what();
-                    }
-                    catch (...) {
-                        qCritical() << "Unknown exception in PAL demodulation thread!";
-                    }
-                });
             }
         }
     }
