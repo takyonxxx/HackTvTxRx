@@ -86,13 +86,13 @@ MainWindow::MainWindow(QWidget *parent)
     palbDemodulator->setSampleRate(m_sampleRate);
 
     palbDemodulator->setVideoCarrier(5.5e6);
-    palbDemodulator->setPixelsPerLine(720);
-    palbDemodulator->setVisibleLines(288);
+    palbDemodulator->setPixelsPerLine(625);
+    palbDemodulator->setVisibleLines(288 * 2);
     palbDemodulator->setVBILines(25);
     palbDemodulator->setLineDuration(64e-6);
     palbDemodulator->setHorizontalOffset(0.16);
-    palbDemodulator->setDecimationFactor(2);
-    palbDemodulator->setDeinterlace(true);
+    palbDemodulator->setDecimationFactor(1);
+    palbDemodulator->setDeinterlace(false); // for 288 lines
     palbDemodulator->setAGCAttack(0.01f);
     palbDemodulator->setAGCDecay(0.001f);
     palbDemodulator->setVSyncThreshold(0.3f);
