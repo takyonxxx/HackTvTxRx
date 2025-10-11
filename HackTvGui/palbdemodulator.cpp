@@ -10,7 +10,6 @@ PALBDemodulator::PALBDemodulator(double _sampleRate, QObject *parent)
     m_fltBufferQ.fill(0.0f);
 }
 
-// Forward declaration helper functions first
 std::vector<std::complex<float>> PALBDemodulator::decimateComplex(
     const std::vector<std::complex<float>>& signal,
     int factor)
@@ -32,8 +31,7 @@ std::vector<std::complex<float>> PALBDemodulator::decimateComplex(
 std::vector<std::complex<float>> PALBDemodulator::removeVBIComplex(
     const std::vector<std::complex<float>>& signal)
 {
-    const size_t vbiLines = 25;
-    const double samplesPerLine = sampleRate * LINE_DURATION;
+    const double samplesPerLine = sampleRate * lineDuration;
     const size_t vbiSamples = static_cast<size_t>(vbiLines * samplesPerLine);
 
     if (signal.size() <= vbiSamples || vbiSamples >= signal.size()) {
@@ -57,7 +55,7 @@ std::vector<std::complex<float>> PALBDemodulator::timingRecoveryComplex(
         return signal;
     }
 
-    const double samplesPerLine = sampleRate * LINE_DURATION;
+    const double samplesPerLine = sampleRate * lineDuration;
     const size_t numLines = static_cast<size_t>(signal.size() / samplesPerLine);
 
     if (numLines == 0) {
@@ -67,21 +65,24 @@ std::vector<std::complex<float>> PALBDemodulator::timingRecoveryComplex(
     std::vector<std::complex<float>> recovered;
 
     try {
-        size_t reserveSize = numLines * PIXELS_PER_LINE;
+        size_t reserveSize = numLines * pixelsPerLine;
         if (reserveSize > 10000000) {
             reserveSize = 10000000;
         }
         recovered.reserve(reserveSize);
 
+        const size_t skipSamples = static_cast<size_t>(samplesPerLine * horizontalOffset);
+        const double activeSamplesPerLine = samplesPerLine - skipSamples;
+
         for (size_t line = 0; line < numLines; ++line) {
-            size_t lineStart = static_cast<size_t>(line * samplesPerLine);
+            size_t lineStart = static_cast<size_t>(line * samplesPerLine) + skipSamples;
 
             if (lineStart >= signal.size()) {
                 break;
             }
 
-            for (int pixel = 0; pixel < PIXELS_PER_LINE; ++pixel) {
-                double srcPos = lineStart + (pixel * samplesPerLine / PIXELS_PER_LINE);
+            for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
+                double srcPos = lineStart + (pixel * activeSamplesPerLine / pixelsPerLine);
                 size_t idx = static_cast<size_t>(srcPos);
 
                 if (idx + 1 >= signal.size()) {
@@ -127,26 +128,20 @@ std::pair<std::vector<float>, std::vector<float>> PALBDemodulator::extractChroma
     chromaU.reserve(actualSize);
     chromaV.reserve(actualSize);
 
-    // Color subcarrier frequency after decimation
-    double chromaFreq = COLOR_SUBCARRIER / 2.0; // After decimation by 2
+    double chromaFreq = COLOR_SUBCARRIER / 2.0;
     double phaseInc = 2.0 * M_PI * chromaFreq / (sampleRate / 2.0);
 
-    // PAL uses V-switch (line alternation)
     bool vSwitch = false;
-    int samplesPerLine = static_cast<int>((sampleRate / 2.0) * LINE_DURATION);
+    double samplesPerLine = (sampleRate / 2.0) * lineDuration;
+    int samplesPerLineInt = static_cast<int>(samplesPerLine);
 
     for (size_t i = 0; i < actualSize; ++i) {
-        // Demodulate chroma subcarrier
-        float phase = i * phaseInc;
+        float phase = static_cast<float>(i * phaseInc);
 
-        // U component (in phase)
         float u = signal[i].real() * std::cos(phase) + signal[i].imag() * std::sin(phase);
-
-        // V component (quadrature, with PAL alternation)
         float v = -signal[i].real() * std::sin(phase) + signal[i].imag() * std::cos(phase);
 
-        // PAL line alternation - V phase inverts every line
-        if (i % samplesPerLine == 0 && i > 0) {
+        if (samplesPerLineInt > 0 && i > 0 && i % samplesPerLineInt == 0) {
             vSwitch = !vSwitch;
         }
 
@@ -154,12 +149,10 @@ std::pair<std::vector<float>, std::vector<float>> PALBDemodulator::extractChroma
             v = -v;
         }
 
-        // Scale and filter
         chromaU.push_back(u * 2.0f);
         chromaV.push_back(v * 2.0f);
     }
 
-    // Pad if necessary
     while (chromaU.size() < targetSize) {
         chromaU.push_back(0.0f);
         chromaV.push_back(0.0f);
@@ -173,16 +166,15 @@ QImage PALBDemodulator::convertYUVtoRGB(
     const std::vector<float>& chromaU,
     const std::vector<float>& chromaV)
 {
-    QImage image(PIXELS_PER_LINE, VISIBLE_LINES, QImage::Format_RGB888);
+    QImage image(pixelsPerLine, visibleLines, QImage::Format_RGB888);
 
-    size_t expectedSize = PIXELS_PER_LINE * VISIBLE_LINES;
+    size_t expectedSize = pixelsPerLine * visibleLines;
 
     if (luma.size() < expectedSize) {
         image.fill(Qt::black);
         return image;
     }
 
-    // Normalize luma
     float minY = *std::min_element(luma.begin(), luma.begin() + expectedSize);
     float maxY = *std::max_element(luma.begin(), luma.begin() + expectedSize);
 
@@ -190,26 +182,21 @@ QImage PALBDemodulator::convertYUVtoRGB(
         maxY = minY + 1.0f;
     }
 
-    for (int line = 0; line < VISIBLE_LINES; ++line) {
+    for (int line = 0; line < visibleLines; ++line) {
         uchar* scanLine = image.scanLine(line);
 
-        for (int pixel = 0; pixel < PIXELS_PER_LINE; ++pixel) {
-            size_t index = line * PIXELS_PER_LINE + pixel;
+        for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
+            size_t index = line * pixelsPerLine + pixel;
 
             if (index < luma.size()) {
-                // Normalize Y (luma)
                 float y = (luma[index] - minY) / (maxY - minY);
-
-                // Get U and V (chroma)
                 float u = (index < chromaU.size()) ? chromaU[index] * 0.5f : 0.0f;
                 float v = (index < chromaV.size()) ? chromaV[index] * 0.5f : 0.0f;
 
-                // YUV to RGB conversion (BT.601 standard)
                 float r = y + 1.140f * v;
                 float g = y - 0.395f * u - 0.581f * v;
                 float b = y + 2.032f * u;
 
-                // Clamp to 0-255
                 int red = std::clamp(static_cast<int>(r * 255.0f), 0, 255);
                 int green = std::clamp(static_cast<int>(g * 255.0f), 0, 255);
                 int blue = std::clamp(static_cast<int>(b * 255.0f), 0, 255);
@@ -238,29 +225,21 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
             return frame;
         }
 
-        // Step 1: Frequency shift to isolate the video carrier
-        auto shiftedVideo = frequencyShift(samples, VIDEO_CARRIER);
+        auto shiftedVideo = frequencyShift(samples, videoCarrier);
 
-        // Step 2: Apply complex low-pass filter to remove unwanted frequencies
         float videoBandwidth = 5.5e6;
         shiftedVideo = complexLowPassFilter(shiftedVideo, videoBandwidth);
 
-        // Step 3: AM demodulate (envelope detection) for LUMA
         auto videoSignal = amDemodulate(shiftedVideo);
 
-        // Step 4: Decimate to reduce sample rate
-        int decimationFactor = 2;
         videoSignal = decimate(videoSignal, decimationFactor);
 
-        // Also decimate the complex signal for chroma extraction
         auto decimatedComplex = decimateComplex(shiftedVideo, decimationFactor);
 
         double workingSampleRate = sampleRate / decimationFactor;
 
-        // Step 5: Remove DC offset from luma
         videoSignal = removeDCOffset(videoSignal);
 
-        // Check if signal might be inverted
         if (!videoSignal.empty()) {
             float sum = std::accumulate(videoSignal.begin(), videoSignal.end(), 0.0f);
             float mean = sum / videoSignal.size();
@@ -272,10 +251,8 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
             }
         }
 
-        // Step 6: Apply AGC to luma
         videoSignal = applyAGC(videoSignal);
 
-        // Step 7: Vertical sync detection and alignment
         size_t syncStart = 0;
         double savedRate = sampleRate;
         sampleRate = workingSampleRate;
@@ -284,7 +261,6 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
             std::vector<float> syncedSignal(videoSignal.begin() + syncStart, videoSignal.end());
             videoSignal = syncedSignal;
 
-            // Also sync the complex signal
             if (syncStart < decimatedComplex.size()) {
                 std::vector<std::complex<float>> syncedComplex(
                     decimatedComplex.begin() + syncStart,
@@ -294,24 +270,20 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
             }
         }
 
-        // Step 8: Remove Vertical Blanking Interval
         videoSignal = removeVBI(videoSignal);
         decimatedComplex = removeVBIComplex(decimatedComplex);
 
-        // Step 9: Timing recovery - resample to correct pixel rate
         videoSignal = timingRecovery(videoSignal);
+        //videoSignal = extractSingleField(videoSignal, true);
         decimatedComplex = timingRecoveryComplex(decimatedComplex);
 
         sampleRate = savedRate;
 
-        // Step 10: Extract chroma (U and V) from complex signal
         auto chromaUV = extractChroma(decimatedComplex, videoSignal.size());
 
-        // Step 11: Convert YUV to RGB image
         QImage image = convertYUVtoRGB(videoSignal, chromaUV.first, chromaUV.second);
         frame.image = image;
 
-        // --- AUDIO PROCESSING ---
         auto shiftedAudio = frequencyShift(samples, AUDIO_CARRIER);
         auto filteredAudio = complexLowPassFilter(shiftedAudio, 150e3f);
 
@@ -320,26 +292,52 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
 
         auto decimatedAudio = decimateComplex(filteredAudio, audioDecimationFactor);
 
-        // FM demodülasyon (yeni saf diff versiyonu)
         frame.audio = fmDemodulateYDiff(decimatedAudio);
 
-        int audioGain = 1.0f;
+        float audioGain = 1.0f;
 
-        // Normalize & gain
-        for(auto &s : frame.audio) s = std::clamp(s * audioGain, -1.0f, 1.0f);
+        for(auto &s : frame.audio) {
+            s = std::clamp(s * audioGain, -1.0f, 1.0f);
+        }
     }
     catch (const std::exception& e) {
         qCritical() << "EXCEPTION in PAL demodulation:" << e.what();
-        frame.image = QImage(PIXELS_PER_LINE, VISIBLE_LINES, QImage::Format_RGB888);
+        frame.image = QImage(pixelsPerLine, visibleLines, QImage::Format_RGB888);
         frame.image.fill(Qt::black);
     }
     catch (...) {
         qCritical() << "UNKNOWN EXCEPTION in PAL demodulation!";
-        frame.image = QImage(PIXELS_PER_LINE, VISIBLE_LINES, QImage::Format_RGB888);
+        frame.image = QImage(pixelsPerLine, visibleLines, QImage::Format_RGB888);
         frame.image.fill(Qt::black);
     }
 
     return frame;
+}
+
+std::vector<float> PALBDemodulator::extractSingleField(
+    const std::vector<float>& signal,
+    bool oddField)
+{
+    if (signal.size() < pixelsPerLine * 2) {
+        return signal;
+    }
+
+    std::vector<float> field;
+    size_t totalLines = signal.size() / pixelsPerLine;
+
+    // Her iki satırdan birini al (odd veya even)
+    for (size_t line = oddField ? 0 : 1; line < totalLines; line += 2) {
+        size_t lineStart = line * pixelsPerLine;
+        size_t lineEnd = lineStart + pixelsPerLine;
+
+        if (lineEnd <= signal.size()) {
+            field.insert(field.end(),
+                         signal.begin() + lineStart,
+                         signal.begin() + lineEnd);
+        }
+    }
+
+    return field;
 }
 
 std::vector<std::complex<float>> PALBDemodulator::frequencyShift(
@@ -407,6 +405,7 @@ std::vector<float> PALBDemodulator::designLowPassFIR(
             for (auto& coef : h) {
                 coef /= sum;
             }
+
         }
 
         return h;
@@ -444,7 +443,6 @@ std::vector<std::complex<float>> PALBDemodulator::complexLowPassFilter(
 
         std::vector<std::complex<float>> filtered(signal.size());
 
-        // Padding zeros
         std::vector<std::complex<float>> padded(signal.size() + numTaps, {0.0f, 0.0f});
         std::copy(signal.begin(), signal.end(), padded.begin() + center);
 
@@ -566,7 +564,6 @@ std::vector<float> PALBDemodulator::fmDemodulateYDiff(
         float phase = std::arg(signal[i]);
         float diff = phase - prevPhase;
 
-        // Wrap -pi..pi
         if(diff > M_PI) diff -= 2*M_PI;
         if(diff < -M_PI) diff += 2*M_PI;
 
@@ -574,7 +571,6 @@ std::vector<float> PALBDemodulator::fmDemodulateYDiff(
         prevPhase = phase;
     }
 
-    // Normalize
     float maxVal = 0.0f;
     for(auto s : demodulated) maxVal = std::max(maxVal, std::abs(s));
     if(maxVal > 1e-6f) {
@@ -617,8 +613,6 @@ std::vector<float> PALBDemodulator::applyAGC(
     const std::vector<float>& signal)
 {
     const float targetAmplitude = 0.7f;
-    const float agcAttackRate = 0.001f;
-    const float agcDecayRate = 0.0001f;
 
     std::vector<float> agcSignal(signal.size());
     float currentGain = 1.0f;
@@ -650,7 +644,7 @@ bool PALBDemodulator::detectVerticalSync(
 
     float minVal = *std::min_element(signal.begin(), signal.end());
     float maxVal = *std::max_element(signal.begin(), signal.end());
-    float syncThreshold = minVal + (maxVal - minVal) * 0.15f;
+    float syncThreshold = minVal + (maxVal - minVal) * vSyncThreshold;
 
     const size_t minSyncDuration = static_cast<size_t>(sampleRate * 27e-6);
     const size_t maxSyncDuration = static_cast<size_t>(sampleRate * 160e-6);
@@ -680,8 +674,7 @@ bool PALBDemodulator::detectVerticalSync(
 std::vector<float> PALBDemodulator::removeVBI(
     const std::vector<float>& signal)
 {
-    const size_t vbiLines = 25;
-    const double samplesPerLine = sampleRate * LINE_DURATION;
+    const double samplesPerLine = sampleRate * lineDuration;
     const size_t vbiSamples = static_cast<size_t>(vbiLines * samplesPerLine);
 
     if (signal.size() <= vbiSamples || vbiSamples >= signal.size()) {
@@ -705,7 +698,7 @@ std::vector<float> PALBDemodulator::timingRecovery(
         return signal;
     }
 
-    const double samplesPerLine = sampleRate * LINE_DURATION;
+    const double samplesPerLine = sampleRate * lineDuration;
     const size_t numLines = static_cast<size_t>(signal.size() / samplesPerLine);
 
     if (numLines == 0) {
@@ -715,21 +708,24 @@ std::vector<float> PALBDemodulator::timingRecovery(
     std::vector<float> recovered;
 
     try {
-        size_t reserveSize = numLines * PIXELS_PER_LINE;
+        size_t reserveSize = numLines * pixelsPerLine;
         if (reserveSize > 10000000) {
             reserveSize = 10000000;
         }
         recovered.reserve(reserveSize);
 
+        const size_t skipSamples = static_cast<size_t>(samplesPerLine * horizontalOffset);
+        const double activeSamplesPerLine = samplesPerLine - skipSamples;
+
         for (size_t line = 0; line < numLines; ++line) {
-            size_t lineStart = static_cast<size_t>(line * samplesPerLine);
+            size_t lineStart = static_cast<size_t>(line * samplesPerLine) + skipSamples;
 
             if (lineStart >= signal.size()) {
                 break;
             }
 
-            for (int pixel = 0; pixel < PIXELS_PER_LINE; ++pixel) {
-                double srcPos = lineStart + (pixel * samplesPerLine / PIXELS_PER_LINE);
+            for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
+                double srcPos = lineStart + (pixel * activeSamplesPerLine / pixelsPerLine);
                 size_t idx = static_cast<size_t>(srcPos);
 
                 if (idx + 1 >= signal.size()) {
@@ -762,9 +758,9 @@ QImage PALBDemodulator::convertToImage(
     float brightness,
     float contrast)
 {
-    QImage image(PIXELS_PER_LINE, VISIBLE_LINES, QImage::Format_Grayscale8);
+    QImage image(pixelsPerLine, visibleLines, QImage::Format_Grayscale8);
 
-    size_t expectedSize = PIXELS_PER_LINE * VISIBLE_LINES;
+    size_t expectedSize = pixelsPerLine * visibleLines;
 
     if (videoSignal.size() < expectedSize) {
         image.fill(Qt::black);
@@ -780,11 +776,11 @@ QImage PALBDemodulator::convertToImage(
         maxVal = minVal + 1.0f;
     }
 
-    for (int line = 0; line < VISIBLE_LINES; ++line) {
+    for (int line = 0; line < visibleLines; ++line) {
         uchar* scanLine = image.scanLine(line);
 
-        for (int pixel = 0; pixel < PIXELS_PER_LINE; ++pixel) {
-            size_t index = line * PIXELS_PER_LINE + pixel;
+        for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
+            size_t index = line * pixelsPerLine + pixel;
 
             if (index < videoSignal.size()) {
                 float normalized = (videoSignal[index] - minVal) / (maxVal - minVal);

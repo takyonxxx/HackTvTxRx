@@ -19,29 +19,25 @@ public:
         updateTargetSize();
     }
 
-    // Sample rate ayarla ve target size'ı otomatik hesapla
     void setSampleRate(double sampleRate)
     {
         m_sampleRate = sampleRate;
         updateTargetSize();
     }
 
-    // Frame süresi ayarla (varsayılan 0.04 = 40ms PAL frame)
     void setFrameDuration(double duration)
     {
         m_frameDuration = duration;
         updateTargetSize();
     }
 
-    // Yeni buffer ekle
     void addBuffer(const std::vector<std::complex<float>>& newData)
     {
         if (newData.empty()) {
             return;
         }
 
-        // Maksimum buffer boyutunu kontrol et (memory overflow önleme)
-        const size_t MAX_BUFFER_SIZE = 10000000; // 10M örnek = ~80MB
+        const size_t MAX_BUFFER_SIZE = 10000000;
 
         if (m_buffer.size() + newData.size() > MAX_BUFFER_SIZE) {
             m_buffer.clear();
@@ -57,20 +53,17 @@ public:
         }
     }
 
-    // Tam frame hazır mı?
     bool isFrameReady() const
     {
         return m_buffer.size() >= m_targetSize;
     }
 
-    // Frame'i al ve buffer'dan çıkar
     std::vector<std::complex<float>> getFrame()
     {
         if (m_buffer.size() < m_targetSize) {
             return std::vector<std::complex<float>>();
         }
 
-        // İlk targetSize kadar örneği kopyala
         std::vector<std::complex<float>> frame;
         frame.reserve(m_targetSize);
 
@@ -78,7 +71,6 @@ public:
             frame.push_back(m_buffer[i]);
         }
 
-        // Kalanları yeni buffer'a taşı
         std::vector<std::complex<float>> remainingBuffer;
         if (m_buffer.size() > m_targetSize) {
             remainingBuffer.reserve(m_buffer.size() - m_targetSize);
@@ -92,37 +84,31 @@ public:
         return frame;
     }
 
-    // Buffer'ı tamamen temizle
     void clear()
     {
         m_buffer.clear();
     }
 
-    // Mevcut buffer boyutu
     size_t size() const
     {
         return m_buffer.size();
     }
 
-    // Target boyut
     size_t targetSize() const
     {
         return m_targetSize;
     }
 
-    // Sample rate
     double sampleRate() const
     {
         return m_sampleRate;
     }
 
-    // Frame duration
     double frameDuration() const
     {
         return m_frameDuration;
     }
 
-    // Doluluk yüzdesi
     float fillPercentage() const
     {
         return (static_cast<float>(m_buffer.size()) / m_targetSize) * 100.0f;
@@ -131,15 +117,8 @@ public:
 private:
     void updateTargetSize()
     {
-        // targetSize = sampleRate * frameDuration
         m_targetSize = static_cast<size_t>(m_sampleRate * m_frameDuration);
-
-        // Buffer'ı reserve et (2x güvenlik için)
         m_buffer.reserve(m_targetSize * 2);
-
-        qDebug() << "FrameBuffer: targetSize updated to" << m_targetSize
-                 << "samples (" << (m_frameDuration * 1000) << "ms at"
-                 << (m_sampleRate / 1e6) << "MHz)";
     }
 
     std::vector<std::complex<float>> m_buffer;
@@ -161,32 +140,68 @@ public:
 
     DemodulatedFrame demodulate(const std::vector<std::complex<float>>& samples);
 
-    // Allow changing sample rate if needed
     void setSampleRate(double rate) { sampleRate = rate; }
     double getSampleRate() const { return sampleRate; }
 
-private:
-    // Constants for PAL-B (adjusted for Turkey)
-    static constexpr double VIDEO_CARRIER = 5.5e6;  // 5.5 MHz (adjust based on your tuning)
-    static constexpr double AUDIO_CARRIER = 5.74e6; // 5.74 MHz
-    static constexpr double COLOR_SUBCARRIER = 4.43361875e6; // 4.43361875 MHz
+    // AYARLANABILIR PARAMETRELER
+    void setVideoCarrier(double freq) { videoCarrier = freq; }
+    double getVideoCarrier() const { return videoCarrier; }
 
+    void setHorizontalOffset(double offset) { horizontalOffset = offset; }
+    double getHorizontalOffset() const { return horizontalOffset; }
+
+    void setDecimationFactor(int factor) { decimationFactor = factor; }
+    int getDecimationFactor() const { return decimationFactor; }
+
+    void setAGCAttack(float rate) { agcAttackRate = rate; }
+    void setAGCDecay(float rate) { agcDecayRate = rate; }
+    float getAGCAttack() const { return agcAttackRate; }
+    float getAGCDecay() const { return agcDecayRate; }
+
+    void setVSyncThreshold(float threshold) { vSyncThreshold = threshold; }
+    float getVSyncThreshold() const { return vSyncThreshold; }
+
+    void setVBILines(int lines) { vbiLines = lines; }
+    int getVBILines() const { return vbiLines; }
+
+    void setLineDuration(double duration) { lineDuration = duration; }
+    double getLineDuration() const { return lineDuration; }
+
+    void setPixelsPerLine(int pixels) { pixelsPerLine = pixels; }
+    int getPixelsPerLine() const { return pixelsPerLine; }
+
+    void setVisibleLines(int lines) { visibleLines = lines; }
+    int getVisibleLines() const { return visibleLines; }
+
+private:
+    // SABİT PARAMETRELER
+    static constexpr double AUDIO_CARRIER = 5.74e6;
+    static constexpr double COLOR_SUBCARRIER = 4.43361875e6;
     static constexpr int LINES_PER_FRAME = 625;
-    static constexpr int VISIBLE_LINES = 576;
-    static constexpr int PIXELS_PER_LINE = 720;
-    static constexpr double LINE_DURATION = 64e-6;  // 64 µs
-    static constexpr double FIELD_DURATION = 0.02;  // 20 ms (50 Hz)
+    static constexpr double FIELD_DURATION = 0.02;
 
     double sampleRate;
 
-    // Buffers for FM demodulation
+    // DEĞİŞKEN PARAMETRELER
+    double videoCarrier = 5.5e6;
+    double horizontalOffset = 0.15;
+    int decimationFactor = 2;
+    float agcAttackRate = 0.001f;
+    float agcDecayRate = 0.0001f;
+    float vSyncThreshold = 0.15f;
+    int vbiLines = 25;
+    double lineDuration = 64e-6;
+    int pixelsPerLine = 720;
+    int visibleLines = 576;
+
     std::array<float, 6> m_fltBufferI;
     std::array<float, 6> m_fltBufferQ;
 
-    // Thread safety
     QMutex m_mutex;
 
-    // Helper functions - Signal Processing
+    std::vector<float> extractSingleField(const std::vector<float>& signal, bool oddField);
+
+    // Signal Processing
     std::vector<std::complex<float>> frequencyShift(
         const std::vector<std::complex<float>>& signal,
         double shiftFreq);
@@ -197,7 +212,7 @@ private:
     std::vector<float> amDemodulate(
         const std::vector<std::complex<float>>& signal);
 
-    // Filter functions
+    // Filters
     std::vector<float> lowPassFilter(
         const std::vector<float>& signal,
         float cutoffFreq);
@@ -211,7 +226,7 @@ private:
         float cutoffFreq,
         float sampleRate);
 
-    // Decimation functions
+    // Decimation
     std::vector<float> decimate(
         const std::vector<float>& signal,
         int factor);
@@ -227,7 +242,7 @@ private:
     std::vector<float> applyAGC(
         const std::vector<float>& signal);
 
-    // Sync and timing functions
+    // Sync and timing
     bool detectVerticalSync(
         const std::vector<float>& signal,
         size_t& syncStart);
@@ -244,12 +259,12 @@ private:
     std::vector<std::complex<float>> timingRecoveryComplex(
         const std::vector<std::complex<float>>& signal);
 
-    // Chroma extraction and color processing
+    // Chroma extraction
     std::pair<std::vector<float>, std::vector<float>> extractChroma(
         const std::vector<std::complex<float>>& signal,
         size_t targetSize);
 
-    // Image conversion functions
+    // Image conversion
     QImage convertToImage(
         const std::vector<float>& videoSignal,
         float brightness,
