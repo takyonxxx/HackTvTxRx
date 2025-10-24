@@ -278,10 +278,10 @@ bool HackTvLib::start()
     m_abort = false;
     m_signal = 0;
 
-    log("HackTvLib starting.");    
+    log("HackTvLib starting.");
 
     if(!parseArguments())
-        return false;    
+        return false;
 
     log("Freq: %.3f MHz, Sample: %.1f MHz, Gain: %d, Amp: %s, RxTx: %s, Device: %s",
         s.frequency / 1e6,
@@ -501,7 +501,7 @@ bool HackTvLib::openDevice()
     {
 #ifdef HAVE_HACKRF
         if(rf_hackrf_open(m_rxTxMode, &s.rf, s.output, s.vid.sample_rate, s.frequency, s.amp) != RF_OK)
-        {            
+        {
             vid_free(&s.vid);
             log("Could not open HackRF. Please check the device.");
             return false;
@@ -1221,7 +1221,7 @@ bool HackTvLib::parseArguments()
             } else {
                 fprintf(stderr, "Invalid mode. Use 'rx' or 'tx'.\n");
                 return false;
-            }            
+            }
             break;
 
         case '?':

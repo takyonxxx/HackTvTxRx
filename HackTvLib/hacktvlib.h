@@ -100,7 +100,7 @@ public:
     using LogCallback = std::function<void(const std::string&)>;
     using DataCallback = std::function<void(const int8_t*, size_t)>;
 
-     HackTvLib();
+    HackTvLib();
     ~HackTvLib();
     bool start();
     bool stop();
