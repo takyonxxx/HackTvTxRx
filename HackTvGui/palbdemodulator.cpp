@@ -35,112 +35,54 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
         // VIDEO PROCESSING CHAIN
         // ====================================================================
 
-        // 1. Frequency shift to baseband
+        // Frequency shift to baseband
         auto shiftedVideo = frequencyShift(
             std::vector<std::complex<float>>(samples),
             videoCarrier
             );
 
-        // 2. Low-pass filter (video bandwidth)
+        // Low-pass filter (video bandwidth)
         float videoBandwidth = 5.5e6f;
         shiftedVideo = complexLowPassFilter(std::move(shiftedVideo), videoBandwidth);
 
-        // 3. ÖNCE decimatedComplex'i al (move etmeden önce!)
-        auto decimatedComplex = decimateComplex(
-            std::vector<std::complex<float>>(shiftedVideo),  // KOPYA AL
-            decimationFactor
-            );
-
-        // 4. AM demodulation (artık shiftedVideo'yu move edebiliriz)
+        // AM demodulation (artık shiftedVideo'yu move edebiliriz)
         auto videoSignal = amDemodulate(std::move(shiftedVideo));
 
-        // 5. Decimate
+        // Decimate
         videoSignal = decimate(std::move(videoSignal), decimationFactor);
 
         double workingSampleRate = sampleRate / decimationFactor;
         double savedRate = sampleRate;
         sampleRate = workingSampleRate;
 
-        // 6. Remove DC offset
+        // Remove DC offset
         videoSignal = removeDCOffset(std::move(videoSignal));
 
-        // 7. Fix polarity if needed
-        if (!videoSignal.empty()) {
-            float sum = std::accumulate(videoSignal.begin(), videoSignal.end(), 0.0f);
-            float mean = sum / videoSignal.size();
-
-            if (mean < -0.1f) {
-                qDebug() << "Inverting polarity";
-                for (auto& sample : videoSignal) {
-                    sample = -sample;
-                }
-            }
-        }
-
-        // 8. Apply AGC
+        // Apply AGC
         videoSignal = applyAGC(std::move(videoSignal));
-
-        // 9. Detect and align to vertical sync
-        size_t syncStart = 0;
-        bool syncFound = detectVerticalSync(videoSignal, syncStart);
-
-        if (syncFound) {
-            videoSignal.erase(videoSignal.begin(), videoSignal.begin() + syncStart);
-
-            if (syncStart < decimatedComplex.size()) {
-                decimatedComplex.erase(
-                    decimatedComplex.begin(),
-                    decimatedComplex.begin() + syncStart
-                    );
-            }
-        }
-
-        // 10. Remove VBI (Vertical Blanking Interval)
-        videoSignal = removeVBI(std::move(videoSignal));
-        decimatedComplex = removeVBIComplex(std::move(decimatedComplex));
-
-        // 11. Timing recovery (line synchronization)
-        videoSignal = timingRecovery(std::move(videoSignal));
-        decimatedComplex = timingRecoveryComplex(std::move(decimatedComplex));
-
-        // 12. Field extraction (KAPATILDI - Test için)
-        if (enableDeinterlace) {
-            videoSignal = extractSingleField(std::move(videoSignal), true);  // Odd field
-        }
-
-        sampleRate = savedRate;
-
-        // 13. Extract chroma information
-        auto chromaUV = extractChroma(decimatedComplex, videoSignal.size());
-        // 14. Convert YUV to RGB image
-        frame.image = convertYUVtoRGB(videoSignal, chromaUV.first, chromaUV.second);
-
-        if (frame.image.isNull()) {
-            qWarning() << "Image is NULL!";
-        }
 
         // ====================================================================
         // AUDIO PROCESSING CHAIN
         // ====================================================================
 
-        // 1. Shift audio carrier to baseband
+        // Shift audio carrier to baseband
         auto shiftedAudio = frequencyShift(
             std::vector<std::complex<float>>(samples),
             AUDIO_CARRIER  // 5.5 MHz
             );
 
-        // 2. Low-pass filter for audio bandwidth (±200 kHz)
+        // Low-pass filter for audio bandwidth (±200 kHz)
         shiftedAudio = complexLowPassFilter(std::move(shiftedAudio), 200e3f);
 
-        // 3. ÖNCE quadrature rate'e decimate (240 kHz - 48'in katı)
+        // ÖNCE quadrature rate'e decimate (240 kHz - 48'in katı)
         int audioDecimation1 = static_cast<int>(savedRate / 240e3);  // 20MHz / 240kHz ≈ 83
         auto decimatedAudio = decimateComplex(std::move(shiftedAudio), audioDecimation1);
         double audioQuadratureRate = savedRate / audioDecimation1;
 
-        // 4. FM Demodulation
+        // FM Demodulation
         frame.audio = fmDemodulateAudio(decimatedAudio, audioQuadratureRate);
 
-        // 5. Remove DC offset
+        // Remove DC offset
         if (!frame.audio.empty()) {
             float sum = std::accumulate(frame.audio.begin(), frame.audio.end(), 0.0f);
             float dcOffset = sum / frame.audio.size();
@@ -149,10 +91,10 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
             }
         }
 
-        // 6. Apply low-pass filter
+        // Apply low-pass filter
         frame.audio = applyAudioLowPassFilter(std::move(frame.audio));
 
-        // 7. RESAMPLE 240 kHz → 48 kHz (decimation: 5)
+        // RESAMPLE 240 kHz → 48 kHz (decimation: 5)
         int audioDecimation2 = 5;  // 240 kHz / 5 = 48 kHz
         std::vector<float> resampledAudio;
         resampledAudio.reserve(frame.audio.size() / audioDecimation2);
@@ -163,7 +105,7 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
 
         frame.audio = std::move(resampledAudio);
 
-        // 8. Normalize
+        // Normalize
         if (!frame.audio.empty()) {
             float maxAudio = 0.0f;
             for (const auto& s : frame.audio) {
