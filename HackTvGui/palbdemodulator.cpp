@@ -594,7 +594,7 @@ bool PALBDemodulator::detectVerticalSync(
     }
 
     // Adaptive threshold - sync pulses are at the minimum
-    float syncThreshold = minVal + range * 0.3f;  // 30% from minimum 
+    float syncThreshold = minVal + range * 0.3f;  // 30% from minimum
 
     const size_t minSyncDuration = static_cast<size_t>(sampleRate * 27e-6);   // 27 μs
     const size_t maxSyncDuration = static_cast<size_t>(sampleRate * 200e-6);  // 200 μs

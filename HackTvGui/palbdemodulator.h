@@ -106,7 +106,7 @@ public:
         m_buffer.remove(0, halfSize / 2);
 
         return frame;
-    }    
+    }
 
     void clear()
     {
@@ -361,7 +361,7 @@ private:
     std::vector<float> applyAudioLowPassFilter(
         std::vector<float> signal);
 
-    float softClip(float x);       
+    float softClip(float x);
 };
 
 #endif // PALBDEMODULATOR_H
