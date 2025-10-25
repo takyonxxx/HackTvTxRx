@@ -6,6 +6,9 @@
 PALBDemodulator::PALBDemodulator(double _sampleRate, QObject *parent)
     : QObject(parent)
     , sampleRate(_sampleRate)
+    , m_brightness(0.0f)    // Add this
+    , m_contrast(1.0f)      // Add this
+    , m_gamma(1.0f)         // Add this
 {
     m_fltBufferI.fill(0.0f);
     m_fltBufferQ.fill(0.0f);
@@ -238,32 +241,67 @@ QImage PALBDemodulator::demodulateVideoOnly(
 
         videoSignal = applyAGC(std::move(videoSignal));
 
-        size_t syncStart = 0;
-        if (detectVerticalSync(videoSignal, syncStart)) {
-            videoSignal.erase(videoSignal.begin(), videoSignal.begin() + syncStart);
-            if (syncStart < decimatedComplex.size()) {
-                decimatedComplex.erase(decimatedComplex.begin(),
-                                       decimatedComplex.begin() + syncStart);
+        // ====================================================================
+        // SYNCHRONIZATION DETECTION
+        // ====================================================================
+        size_t vSyncStart = 0;
+        bool vSyncFound = detectVerticalSync(videoSignal, vSyncStart);
+
+        if (!vSyncFound) {           
+        } else {
+            size_t skipLines = vbiLines;
+            size_t skipSamples = skipLines * pixelsPerLine;
+            if (vSyncStart + skipSamples < videoSignal.size()) {
+                videoSignal.erase(
+                    videoSignal.begin(),
+                    videoSignal.begin() + vSyncStart + skipSamples
+                    );
             }
         }
 
-        videoSignal = removeVBI(std::move(videoSignal));
-        decimatedComplex = removeVBIComplex(std::move(decimatedComplex));
-
+        // ====================================================================
+        // TIMING RECOVERY
+        // ====================================================================
         videoSignal = timingRecovery(std::move(videoSignal));
-        decimatedComplex = timingRecoveryComplex(std::move(decimatedComplex));
 
-        if (enableDeinterlace) {
-            videoSignal = deinterlaceFields(std::move(videoSignal));
+        // ====================================================================
+        // CHROMA EXTRACTION
+        // ====================================================================
+        auto [chromaU, chromaV] = extractChroma(decimatedComplex, videoSignal.size());
+
+        // ====================================================================
+        // CONVERSION TO IMAGE
+        // ====================================================================
+        QImage colorImage = convertYUVtoRGB(videoSignal, chromaU, chromaV);
+
+        // ====================================================================
+        // APPLY GAMMA CORRECTION IF NEEDED
+        // ====================================================================
+        if (m_gamma != 1.0f && !colorImage.isNull()) {
+            colorImage = applyGammaCorrection(colorImage, m_gamma);
+        }
+
+        // ====================================================================
+        // DEINTERLACING
+        // ====================================================================
+        if (enableDeinterlace && !colorImage.isNull()) {
+            colorImage = colorImage.scaled(
+                colorImage.width(),
+                colorImage.height() / 2,
+                Qt::IgnoreAspectRatio,
+                Qt::SmoothTransformation
+                );
         }
 
         sampleRate = savedRate;
+        image = colorImage;
 
-        auto chromaUV = extractChroma(decimatedComplex, videoSignal.size());
-        image = convertYUVtoRGB(videoSignal, chromaUV.first, chromaUV.second);
-
+    } catch (const std::bad_alloc& e) {
+        qCritical() << "OUT OF MEMORY in video-only demodulation:" << e.what();
+        image = QImage(pixelsPerLine, visibleLines, QImage::Format_RGB888);
+        image.fill(Qt::black);
     } catch (const std::exception& e) {
-        qCritical() << "Video-only demodulation error:" << e.what();
+        qCritical() << "EXCEPTION in video-only demodulation:" << e.what();
         image = QImage(pixelsPerLine, visibleLines, QImage::Format_RGB888);
         image.fill(Qt::black);
     }
@@ -851,6 +889,14 @@ QImage PALBDemodulator::convertToImage(
     float brightness,
     float contrast)
 {
+    // Use member variables if parameters are default
+    if (brightness == 0.0f && m_brightness != 0.0f) {
+        brightness = m_brightness;
+    }
+    if (contrast == 1.0f && m_contrast != 1.0f) {
+        contrast = m_contrast;
+    }
+
     QImage image(pixelsPerLine, visibleLines, QImage::Format_Grayscale8);
 
     size_t expectedSize = pixelsPerLine * visibleLines;
@@ -925,8 +971,9 @@ QImage PALBDemodulator::convertYUVtoRGB(
             size_t index = line * pixelsPerLine + pixel;
 
             if (index < luma.size()) {
-                // Normalize Y
+                // Normalize Y with brightness and contrast
                 float y = (luma[index] - minY) / (maxY - minY);
+                y = (y - 0.5f) * m_contrast + 0.5f + m_brightness;
 
                 // Get U and V
                 float u = (index < chromaU.size()) ? chromaU[index] * 0.5f : 0.0f;
@@ -956,7 +1003,40 @@ QImage PALBDemodulator::convertYUVtoRGB(
     return image;
 }
 
-// CPP'ye ekle (palbdemodulator.cpp):
+QImage PALBDemodulator::applyGammaCorrection(const QImage& image, float gamma)
+{
+    if (image.isNull() || gamma <= 0) return image;
+
+    QImage corrected = image.copy();
+
+    // Create gamma lookup table
+    std::array<uchar, 256> gammaLUT;
+    for (int i = 0; i < 256; ++i) {
+        float normalized = i / 255.0f;
+        float correctedValue = std::pow(normalized, gamma);
+        gammaLUT[i] = static_cast<uchar>(std::clamp(correctedValue * 255.0f, 0.0f, 255.0f));
+    }
+
+    // Apply to image
+    if (image.format() == QImage::Format_Grayscale8) {
+        for (int y = 0; y < image.height(); ++y) {
+            uchar* line = corrected.scanLine(y);
+            for (int x = 0; x < image.width(); ++x) {
+                line[x] = gammaLUT[line[x]];
+            }
+        }
+    }
+    else if (image.format() == QImage::Format_RGB888) {
+        for (int y = 0; y < image.height(); ++y) {
+            uchar* line = corrected.scanLine(y);
+            for (int x = 0; x < image.width() * 3; ++x) {
+                line[x] = gammaLUT[line[x]];
+            }
+        }
+    }
+
+    return corrected;
+}
 
 std::vector<float> PALBDemodulator::fmDemodulateAudio(
     const std::vector<std::complex<float>>& samples,

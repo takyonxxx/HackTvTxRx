@@ -215,11 +215,20 @@ public:
     void setDeinterlace(bool enable) { enableDeinterlace = enable; }
     bool getDeinterlace() const { return enableDeinterlace; }
 
+    // Video adjustment setters/getters
+    void setVideoBrightness(float brightness) { m_brightness = brightness; }
+    void setVideoContrast(float contrast) { m_contrast = contrast; }
+    void setVideoGamma(float gamma) { m_gamma = gamma; }
+
+    float getVideoBrightness() const { return m_brightness; }
+    float getVideoContrast() const { return m_contrast; }
+    float getVideoGamma() const { return m_gamma; }
+
     std::vector<float> demodulateAudioOnly(const std::vector<std::complex<float>>& samples);
     QImage demodulateVideoOnly(const std::vector<std::complex<float>>& samples);
 
 private:
-         // ========================================================================
+    // ========================================================================
     // PAL-B/G STANDARD CONSTANTS
     // ========================================================================
     static constexpr double PAL_LINE_DURATION = 64e-6;         // 64 μs
@@ -258,6 +267,11 @@ private:
     float agcAttackRate = 0.001f;
     float agcDecayRate = 0.0001f;
     float vSyncThreshold = 0.15f;
+
+    // Video adjustments
+    float m_brightness = 0.0f;  // -0.5 to +0.5
+    float m_contrast = 1.0f;    // 0.5 to 2.0
+    float m_gamma = 1.0f;       // 0.5 to 1.5
 
     // Interlacing
     bool enableDeinterlace = false;
@@ -362,6 +376,8 @@ private:
         std::vector<float> signal);
 
     float softClip(float x);
+
+    QImage applyGammaCorrection(const QImage& image, float gamma);
 };
 
 #endif // PALBDEMODULATOR_H

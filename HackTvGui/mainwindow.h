@@ -62,6 +62,7 @@ private:
     std::atomic<bool> m_shuttingDown{false};
     void initializeHackTvLibWithRetry();
     void setupUi();
+    void addVideoControls();
     void addOutputGroup();
     void addinputTypeGroup();
     void addModeGroup();
@@ -75,6 +76,10 @@ private:
     void processDemod(const std::vector<std::complex<float>>& samples);
     void handleLog(const std::string& logMessage);
     void handleReceivedData(const int8_t *data, size_t len);
+
+    float m_videoBrightness = 0.2f;  // 0.0 normal, pozitif daha parlak
+    float m_videoContrast = 1.3f;    // 1.0 normal, >1.0 daha kontrastlı
+    float m_videoGamma = 0.8f;       // <1.0 daha parlak, >1.0 daha karanlık
 
     QVBoxLayout *mainLayout;
 
@@ -141,7 +146,6 @@ private:
     int interpolation = 4;
     int decimation = 2;
 
-    int defaultWidth, defaultHeight;
     std::atomic<bool> m_isProcessing;
 
     std::unique_ptr<LowPassFilter> lowPassFilter;

@@ -21,8 +21,6 @@ MainWindow::MainWindow(QWidget *parent)
     m_sampleRate(DEFAULT_SAMPLE_RATE),
     m_LowCutFreq(-1*int(DEFAULT_CUT_OFF)),
     m_HiCutFreq(DEFAULT_CUT_OFF),
-    defaultWidth(1024),
-    defaultHeight(780),
     m_isProcessing(false),
     palDemodulationInProgress(0)
 {
@@ -60,6 +58,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     // UI SETUP FIRST - CRITICAL!
     setupUi();
+    this->showMaximized();
+
     frequencyEdit->setText(QString::number(m_frequency));
 
     // Initialize safe components first
@@ -84,6 +84,9 @@ MainWindow::MainWindow(QWidget *parent)
     palbDemodulator = new PALBDemodulator(m_sampleRate);
     palFrameBuffer = new FrameBuffer(m_sampleRate, 0.04); // 0.02s = 1 field
     palbDemodulator->setSampleRate(m_sampleRate);
+    palbDemodulator->setVideoBrightness(0.2f);   // Daha parlak
+    palbDemodulator->setVideoContrast(1.3f);      // Daha kontrastlı
+    palbDemodulator->setVideoGamma(0.8f);         // Gamma düzelt
 
     palbDemodulator->setVideoCarrier(0.0);
     palbDemodulator->setPixelsPerLine(720);
@@ -169,16 +172,15 @@ MainWindow::~MainWindow()
 
 void MainWindow::setupUi()
 {
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     QWidget *centralWidget = new QWidget(this);
     mainLayout = new QVBoxLayout(centralWidget);
-    resize(defaultWidth, defaultHeight);
 
     addOutputGroup();
     addRxGroup();
     addModeGroup();
     addinputTypeGroup();
+    addVideoControls();
     setCentralWidget(centralWidget);
 
     // Connect signals and slots
@@ -499,6 +501,84 @@ void MainWindow::updatePlotter(float* fft_data, int size)
 
     // Clean up the memory we allocated
     delete[] fft_data;
+}
+
+void MainWindow::addVideoControls()
+{
+    QGroupBox* videoGroup = new QGroupBox("Video Controls");
+    QGridLayout* videoLayout = new QGridLayout(videoGroup);
+    videoLayout->setSpacing(10);
+
+    // Labels in first row
+    QLabel* brightLabel = new QLabel("Brightness:");
+    QLabel* contrastLabel = new QLabel("Contrast:");
+    QLabel* gammaLabel = new QLabel("Gamma:");
+
+    // Sliders in second row
+    QSlider* brightSlider = new QSlider(Qt::Horizontal);
+    brightSlider->setRange(-50, 50);
+    brightSlider->setValue(20);
+    brightSlider->setMinimumWidth(80);
+
+    QSlider* contrastSlider = new QSlider(Qt::Horizontal);
+    contrastSlider->setRange(50, 200);
+    contrastSlider->setValue(130);
+    contrastSlider->setMinimumWidth(80);
+
+    QSlider* gammaSlider = new QSlider(Qt::Horizontal);
+    gammaSlider->setRange(50, 150);
+    gammaSlider->setValue(80);
+    gammaSlider->setMinimumWidth(80);
+
+    // Values in third row
+    QLabel* brightValue = new QLabel("20");
+    brightValue->setAlignment(Qt::AlignCenter);
+
+    QLabel* contrastValue = new QLabel("1.3");
+    contrastValue->setAlignment(Qt::AlignCenter);
+
+    QLabel* gammaValue = new QLabel("0.8");
+    gammaValue->setAlignment(Qt::AlignCenter);
+
+    // Add to grid - 3x3 layout
+    videoLayout->addWidget(brightLabel, 0, 0, Qt::AlignCenter);
+    videoLayout->addWidget(contrastLabel, 0, 1, Qt::AlignCenter);
+    videoLayout->addWidget(gammaLabel, 0, 2, Qt::AlignCenter);
+
+    videoLayout->addWidget(brightSlider, 1, 0);
+    videoLayout->addWidget(contrastSlider, 1, 1);
+    videoLayout->addWidget(gammaSlider, 1, 2);
+
+    videoLayout->addWidget(brightValue, 2, 0, Qt::AlignCenter);
+    videoLayout->addWidget(contrastValue, 2, 1, Qt::AlignCenter);
+    videoLayout->addWidget(gammaValue, 2, 2, Qt::AlignCenter);
+
+    // Connect signals
+    connect(brightSlider, &QSlider::valueChanged, [this, brightValue](int value) {
+        m_videoBrightness = value / 100.0f;
+        brightValue->setText(QString::number(value));
+        if (palbDemodulator) {
+            palbDemodulator->setVideoBrightness(m_videoBrightness);
+        }
+    });
+
+    connect(contrastSlider, &QSlider::valueChanged, [this, contrastValue](int value) {
+        m_videoContrast = value / 100.0f;
+        contrastValue->setText(QString::number(m_videoContrast, 'f', 1));
+        if (palbDemodulator) {
+            palbDemodulator->setVideoContrast(m_videoContrast);
+        }
+    });
+
+    connect(gammaSlider, &QSlider::valueChanged, [this, gammaValue](int value) {
+        m_videoGamma = value / 100.0f;
+        gammaValue->setText(QString::number(m_videoGamma, 'f', 2));
+        if (palbDemodulator) {
+            palbDemodulator->setVideoGamma(m_videoGamma);
+        }
+    });
+
+    mainLayout->addWidget(videoGroup);
 }
 
 void MainWindow::addOutputGroup()
@@ -1406,9 +1486,6 @@ void MainWindow::onRxTxTypeChanged(int index)
         }
     }
 
-    setMinimumSize(defaultWidth, defaultHeight);  // Set a minimum size
-    setMaximumSize(QSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX));
-    resize(defaultWidth, defaultHeight);
     adjustSize();
     update();
 }
