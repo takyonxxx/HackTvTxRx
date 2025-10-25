@@ -91,7 +91,7 @@ MainWindow::MainWindow(QWidget *parent)
     palbDemodulator->setVBILines(25);
     palbDemodulator->setLineDuration(64e-6);
     palbDemodulator->setHorizontalOffset(0.16);
-    palbDemodulator->setDecimationFactor(1);
+    palbDemodulator->setDecimationFactor(2);
     palbDemodulator->setDeinterlace(false); // for 288 lines
     palbDemodulator->setAGCAttack(0.01f);
     palbDemodulator->setAGCDecay(0.001f);
