@@ -85,18 +85,17 @@ MainWindow::MainWindow(QWidget *parent)
     palFrameBuffer = new FrameBuffer(m_sampleRate, 0.04); // 0.02s = 1 field
     palbDemodulator->setSampleRate(m_sampleRate);
 
-    palbDemodulator->setVideoCarrier(5.5e6);
-    palbDemodulator->setPixelsPerLine(625);
-    palbDemodulator->setVisibleLines(288 * 2);
-    palbDemodulator->setVBILines(25);
+    palbDemodulator->setVideoCarrier(0.0);
+    palbDemodulator->setPixelsPerLine(720);
+    palbDemodulator->setVisibleLines(576);
+    palbDemodulator->setVBILines(49);
     palbDemodulator->setLineDuration(64e-6);
-    palbDemodulator->setHorizontalOffset(0.16);
+    palbDemodulator->setHorizontalOffset(0.148);
     palbDemodulator->setDecimationFactor(2);
     palbDemodulator->setDeinterlace(false); // for 288 lines
-    palbDemodulator->setAGCAttack(0.01f);
-    palbDemodulator->setAGCDecay(0.001f);
-    palbDemodulator->setVSyncThreshold(0.3f);
-
+    palbDemodulator->setAGCAttack(0.001f);
+    palbDemodulator->setAGCDecay(0.0001f);
+    palbDemodulator->setVSyncThreshold(0.25f);
 
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
     cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
