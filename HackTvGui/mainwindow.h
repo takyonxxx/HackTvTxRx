@@ -59,8 +59,7 @@ private slots:
     void exitApp();
 
 private:
-    std::atomic<bool> m_shuttingDown{false};
-    void initializeHackTvLibWithRetry();
+    void initializeHackTvLib();
     void setupUi();
     void addVideoControls();
     void addOutputGroup();
@@ -93,14 +92,14 @@ private:
     QSpinBox *txAmpSpinBox;;
     QTextBrowser *logBrowser;
     QLabel *volumeLabel, *volumeLevelLabel, *lnaLabel, *lnaLevelLabel, *vgaLabel, *vgaLevelLabel,
-           *rxAmpLabel, *rxAmpLevelLabel;
+        *rxAmpLabel, *rxAmpLevelLabel;
     QSlider *volumeSlider, *lnaSlider, *vgaSlider, *txAmpSlider, *rxAmpSlider;
     QFileDialog *fileDialog;
     CFreqCtrl *freqCtrl;
     CPlotter *cPlotter;
     CMeter *cMeter;
 
-    QString sliderStyle, labelStyle;    
+    QString sliderStyle, labelStyle;
 
     // Layouts and Groups
     QGridLayout *txControlsLayout;
@@ -109,6 +108,9 @@ private:
     // Member variables
     std::unique_ptr<HackTvLib> m_hackTvLib;
     std::unique_ptr<AudioOutput> audioOutput;
+    PALBDemodulator *palbDemodulator;
+    FrameBuffer* palFrameBuffer;
+    TVDisplay *tvDisplay;
 
     QThreadPool* m_threadPool;
     QTimer *logTimer;
@@ -117,7 +119,7 @@ private:
 
     qint64 m_frequency;
     int m_sampleRate;
-    int m_volumeLevel = 50;
+    int m_volumeLevel = 10;
     int m_lnaGain = 40;
     int m_vgaGain = 40;
     int m_txAmpGain = 40;
@@ -146,15 +148,14 @@ private:
     int interpolation = 4;
     int decimation = 2;
 
+    std::atomic<bool> m_shuttingDown{false};
     std::atomic<bool> m_isProcessing;
 
     std::unique_ptr<LowPassFilter> lowPassFilter;
     std::unique_ptr<RationalResampler> rationalResampler;
-    std::unique_ptr<FMDemodulator> fmDemodulator;
-    TVDisplay *tvDisplay;
+    std::unique_ptr<FMDemodulator> fmDemodulator;    
     QImage currentFrame;
-    PALBDemodulator *palbDemodulator;
-    FrameBuffer* palFrameBuffer;
+
     QAtomicInt palDemodulationInProgress{0};
     QAtomicInt audioDemodulationInProgress{0};
 

@@ -16,32 +16,22 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
     m_hackTvLib(nullptr),
+    palbDemodulator(nullptr),
+    palFrameBuffer(nullptr),
+    tvDisplay(nullptr),
     m_threadPool(nullptr),
     m_frequency(DEFAULT_FREQUENCY),
     m_sampleRate(DEFAULT_SAMPLE_RATE),
+    m_volumeLevel(10),
     m_LowCutFreq(-1*int(DEFAULT_CUT_OFF)),
     m_HiCutFreq(DEFAULT_CUT_OFF),
-    m_isProcessing(false),
-    palDemodulationInProgress(0)
+    m_shuttingDown(false),
+    m_isProcessing(false),   
+    palDemodulationInProgress(0),
+    audioDemodulationInProgress(0)
 {
     QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
-    m_sSettingsFile = homePath + "/hacktv_settings.ini";
-
-    sliderStyle = "QSlider::groove:horizontal { "
-                  "border: 1px solid #999999; "
-                  "height: 8px; "
-                  "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #B1B1B1, stop:1 #c4c4c4); "
-                  "margin: 2px 0; "
-                  "} "
-                  "QSlider::handle:horizontal { "
-                  "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2980b9, stop:1 #3498db); "
-                  "border: 1px solid #5c5c5c; "
-                  "width: 18px; "
-                  "margin: -2px 0; "
-                  "border-radius: 3px; "
-                  "}";
-
-    labelStyle = "QLabel { background-color: #ad6d0a ; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }";
+    m_sSettingsFile = homePath + "/hacktv_settings.ini";   
 
     // Settings handling
     try {
@@ -56,30 +46,8 @@ MainWindow::MainWindow(QWidget *parent)
         qDebug() << "Exception caught:" << e.what();
     }
 
-    // UI SETUP FIRST - CRITICAL!
-    setupUi();
-    //this->showMaximized();
-    setMinimumSize(QSize(1024, 768));
-
-    frequencyEdit->setText(QString::number(m_frequency));
-
-    // Initialize safe components first
-    try {
-        m_threadPool = new QThreadPool(this);
-        if (m_threadPool) {
-            m_threadPool->setMaxThreadCount(QThread::idealThreadCount());
-        }
-
-        audioOutput = std::make_unique<AudioOutput>();
-        if (!audioOutput) {
-            throw std::runtime_error("Failed to create AudioOutput");
-        }
-    } catch (const std::exception& e) {
-        qDebug() << "Exception creating safe components:" << e.what();
-    }
-
-    // Complete UI setup
-    setCurrentSampleRate(DEFAULT_SAMPLE_RATE);
+    tvDisplay = new TVDisplay(this);
+    audioOutput = std::make_unique<AudioOutput>();
 
     palbDemodulator = new PALBDemodulator(m_sampleRate);
     palFrameBuffer = new FrameBuffer(m_sampleRate, 0.04); // 0.02s = 1 field
@@ -100,17 +68,19 @@ MainWindow::MainWindow(QWidget *parent)
     palbDemodulator->setAGCDecay(0.0001f);
     palbDemodulator->setVSyncThreshold(0.25f);
 
-    cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
-    cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
-    freqCtrl->setFrequency(m_frequency);
+    m_threadPool = new QThreadPool(this);
+    if (m_threadPool) {
+        m_threadPool->setMaxThreadCount(QThread::idealThreadCount());
+    }
+
+    setupUi();
 
     logTimer = new QTimer(this);
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
     logTimer->start(500);
 
-    // CRITICAL: Initialize HackTvLib much later, after everything else is stable
-    QTimer::singleShot(1000, this, [this]() {
-        initializeHackTvLibWithRetry();
+    QTimer::singleShot(500, this, [this]() {
+        initializeHackTvLib();
     });
 }
 
@@ -172,16 +142,38 @@ MainWindow::~MainWindow()
 
 void MainWindow::setupUi()
 {
+    sliderStyle = "QSlider::groove:horizontal { "
+                  "border: 1px solid #999999; "
+                  "height: 8px; "
+                  "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #B1B1B1, stop:1 #c4c4c4); "
+                  "margin: 2px 0; "
+                  "} "
+                  "QSlider::handle:horizontal { "
+                  "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2980b9, stop:1 #3498db); "
+                  "border: 1px solid #5c5c5c; "
+                  "width: 18px; "
+                  "margin: -2px 0; "
+                  "border-radius: 3px; "
+                  "}";
+
+    labelStyle = "QLabel { background-color: #ad6d0a ; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }";
+
+    setMinimumSize(QSize(1024, 768));
 
     QWidget *centralWidget = new QWidget(this);
-    mainLayout = new QVBoxLayout(centralWidget);    
+    mainLayout = new QVBoxLayout(centralWidget);
 
     addOutputGroup();
     addRxGroup();
     addModeGroup();
     addVideoControls();
-    addinputTypeGroup();   
+    addinputTypeGroup();
     setCentralWidget(centralWidget);
+
+    frequencyEdit->setText(QString::number(m_frequency));
+    cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
+    cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
+    freqCtrl->setFrequency(m_frequency);
 
     // Connect signals and slots
     connect(executeButton, &QPushButton::clicked, this, &MainWindow::executeCommand);
@@ -195,6 +187,7 @@ void MainWindow::setupUi()
 
     //rxtxCombo->setCurrentIndex(0);
     onRxTxTypeChanged(0);
+    setCurrentSampleRate(DEFAULT_SAMPLE_RATE);
 }
 
 void MainWindow::setCurrentSampleRate(int sampleRate)
@@ -219,51 +212,29 @@ void MainWindow::setCurrentSampleRate(int sampleRate)
     }
 }
 
-void MainWindow::initializeHackTvLibWithRetry() {   
-
+void MainWindow::initializeHackTvLib() {
     try {
 
-        // Create with timeout wrapper
-        std::unique_ptr<HackTvLib> tempLib;
-        bool success = false;
+        m_hackTvLib = std::make_unique<HackTvLib>();
 
-        // Try initialization in a separate thread with timeout
-        std::thread initThread([&tempLib, &success]() {
-            try {
-                tempLib = std::make_unique<HackTvLib>();
-                success = true;
-            } catch (...) {
-                success = false;
-            }
+        // Callback'leri ayarla
+        m_hackTvLib->setLogCallback([this](const std::string& msg) {
+            handleLog(msg);
         });
 
-        // Wait for initialization or timeout
-        if (initThread.joinable()) {
-            initThread.join();
-        }
+        m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
+            handleReceivedData(data, len);
+        });
 
-        if (success && tempLib) {
-            m_hackTvLib = std::move(tempLib);
+        m_hackTvLib->setMicEnabled(false);
 
-            // Set callbacks
-            m_hackTvLib->setLogCallback([this](const std::string& msg) {
-                handleLog(msg);
-            });
+        if (audioOutput)
+            audioOutput->setVolume(m_volumeLevel);
 
-            m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
-                handleReceivedData(data, len);
-            });
-
-            m_hackTvLib->setMicEnabled(false);
-
-            qDebug() << "HackTvLib initialized successfully";
-
-        } else {
-            throw std::runtime_error("Failed to create HackTvLib instance");
-        }
+        qDebug() << "HackTvLib initialized successfully";
 
     } catch (const std::exception& e) {
-        qDebug() << QString("HackTvLib initialization failed: %2").arg(e.what());
+        qDebug() << QString("HackTvLib initialization failed: %1").arg(e.what());
     }
 }
 
@@ -708,7 +679,7 @@ void MainWindow::addOutputGroup()
     outputLayout->addLayout(txControlsLayout, 3, 0, 1, 6);
     mainLayout->addWidget(outputGroup);
 
-    connect(txAmpSlider, &QSlider::valueChanged, [this](int value) {        
+    connect(txAmpSlider, &QSlider::valueChanged, [this](int value) {
         this->txAmpSpinBox->setValue(value);
         m_txAmpGain = value;
         if(m_isProcessing)
@@ -831,8 +802,7 @@ void MainWindow::addinputTypeGroup()
 
     QGroupBox *logGroup = new QGroupBox("Info", this);
     QHBoxLayout *logLayout = new QHBoxLayout(logGroup);
-    logLayout->addWidget(logBrowser);
-    tvDisplay = new TVDisplay(this);
+    logLayout->addWidget(logBrowser);    
     tvDisplay->setMinimumHeight(350);
     logLayout->addWidget(tvDisplay);
     logLayout->setStretchFactor(logBrowser, 1);  // Changed from 1 to 2
@@ -1045,7 +1015,7 @@ void MainWindow::addRxGroup()
     controlsLayout->addLayout(volumeLayout);
     controlsLayout->addLayout(lnaLayout);
     controlsLayout->addLayout(vgaLayout);
-    controlsLayout->addLayout(rxAmpLayout);    
+    controlsLayout->addLayout(rxAmpLayout);
 
     volumeSlider->setStyleSheet(sliderStyle);
     lnaSlider->setStyleSheet(sliderStyle);
@@ -1217,7 +1187,7 @@ void MainWindow::executeCommand()
     {
         palDemodulationInProgress.storeRelease(0);
 
-        QStringList args = buildCommand();        
+        QStringList args = buildCommand();
 
         if(mode == "rx")
         {
@@ -1283,7 +1253,7 @@ QStringList MainWindow::buildCommand()
     mode = rxtxCombo->currentText().toLower();
     args << "--rx-tx-mode" << mode;
 
-    args << "-o" << output;  
+    args << "-o" << output;
 
     if (ampEnabled->isChecked()) {
         args << "-a" ;
@@ -1310,7 +1280,7 @@ QStringList MainWindow::buildCommand()
         break;
     case 1: // File
         if (!inputFileEdit->text().isEmpty()) {
-            args << inputFileEdit->text();            
+            args << inputFileEdit->text();
         }
         break;
     case 2: // Test
@@ -1324,7 +1294,7 @@ QStringList MainWindow::buildCommand()
         }
         args << ffmpegArg;
         break;
-    }    
+    }
     default:
         args << "test";
         break;
@@ -1611,18 +1581,20 @@ void MainWindow::exitApp()
         return;
     }
 
+    saveSettings();
+
     try {
+
+        palDemodulationInProgress = 0;
+        audioDemodulationInProgress = 0;
 
         // 1. Stop all timers first
         if (logTimer) {
             logTimer->stop();
-            logTimer->deleteLater();
-            logTimer = nullptr;
         }
 
         // 2. Stop processing
         if (m_isProcessing.load()) {
-            qDebug() << "Stopping processing...";
             m_isProcessing.store(false);
         }
 
@@ -1631,17 +1603,14 @@ void MainWindow::exitApp()
             m_threadPool->waitForDone(500); // Reduced timeout
         }
 
+        if (m_hackTvLib) {
+            m_hackTvLib.reset();
+        }
+
         audioOutput.reset();
         fmDemodulator.reset();
         rationalResampler.reset();
         lowPassFilter.reset();
-        m_hackTvLib.reset();
-
-        // 8. Clean thread pool
-        if (m_threadPool) {
-            delete m_threadPool;
-            m_threadPool = nullptr;
-        }
 
         qDebug() << "Exiting...";
 
@@ -1653,8 +1622,8 @@ void MainWindow::exitApp()
             TerminateProcess(hProcess, 0);
             CloseHandle(hProcess);
         }
-#else \
-        // FIXED: Use Qt's proper shutdown instead of exit(0)
+#else \ \
+    // FIXED: Use Qt's proper shutdown instead of exit(0)
         QApplication::quit();
 #endif
 
@@ -1663,8 +1632,8 @@ void MainWindow::exitApp()
 #ifdef Q_OS_WIN
         // Force exit on Windows if there's an exception
         std::exit(1);
-#else \
-        // Use Qt quit on Linux even if there's an exception
+#else \ \
+    // Use Qt quit on Linux even if there's an exception
         QApplication::quit();
 #endif
 
