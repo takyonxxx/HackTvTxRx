@@ -273,7 +273,7 @@ bool HackTvLib::start()
     s.raw_bb_blanking_level = 0;
     s.raw_bb_white_level = INT16_MAX;
     s.audio_gain = 3.0;
-    m_rxTxMode = TX_MODE;
+    m_rxTxMode = RX_MODE;
 
     m_abort = false;
     m_signal = 0;

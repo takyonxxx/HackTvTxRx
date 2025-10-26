@@ -214,27 +214,51 @@ void MainWindow::setCurrentSampleRate(int sampleRate)
 
 void MainWindow::initializeHackTvLib() {
     try {
+        qDebug() << "Creating HackTvLib instance...";
 
+        // Create instance
         m_hackTvLib = std::make_unique<HackTvLib>();
 
-        // Callback'leri ayarla
+        if (!m_hackTvLib) {
+            qDebug() << "Failed to create HackTvLib instance";
+            return;
+        }
+
+        qDebug() << "Setting up callbacks...";
+
+        // Set callbacks with safety checks
         m_hackTvLib->setLogCallback([this](const std::string& msg) {
-            handleLog(msg);
+            // Add safety check for shutdown
+            if (!m_shuttingDown.load()) {
+                handleLog(msg);
+            }
         });
 
         m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
-            handleReceivedData(data, len);
+            // Add safety checks
+            if (!m_shuttingDown.load() && data && len > 0) {
+                handleReceivedData(data, len);
+            }
         });
 
+        // Set mic disabled
         m_hackTvLib->setMicEnabled(false);
 
-        if (audioOutput)
+        // Set audio volume if available
+        if (audioOutput) {
             audioOutput->setVolume(m_volumeLevel);
+        }
 
         qDebug() << "HackTvLib initialized successfully";
 
+        // DO NOT call start() here - let executeButton handle it
+
     } catch (const std::exception& e) {
         qDebug() << QString("HackTvLib initialization failed: %1").arg(e.what());
+        m_hackTvLib.reset();  // Clean up on failure
+    } catch (...) {
+        qDebug() << "HackTvLib initialization failed with unknown exception";
+        m_hackTvLib.reset();  // Clean up on failure
     }
 }
 
@@ -1181,6 +1205,15 @@ void MainWindow::executeCommand()
     if (palFrameBuffer) {
         palFrameBuffer->clear();
         qDebug() << "PAL FrameBuffer cleared on stop";
+    }
+
+    if (!m_hackTvLib) {
+        qDebug() << "HackTvLib not initialized, trying to initialize...";
+        initializeHackTvLib();
+        if (!m_hackTvLib) {
+            qDebug() << "Failed to initialize HackTvLib";
+            return;
+        }
     }
 
     if (executeButton->text() == "Start")
