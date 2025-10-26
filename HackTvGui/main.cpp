@@ -17,87 +17,268 @@ int main(int argc, char *argv[])
     a.setWindowIcon(QIcon(":/ico/hacktv.ico"));
 
     a.setStyle(QStyleFactory::create("Fusion"));
-    // Setup palette with dark orange accents (keeping the same colors as before)
+    
+    // Setup palette with cyber blue-green accents for SDR tech look
     QPalette darkPalette;
-    darkPalette.setColor(QPalette::Window, QColor(18, 22, 32));
-    darkPalette.setColor(QPalette::WindowText, QColor(230, 235, 240));
-    darkPalette.setColor(QPalette::Base, QColor(12, 15, 25));
-    darkPalette.setColor(QPalette::AlternateBase, QColor(22, 26, 36));
-    darkPalette.setColor(QPalette::ToolTipBase, QColor(230, 235, 240));
-    darkPalette.setColor(QPalette::ToolTipText, QColor(230, 235, 240));
-    darkPalette.setColor(QPalette::Text, QColor(230, 235, 240));
-    darkPalette.setColor(QPalette::Button, QColor(35, 40, 55));
-    darkPalette.setColor(QPalette::ButtonText, QColor(230, 235, 240));
-    darkPalette.setColor(QPalette::BrightText, QColor(255, 110, 90));
-    darkPalette.setColor(QPalette::Link, QColor(214, 126, 56));
-    darkPalette.setColor(QPalette::Highlight, QColor(190, 100, 45));
+    darkPalette.setColor(QPalette::Window, QColor(10, 12, 18));        // Deep space background
+    darkPalette.setColor(QPalette::WindowText, QColor(200, 240, 255)); // Cool white-blue text
+    darkPalette.setColor(QPalette::Base, QColor(8, 10, 14));          // Ultra dark base
+    darkPalette.setColor(QPalette::AlternateBase, QColor(15, 18, 25)); // Slightly lighter alternate
+    darkPalette.setColor(QPalette::ToolTipBase, QColor(20, 25, 35));
+    darkPalette.setColor(QPalette::ToolTipText, QColor(200, 240, 255));
+    darkPalette.setColor(QPalette::Text, QColor(200, 240, 255));
+    darkPalette.setColor(QPalette::Button, QColor(20, 25, 40));       // Cool dark button
+    darkPalette.setColor(QPalette::ButtonText, QColor(200, 240, 255));
+    darkPalette.setColor(QPalette::BrightText, QColor(0, 255, 200));  // Bright cyan accent
+    darkPalette.setColor(QPalette::Link, QColor(0, 200, 255));        // Electric blue links
+    darkPalette.setColor(QPalette::Highlight, QColor(0, 150, 200));   // Tech blue highlight
     darkPalette.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
 
     // Apply the palette
     a.setPalette(darkPalette);
 
-    // Enhanced stylesheet with dark orange accents, fixing the checkbox issue
+    // Enhanced stylesheet with cyber tech theme for HackRF SDR
     a.setStyleSheet(
-        // Tooltips
-        "QToolTip { color: #e6ebf0; background-color: #2c3e50; border: 1px solid #d97e34; padding: 2px; }"
+        // Tooltips with tech glow
+        "QToolTip { color: #c8f0ff; background-color: #141828; border: 1px solid #00d4ff; padding: 3px; border-radius: 3px; }"
 
-        // Group boxes
-        "QGroupBox { border: 1px solid #bc6d3d; border-radius: 6px; margin-top: 1em; padding-top: 0.8em; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #ffc186; font-weight: bold; }"
+        // Group boxes with neon accent
+        "QGroupBox { border: 1px solid #0096c8; border-radius: 6px; margin-top: 1em; padding-top: 0.8em; background-color: rgba(0, 150, 200, 5); }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #00ffcc; font-weight: bold; text-transform: uppercase; font-size: 11px; }"
 
-        // Buttons
-        "QPushButton { background-color: #9c4a2c; color: #e6ebf0; border-radius: 4px; padding: 6px 12px; font-weight: bold; }"
-        "QPushButton:hover { background-color: #bc5a3d; }"
-        "QPushButton:pressed { background-color: #8c3a1c; }"
-        "QPushButton:disabled { background-color: #2a3343; color: #6d7687; }"
+        // Buttons with cyber glow effect
+        "QPushButton { "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #005a7a, stop: 1 #003d55); "
+        "    color: #c8f0ff; "
+        "    border: 1px solid #0096c8; "
+        "    border-radius: 4px; "
+        "    padding: 6px 15px; "
+        "    font-weight: bold; "
+        "    text-transform: uppercase; "
+        "    font-size: 11px; "
+        "}"
+        "QPushButton:hover { "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #007aa0, stop: 1 #005575); "
+        "    border: 1px solid #00d4ff; "
+        "    box-shadow: 0 0 10px rgba(0, 212, 255, 0.3); "
+        "}"
+        "QPushButton:pressed { background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #003d55, stop: 1 #002a3a); }"
+        "QPushButton:disabled { background: #1a2030; color: #506070; border-color: #2a3545; }"
 
-        // Text inputs
-        "QLineEdit { border: 1px solid #bc6d3d; border-radius: 4px; padding: 4px; background-color: #12151a; color: #e6ebf0; }"
-        "QLineEdit:focus { border: 2px solid #d47e54; }"
-        "QLineEdit:disabled { background-color: #1c2130; color: #6d7687; border-color: #2a3343; }"
+        // Text inputs with tech border
+        "QLineEdit { "
+        "    border: 1px solid #0078a0; "
+        "    border-radius: 4px; "
+        "    padding: 5px; "
+        "    background-color: rgba(8, 10, 14, 200); "
+        "    color: #c8f0ff; "
+        "    selection-background-color: #0096c8; "
+        "}"
+        "QLineEdit:focus { border: 2px solid #00d4ff; background-color: rgba(0, 150, 200, 10); }"
+        "QLineEdit:disabled { background-color: #151820; color: #506070; border-color: #2a3545; }"
 
-        // Dropdown boxes
-        "QComboBox { border: 1px solid #bc6d3d; border-radius: 4px; padding: 4px 8px; background-color: #12151a; color: #e6ebf0; min-width: 6em; }"
-        "QComboBox:hover { border: 1px solid #d47e54; }"
-        "QComboBox:disabled { background-color: #1c2130; color: #6d7687; border-color: #2a3343; }"
-        "QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: top right; width: 20px; border-left-width: 1px; border-left-color: #bc6d3d; border-left-style: solid; border-top-right-radius: 4px; border-bottom-right-radius: 4px; }"
-        "QComboBox::down-arrow { width: 14px; height: 14px; }"
-        "QComboBox QAbstractItemView { border: 1px solid #bc6d3d; selection-background-color: #bc6d3d; background-color: #12151a; padding: 2px; }"
+        // Dropdown boxes with tech styling
+        "QComboBox { "
+        "    border: 1px solid #0078a0; "
+        "    border-radius: 4px; "
+        "    padding: 4px 8px; "
+        "    background-color: rgba(8, 10, 14, 200); "
+        "    color: #c8f0ff; "
+        "    min-width: 6em; "
+        "}"
+        "QComboBox:hover { border: 2px solid #00d4ff; }"
+        "QComboBox:disabled { background-color: #151820; color: #506070; border-color: #2a3545; }"
+        "QComboBox::drop-down { "
+        "    subcontrol-origin: padding; "
+        "    subcontrol-position: top right; "
+        "    width: 20px; "
+        "    border-left: 1px solid #0078a0; "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #003d55, stop: 1 #002a3a); "
+        "}"
+        "QComboBox::down-arrow { image: none; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 6px solid #00d4ff; width: 0; height: 0; }"
+        "QComboBox QAbstractItemView { "
+        "    border: 1px solid #0096c8; "
+        "    selection-background-color: #0078a0; "
+        "    background-color: #0a0c12; "
+        "    padding: 2px; "
+        "}"
 
-        // Sliders for frequency and gain controls
-        "QSlider::groove:horizontal { border: 1px solid #bc6d3d; height: 8px; background: #12151a; margin: 2px 0; border-radius: 4px; }"
-        "QSlider::handle:horizontal { background: #d47e54; border: 1px solid #ffc186; width: 16px; margin: -5px 0; border-radius: 8px; }"
-        "QSlider::handle:horizontal:hover { background: #ffc186; }"
+        // Sliders for frequency controls with neon look
+        "QSlider::groove:horizontal { "
+        "    border: 1px solid #0078a0; "
+        "    height: 6px; "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 #0a0c12, stop: 0.5 #003d55, stop: 1 #0a0c12); "
+        "    margin: 2px 0; "
+        "    border-radius: 3px; "
+        "}"
+        "QSlider::handle:horizontal { "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #00ffcc, stop: 1 #0096c8); "
+        "    border: 1px solid #00d4ff; "
+        "    width: 14px; "
+        "    height: 14px; "
+        "    margin: -5px 0; "
+        "    border-radius: 7px; "
+        "}"
+        "QSlider::handle:horizontal:hover { "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #00ffdd, stop: 1 #00b8e6); "
+        "    box-shadow: 0 0 10px rgba(0, 255, 200, 0.5); "
+        "}"
 
-        // Progress indicators
-        "QProgressBar { border: 1px solid #bc6d3d; border-radius: 4px; text-align: center; background-color: #12151a; }"
-        "QProgressBar::chunk { background-color: #bc6d3d; width: 1px; }"
+        // Progress bars with animated look
+        "QProgressBar { "
+        "    border: 1px solid #0078a0; "
+        "    border-radius: 4px; "
+        "    text-align: center; "
+        "    background-color: #0a0c12; "
+        "    color: #00ffcc; "
+        "    font-weight: bold; "
+        "}"
+        "QProgressBar::chunk { "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 #003d55, stop: 0.5 #0096c8, stop: 1 #00d4ff); "
+        "    border-radius: 3px; "
+        "}"
 
-        // Tabs for different modes (RX/TX)
-        "QTabWidget::pane { border: 1px solid #bc6d3d; border-radius: 4px; }"
-        "QTabBar::tab { background-color: #281c18; color: #c0a0a0; padding: 6px 12px; border: 1px solid #bc6d3d; border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }"
-        "QTabBar::tab:selected { background-color: #9c4a2c; color: #e6ebf0; }"
-        "QTabBar::tab:hover:!selected { background-color: #382924; }"
+        // Tabs for RX/TX modes with tech styling
+        "QTabWidget::pane { "
+        "    border: 1px solid #0078a0; "
+        "    background-color: rgba(10, 12, 18, 200); "
+        "    border-radius: 4px; "
+        "}"
+        "QTabBar::tab { "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #1a2535, stop: 1 #0a0c12); "
+        "    color: #708090; "
+        "    padding: 8px 16px; "
+        "    border: 1px solid #0078a0; "
+        "    border-bottom: none; "
+        "    margin-right: 2px; "
+        "}"
+        "QTabBar::tab:selected { "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #005a7a, stop: 1 #003d55); "
+        "    color: #00ffcc; "
+        "    border-color: #00d4ff; "
+        "}"
+        "QTabBar::tab:hover:!selected { "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #2a3545, stop: 1 #1a2030); "
+        "    color: #a0c0d0; "
+        "}"
 
-        // Updated Checkbox and Radio buttons with direct styling instead of icons
-        "QCheckBox { spacing: 5px; }"
-        "QCheckBox::indicator { width: 18px; height: 18px; }"
-        "QCheckBox::indicator:unchecked { border: 2px solid #bc6d3d; background-color: #12151a; border-radius: 3px; }"
-        "QCheckBox::indicator:checked { border: 2px solid #bc6d3d; background-color: #9c4a2c; border-radius: 3px; }"
-        "QCheckBox::indicator:hover { border: 2px solid #d47e54; }"
+        // Checkboxes and Radio buttons with cyber style
+        "QCheckBox { spacing: 6px; color: #c8f0ff; }"
+        "QCheckBox::indicator { width: 18px; height: 18px; border-radius: 3px; }"
+        "QCheckBox::indicator:unchecked { "
+        "    border: 2px solid #0078a0; "
+        "    background-color: #0a0c12; "
+        "}"
+        "QCheckBox::indicator:checked { "
+        "    border: 2px solid #00d4ff; "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 #0096c8, stop: 1 #005a7a); "
+        "}"
+        "QCheckBox::indicator:checked::after { "
+        "    content: ''; "
+        "    width: 5px; "
+        "    height: 10px; "
+        "    border: 2px solid #00ffcc; "
+        "    border-width: 0 2px 2px 0; "
+        "}"
+        "QCheckBox::indicator:hover { "
+        "    border: 2px solid #00d4ff; "
+        "    background-color: rgba(0, 150, 200, 20); "
+        "}"
 
-        "QRadioButton { spacing: 5px; }"
+        "QRadioButton { spacing: 6px; color: #c8f0ff; }"
         "QRadioButton::indicator { width: 18px; height: 18px; }"
-        "QRadioButton::indicator:unchecked { border: 2px solid #bc6d3d; background-color: #12151a; border-radius: 9px; }"
-        "QRadioButton::indicator:checked { border: 2px solid #bc6d3d; background-color: #9c4a2c; border-radius: 9px; }"
-        "QRadioButton::indicator:hover { border: 2px solid #d47e54; }"
+        "QRadioButton::indicator:unchecked { "
+        "    border: 2px solid #0078a0; "
+        "    background-color: #0a0c12; "
+        "    border-radius: 9px; "
+        "}"
+        "QRadioButton::indicator:checked { "
+        "    border: 2px solid #00d4ff; "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 #00ffcc, stop: 0.5 #0096c8, stop: 1 #005a7a); "
+        "    border-radius: 9px; "
+        "}"
+        "QRadioButton::indicator:hover { "
+        "    border: 2px solid #00d4ff; "
+        "    background-color: rgba(0, 150, 200, 20); "
+        "}"
 
-        // Update the QSpinBox and QDoubleSpinBox styling in your stylesheet
-        "QSpinBox, QDoubleSpinBox { border: 1px solid #bc6d3d; border-radius: 4px; padding: 4px 25px 4px 4px; background-color: #12151a; color: #e6ebf0; }"
-        "QSpinBox::up-button, QDoubleSpinBox::up-button { subcontrol-origin: border; subcontrol-position: top right; width: 20px; height: 12px; border-left: 1px solid #bc6d3d; border-top-right-radius: 4px; }"
-        "QSpinBox::down-button, QDoubleSpinBox::down-button { subcontrol-origin: border; subcontrol-position: bottom right; width: 20px; height: 12px; border-left: 1px solid #bc6d3d; border-bottom-right-radius: 4px; }"
-        "QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { width: 6px; height: 6px; background: #e6ebf0; }"
-        "QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { width: 6px; height: 6px; background: #e6ebf0; }"
+        // Spin boxes with tech theme
+        "QSpinBox, QDoubleSpinBox { "
+        "    border: 1px solid #0078a0; "
+        "    border-radius: 4px; "
+        "    padding: 4px 25px 4px 4px; "
+        "    background-color: rgba(8, 10, 14, 200); "
+        "    color: #c8f0ff; "
+        "    selection-background-color: #0096c8; "
+        "}"
+        "QSpinBox::up-button, QDoubleSpinBox::up-button { "
+        "    subcontrol-origin: border; "
+        "    subcontrol-position: top right; "
+        "    width: 20px; "
+        "    height: 12px; "
+        "    border-left: 1px solid #0078a0; "
+        "    border-top-right-radius: 4px; "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #003d55, stop: 1 #002a3a); "
+        "}"
+        "QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover { background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #005a7a, stop: 1 #003d55); }"
+        "QSpinBox::down-button, QDoubleSpinBox::down-button { "
+        "    subcontrol-origin: border; "
+        "    subcontrol-position: bottom right; "
+        "    width: 20px; "
+        "    height: 12px; "
+        "    border-left: 1px solid #0078a0; "
+        "    border-bottom-right-radius: 4px; "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #003d55, stop: 1 #002a3a); "
+        "}"
+        "QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover { background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #005a7a, stop: 1 #003d55); }"
+        "QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { "
+        "    image: none; "
+        "    border-left: 4px solid transparent; "
+        "    border-right: 4px solid transparent; "
+        "    border-bottom: 5px solid #00d4ff; "
+        "    width: 0; "
+        "    height: 0; "
+        "}"
+        "QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { "
+        "    image: none; "
+        "    border-left: 4px solid transparent; "
+        "    border-right: 4px solid transparent; "
+        "    border-top: 5px solid #00d4ff; "
+        "    width: 0; "
+        "    height: 0; "
+        "}"
+
+        // Scrollbars with cyber theme
+        "QScrollBar:vertical { "
+        "    border: none; "
+        "    background: #0a0c12; "
+        "    width: 12px; "
+        "    border-radius: 6px; "
+        "}"
+        "QScrollBar::handle:vertical { "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 #003d55, stop: 0.5 #0078a0, stop: 1 #003d55); "
+        "    min-height: 20px; "
+        "    border-radius: 6px; "
+        "}"
+        "QScrollBar::handle:vertical:hover { "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 #005a7a, stop: 0.5 #0096c8, stop: 1 #005a7a); "
+        "}"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+        "QScrollBar:horizontal { "
+        "    border: none; "
+        "    background: #0a0c12; "
+        "    height: 12px; "
+        "    border-radius: 6px; "
+        "}"
+        "QScrollBar::handle:horizontal { "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #003d55, stop: 0.5 #0078a0, stop: 1 #003d55); "
+        "    min-width: 20px; "
+        "    border-radius: 6px; "
+        "}"
+        "QScrollBar::handle:horizontal:hover { "
+        "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #005a7a, stop: 0.5 #0096c8, stop: 1 #005a7a); "
+        "}"
+        "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }"
         );
 
     MainWindow w;

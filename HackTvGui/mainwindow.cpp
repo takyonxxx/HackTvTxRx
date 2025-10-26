@@ -58,7 +58,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     // UI SETUP FIRST - CRITICAL!
     setupUi();
-    this->showMaximized();
+    //this->showMaximized();
+    setMinimumSize(QSize(1024, 768));
 
     frequencyEdit->setText(QString::number(m_frequency));
 
@@ -66,8 +67,7 @@ MainWindow::MainWindow(QWidget *parent)
     try {
         m_threadPool = new QThreadPool(this);
         if (m_threadPool) {
-            //m_threadPool->setMaxThreadCount(QThread::idealThreadCount());
-             m_threadPool->setMaxThreadCount(4); // Video + Audio + spare
+            m_threadPool->setMaxThreadCount(QThread::idealThreadCount());
         }
 
         audioOutput = std::make_unique<AudioOutput>();
@@ -106,10 +106,10 @@ MainWindow::MainWindow(QWidget *parent)
 
     logTimer = new QTimer(this);
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
-    logTimer->start(100);
+    logTimer->start(500);
 
     // CRITICAL: Initialize HackTvLib much later, after everything else is stable
-    QTimer::singleShot(50, this, [this]() {
+    QTimer::singleShot(1000, this, [this]() {
         initializeHackTvLibWithRetry();
     });
 }
@@ -174,13 +174,13 @@ void MainWindow::setupUi()
 {
 
     QWidget *centralWidget = new QWidget(this);
-    mainLayout = new QVBoxLayout(centralWidget);
+    mainLayout = new QVBoxLayout(centralWidget);    
 
     addOutputGroup();
     addRxGroup();
     addModeGroup();
-    addinputTypeGroup();
     addVideoControls();
+    addinputTypeGroup();   
     setCentralWidget(centralWidget);
 
     // Connect signals and slots
@@ -219,13 +219,9 @@ void MainWindow::setCurrentSampleRate(int sampleRate)
     }
 }
 
-void MainWindow::initializeHackTvLibWithRetry() {
-    const int MAX_RETRIES = 3;
-    const int RETRY_DELAY = 1000; // 1 second
-    static int retryCount = 0;
+void MainWindow::initializeHackTvLibWithRetry() {   
 
     try {
-        qDebug() << QString("Attempting to initialize HackTvLib (attempt %1/%2)").arg(retryCount + 1).arg(MAX_RETRIES);
 
         // Create with timeout wrapper
         std::unique_ptr<HackTvLib> tempLib;
@@ -261,38 +257,13 @@ void MainWindow::initializeHackTvLibWithRetry() {
             m_hackTvLib->setMicEnabled(false);
 
             qDebug() << "HackTvLib initialized successfully";
-            retryCount = 0; // Reset retry count on success
 
         } else {
             throw std::runtime_error("Failed to create HackTvLib instance");
         }
 
     } catch (const std::exception& e) {
-        qDebug() << QString("HackTvLib initialization failed (attempt %1): %2").arg(retryCount + 1).arg(e.what());
-
-        retryCount++;
-        if (retryCount < MAX_RETRIES) {
-            qDebug() << QString("Retrying HackTvLib initialization in %1ms...").arg(RETRY_DELAY * retryCount);
-            QTimer::singleShot(RETRY_DELAY * retryCount, this, [this]() {
-                initializeHackTvLibWithRetry();
-            });
-        } else {
-            qDebug() << "Maximum retry attempts reached. HackTvLib will not be available.";
-
-            // Show warning but don't crash
-            QTimer::singleShot(0, [this, e]() {
-                QMessageBox::warning(this, "HackRF Initialization Failed",
-                                     QString("Failed to initialize HackRF library after %1 attempts: %2\n\n"
-                                             "The application will continue without HackRF functionality.\n\n"
-                                             "Please check that:\n"
-                                             "• HackRF device is connected\n"
-                                             "• Required DLL files are present\n"
-                                             "• No other software is using HackRF")
-                                         .arg(MAX_RETRIES).arg(e.what()));
-            });
-
-            retryCount = 0; // Reset for next time
-        }
+        qDebug() << QString("HackTvLib initialization failed: %2").arg(e.what());
     }
 }
 
