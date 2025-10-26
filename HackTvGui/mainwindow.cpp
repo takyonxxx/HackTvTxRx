@@ -50,11 +50,11 @@ MainWindow::MainWindow(QWidget *parent)
     audioOutput = std::make_unique<AudioOutput>();
 
     palbDemodulator = new PALBDemodulator(m_sampleRate);
-    palFrameBuffer = new FrameBuffer(m_sampleRate, 0.04); // 0.02s = 1 field
+    palFrameBuffer = new FrameBuffer(m_sampleRate, 0.05); // 0.02s = 1 field
     palbDemodulator->setSampleRate(m_sampleRate);
-    palbDemodulator->setVideoBrightness(0.2f);   // Daha parlak
-    palbDemodulator->setVideoContrast(1.3f);      // Daha kontrastlı
-    palbDemodulator->setVideoGamma(0.8f);         // Gamma düzelt
+    palbDemodulator->setVideoBrightness(0.2f);    // parlaklık
+    palbDemodulator->setVideoContrast(1.3f);      // kontrast
+    palbDemodulator->setVideoGamma(0.8f);         // gamma
 
     palbDemodulator->setVideoCarrier(0.0);
     palbDemodulator->setPixelsPerLine(720);
@@ -62,8 +62,8 @@ MainWindow::MainWindow(QWidget *parent)
     palbDemodulator->setVBILines(49);
     palbDemodulator->setLineDuration(64e-6);
     palbDemodulator->setHorizontalOffset(0.148);
-    palbDemodulator->setDecimationFactor(2);
-    palbDemodulator->setDeinterlace(false); // for 288 lines
+    palbDemodulator->setDecimationFactor(3);
+    palbDemodulator->setDeinterlace(false);
     palbDemodulator->setAGCAttack(0.001f);
     palbDemodulator->setAGCDecay(0.0001f);
     palbDemodulator->setVSyncThreshold(0.25f);
