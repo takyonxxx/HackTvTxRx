@@ -1,5 +1,6 @@
 #ifndef HACKTVLIB_H
 #define HACKTVLIB_H
+
 #include <QStringList>
 #include <functional>
 #include <string>
@@ -24,7 +25,6 @@
 
 /* Program state */
 typedef struct {
-
     /* Configuration */
     char *output_type;
     char *output;
@@ -89,19 +89,17 @@ typedef struct {
 
     /* RF sink interface */
     rf_t rf;
-
 } hacktv_t;
-
 
 class HackTvLib
 {
-
 public:
     using LogCallback = std::function<void(const std::string&)>;
     using DataCallback = std::function<void(const int8_t*, size_t)>;
 
     HackTvLib();
     ~HackTvLib();
+
     bool start();
     bool stop();
     void setLogCallback(LogCallback callback);
@@ -123,6 +121,7 @@ public:
 private slots:
     void emitReceivedData(const int8_t *data, size_t data_len);
     void dataReceived(const int8_t* data, size_t data_len);
+
 private:
     LogCallback m_logCallback;
     DataCallback m_dataCallback;
@@ -131,6 +130,11 @@ private:
     std::atomic<bool> m_abort;
     std::atomic<int> m_signal;
     std::vector<char*> m_argv;
+
+    // SADECE BU İKİ SATIR EKLENDİ (Global değişkenler sınıfa taşındı - DLL entry point sorunu için)
+    hacktv_t s;
+    rxtx_mode m_rxTxMode;
+
     bool openDevice();
     bool setVideo();
     bool initAv();
@@ -140,6 +144,7 @@ private:
     void cleanupArgv();
     void rfTxLoop();
     void rfRxLoop();
+
     HackRfDevice *hackRfDevice{};
     RTLSDRDevice *rtlSdrDevice{};
 };

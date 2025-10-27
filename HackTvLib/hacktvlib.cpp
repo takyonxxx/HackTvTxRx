@@ -1,3 +1,22 @@
+#ifdef _WIN32
+#include <windows.h>
+
+// CRITICAL FIX: MinGW with -mthreads expects DllEntryPoint
+extern "C" BOOL WINAPI DllEntryPoint(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
+{
+    (void)hinstDLL;
+    (void)fdwReason;
+    (void)lpvReserved;
+    return TRUE;
+}
+
+// Also provide standard DllMain for compatibility
+extern "C" BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
+{
+    return DllEntryPoint(hinstDLL, fdwReason, lpvReserved);
+}
+#endif
+
 #include "hacktvlib.h"
 #include <QThread>
 #include <getopt.h>
@@ -15,14 +34,6 @@
 #include "hacktv/rf.h"
 
 #define VERSION "1.0"
-
-static hacktv_t s;
-const vid_configs_t *vid_confs;
-vid_config_t vid_conf;
-char *pre, *sub;
-int l;
-int r;
-rxtx_mode m_rxTxMode;
 
 enum {
     _OPT_TELETEXT = 1000,
@@ -77,74 +88,6 @@ enum {
     _OPT_MODE,
 };
 
-static struct option long_options[] = {
-    { "output",         required_argument, 0, 'o' },
-    { "mode",           required_argument, 0, 'm' },
-    { "list-modes",     no_argument,       0, _OPT_LIST_MODES },
-    { "samplerate",     required_argument, 0, 's' },
-    { "pixelrate",      required_argument, 0, _OPT_PIXELRATE },
-    { "level",          required_argument, 0, 'l' },
-    { "deviation",      required_argument, 0, 'D' },
-    { "gamma",          required_argument, 0, 'G' },
-    { "interlace",      no_argument,       0, 'i' },
-    { "fit",            required_argument, 0, _OPT_FIT },
-    { "min-aspect",     required_argument, 0, _OPT_MIN_ASPECT },
-    { "max-aspect",     required_argument, 0, _OPT_MAX_ASPECT },
-    { "letterbox",      no_argument,       0, _OPT_LETTERBOX },
-    { "pillarbox",      no_argument,       0, _OPT_PILLARBOX },
-    { "repeat",         no_argument,       0, 'r' },
-    { "shuffle",        no_argument,       0, _OPT_SHUFFLE },
-    { "verbose",        no_argument,       0, 'v' },
-    { "teletext",       required_argument, 0, _OPT_TELETEXT },
-    { "wss",            required_argument, 0, _OPT_WSS },
-    { "videocrypt",     required_argument, 0, _OPT_VIDEOCRYPT },
-    { "videocrypt2",    required_argument, 0, _OPT_VIDEOCRYPT2 },
-    { "videocrypts",    required_argument, 0, _OPT_VIDEOCRYPTS },
-    { "syster",         no_argument,       0, _OPT_SYSTER },
-    { "systeraudio",    no_argument,       0, _OPT_SYSTERAUDIO },
-    { "acp",            no_argument,       0, _OPT_ACP },
-    { "vits",           no_argument,       0, _OPT_VITS },
-    { "vitc",           no_argument,       0, _OPT_VITC },
-    { "filter",         no_argument,       0, _OPT_FILTER },
-    { "nocolour",       no_argument,       0, _OPT_NOCOLOUR },
-    { "nocolor",        no_argument,       0, _OPT_NOCOLOUR },
-    { "noaudio",        no_argument,       0, _OPT_NOAUDIO },
-    { "nonicam",        no_argument,       0, _OPT_NONICAM },
-    { "a2stereo",       no_argument,       0, _OPT_A2STEREO },
-    { "single-cut",     no_argument,       0, _OPT_SINGLE_CUT },
-    { "double-cut",     no_argument,       0, _OPT_DOUBLE_CUT },
-    { "eurocrypt",      required_argument, 0, _OPT_EUROCRYPT },
-    { "scramble-audio", no_argument,       0, _OPT_SCRAMBLE_AUDIO },
-    { "chid",           required_argument, 0, _OPT_CHID },
-    { "mac-audio-stereo", no_argument,     0, _OPT_MAC_AUDIO_STEREO },
-    { "mac-audio-mono", no_argument,       0, _OPT_MAC_AUDIO_MONO },
-    { "mac-audio-high-quality", no_argument, 0, _OPT_MAC_AUDIO_HIGH_QUALITY },
-    { "mac-audio-medium-quality", no_argument, 0, _OPT_MAC_AUDIO_MEDIUM_QUALITY },
-    { "mac-audio-companded", no_argument,  0, _OPT_MAC_AUDIO_COMPANDED },
-    { "mac-audio-linear", no_argument,     0, _OPT_MAC_AUDIO_LINEAR },
-    { "mac-audio-l1-protection", no_argument, 0, _OPT_MAC_AUDIO_L1_PROTECTION },
-    { "mac-audio-l2-protection", no_argument, 0, _OPT_MAC_AUDIO_L2_PROTECTION },
-    { "sis",            required_argument, 0, _OPT_SIS },
-    { "swap-iq",        no_argument,       0, _OPT_SWAP_IQ },
-    { "offset",         required_argument, 0, _OPT_OFFSET },
-    { "passthru",       required_argument, 0, _OPT_PASSTHRU },
-    { "invert-video",   no_argument,       0, _OPT_INVERT_VIDEO },
-    { "raw-bb-file",    required_argument, 0, _OPT_RAW_BB_FILE },
-    { "raw-bb-blanking", required_argument, 0, _OPT_RAW_BB_BLANKING },
-    { "raw-bb-white",   required_argument, 0, _OPT_RAW_BB_WHITE },
-    { "secam-field-id", no_argument,       0, _OPT_SECAM_FIELD_ID },
-    { "json",           no_argument,       0, _OPT_JSON },
-    { "ffmt",           required_argument, 0, _OPT_FFMT },
-    { "fopts",          required_argument, 0, _OPT_FOPTS },
-    { "frequency",      required_argument, 0, 'f' },
-    { "amp",            no_argument,       0, 'a' },
-    { "gain",           required_argument, 0, 'g' },
-    { "antenna",        required_argument, 0, 'A' },
-    { "type",           required_argument, 0, 't' },
-    { "version",        no_argument,       0, _OPT_VERSION },
-    { "rx-tx-mode",     required_argument, 0, _OPT_MODE },
-    { 0,                0,                 0,  0  }
-};
 
 static int _parse_ratio(rational_t *r, const char *s)
 {
@@ -183,6 +126,7 @@ HackTvLib::HackTvLib()
 {
     log("HackTvLib initialized.");
     memset(&s, 0, sizeof(hacktv_t));
+    m_rxTxMode = RX_MODE;
 }
 
 HackTvLib::~HackTvLib()
@@ -526,6 +470,10 @@ bool HackTvLib::openDevice()
 
 bool HackTvLib::setVideo()
 {
+    const vid_configs_t *vid_confs;  // Global'den local'e taşındı
+    vid_config_t vid_conf;  // Global'den local'e taşındı
+    int r;  // Global'den local'e taşındı
+
     /* Load the mode configuration */
     for(vid_confs = vid_configs; vid_confs->id != NULL; vid_confs++)
     {
@@ -853,6 +801,79 @@ bool HackTvLib::initAv()
 
 bool HackTvLib::parseArguments()
 {
+    // long_options global scope'tan buraya taşındı (DLL entry point sorunu için)
+    static struct option long_options[] = {
+        { "output",         required_argument, 0, 'o' },
+        { "mode",           required_argument, 0, 'm' },
+        { "list-modes",     no_argument,       0, _OPT_LIST_MODES },
+        { "samplerate",     required_argument, 0, 's' },
+        { "pixelrate",      required_argument, 0, _OPT_PIXELRATE },
+        { "level",          required_argument, 0, 'l' },
+        { "deviation",      required_argument, 0, 'D' },
+        { "gamma",          required_argument, 0, 'G' },
+        { "interlace",      no_argument,       0, 'i' },
+        { "fit",            required_argument, 0, _OPT_FIT },
+        { "min-aspect",     required_argument, 0, _OPT_MIN_ASPECT },
+        { "max-aspect",     required_argument, 0, _OPT_MAX_ASPECT },
+        { "letterbox",      no_argument,       0, _OPT_LETTERBOX },
+        { "pillarbox",      no_argument,       0, _OPT_PILLARBOX },
+        { "repeat",         no_argument,       0, 'r' },
+        { "shuffle",        no_argument,       0, _OPT_SHUFFLE },
+        { "verbose",        no_argument,       0, 'v' },
+        { "teletext",       required_argument, 0, _OPT_TELETEXT },
+        { "wss",            required_argument, 0, _OPT_WSS },
+        { "videocrypt",     required_argument, 0, _OPT_VIDEOCRYPT },
+        { "videocrypt2",    required_argument, 0, _OPT_VIDEOCRYPT2 },
+        { "videocrypts",    required_argument, 0, _OPT_VIDEOCRYPTS },
+        { "syster",         no_argument,       0, _OPT_SYSTER },
+        { "systeraudio",    no_argument,       0, _OPT_SYSTERAUDIO },
+        { "acp",            no_argument,       0, _OPT_ACP },
+        { "vits",           no_argument,       0, _OPT_VITS },
+        { "vitc",           no_argument,       0, _OPT_VITC },
+        { "filter",         no_argument,       0, _OPT_FILTER },
+        { "nocolour",       no_argument,       0, _OPT_NOCOLOUR },
+        { "nocolor",        no_argument,       0, _OPT_NOCOLOUR },
+        { "noaudio",        no_argument,       0, _OPT_NOAUDIO },
+        { "nonicam",        no_argument,       0, _OPT_NONICAM },
+        { "a2stereo",       no_argument,       0, _OPT_A2STEREO },
+        { "single-cut",     no_argument,       0, _OPT_SINGLE_CUT },
+        { "double-cut",     no_argument,       0, _OPT_DOUBLE_CUT },
+        { "eurocrypt",      required_argument, 0, _OPT_EUROCRYPT },
+        { "scramble-audio", no_argument,       0, _OPT_SCRAMBLE_AUDIO },
+        { "chid",           required_argument, 0, _OPT_CHID },
+        { "mac-audio-stereo", no_argument,     0, _OPT_MAC_AUDIO_STEREO },
+        { "mac-audio-mono", no_argument,       0, _OPT_MAC_AUDIO_MONO },
+        { "mac-audio-high-quality", no_argument, 0, _OPT_MAC_AUDIO_HIGH_QUALITY },
+        { "mac-audio-medium-quality", no_argument, 0, _OPT_MAC_AUDIO_MEDIUM_QUALITY },
+        { "mac-audio-companded", no_argument,  0, _OPT_MAC_AUDIO_COMPANDED },
+        { "mac-audio-linear", no_argument,     0, _OPT_MAC_AUDIO_LINEAR },
+        { "mac-audio-l1-protection", no_argument, 0, _OPT_MAC_AUDIO_L1_PROTECTION },
+        { "mac-audio-l2-protection", no_argument, 0, _OPT_MAC_AUDIO_L2_PROTECTION },
+        { "sis",            required_argument, 0, _OPT_SIS },
+        { "swap-iq",        no_argument,       0, _OPT_SWAP_IQ },
+        { "offset",         required_argument, 0, _OPT_OFFSET },
+        { "passthru",       required_argument, 0, _OPT_PASSTHRU },
+        { "invert-video",   no_argument,       0, _OPT_INVERT_VIDEO },
+        { "raw-bb-file",    required_argument, 0, _OPT_RAW_BB_FILE },
+        { "raw-bb-blanking", required_argument, 0, _OPT_RAW_BB_BLANKING },
+        { "raw-bb-white",   required_argument, 0, _OPT_RAW_BB_WHITE },
+        { "secam-field-id", no_argument,       0, _OPT_SECAM_FIELD_ID },
+        { "json",           no_argument,       0, _OPT_JSON },
+        { "ffmt",           required_argument, 0, _OPT_FFMT },
+        { "fopts",          required_argument, 0, _OPT_FOPTS },
+        { "frequency",      required_argument, 0, 'f' },
+        { "amp",            no_argument,       0, 'a' },
+        { "gain",           required_argument, 0, 'g' },
+        { "antenna",        required_argument, 0, 'A' },
+        { "type",           required_argument, 0, 't' },
+        { "version",        no_argument,       0, _OPT_VERSION },
+        { "rx-tx-mode",     required_argument, 0, _OPT_MODE },
+        { 0,                0,                 0,  0  }
+    };  // long_options dizisi sonu
+
+    char *pre, *sub;  // Global'den local'e taşındı
+    int l;  // Global'den local'e taşındı
+
     int c;
     int option_index;
     opterr = 0;
@@ -1260,6 +1281,10 @@ void HackTvLib::emitReceivedData(const int8_t *data, size_t len)
 
 void HackTvLib::rfTxLoop()
 {
+    char *pre, *sub;  // Global'den local'e taşındı
+    size_t l;  // Global'den local'e taşındı
+    int r;  // Global'den local'e taşındı
+
     do
     {
         if (s.shuffle)

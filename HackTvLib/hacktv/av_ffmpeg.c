@@ -730,9 +730,15 @@ static void *_video_scaler_thread(void *arg)
 
         /* Copy some data to the scaled image */
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(58, 29, 100)
-        oframe->interlaced_frame = frame->flags & AV_FRAME_FLAG_INTERLACED ? 1 : 0;
-        oframe->top_field_first = frame->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST ? 1 : 0;
+        // FFmpeg 8.0+: Use flags for both reading and writing
+        if (frame->flags & AV_FRAME_FLAG_INTERLACED) {
+            oframe->flags |= AV_FRAME_FLAG_INTERLACED;
+        }
+        if (frame->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST) {
+            oframe->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
+        }
 #else
+        // Older FFmpeg: Use deprecated fields
         oframe->interlaced_frame = frame->interlaced_frame;
         oframe->top_field_first = frame->top_field_first;
 #endif
@@ -779,11 +785,19 @@ static int _ffmpeg_read_video(void *ctx, av_frame_t *frame)
         };
     }
 
-    /* Return interlace status */
+#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(58, 29, 100)
+    // FFmpeg 8.0+: Use flags
+    if(avframe->flags & AV_FRAME_FLAG_INTERLACED)
+    {
+        frame->interlaced = (avframe->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST) ? 1 : 2;
+    }
+#else
+    // Older FFmpeg: Use deprecated fields
     if(avframe->interlaced_frame)
     {
         frame->interlaced = avframe->top_field_first ? 1 : 2;
     }
+#endif
 
     /* Set the pointer to the framebuffer */
     frame->width = avframe->width;

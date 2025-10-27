@@ -1,7 +1,7 @@
 QT += core multimedia
 
 TEMPLATE = lib
-CONFIG += c++17
+CONFIG += c++17 shared
 
 DEFINES += HACKTVLIB_LIBRARY
 DEFINES += _USE_MATH_DEFINES
