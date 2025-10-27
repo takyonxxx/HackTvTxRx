@@ -32,13 +32,13 @@ Open MSYS2 MINGW64 and run the following commands:
 ```bash
 pacman -Syu
 pacman -S mingw-w64-x86_64-ffmpeg \
-             mingw-w64-x86_64-libusb \
-             mingw-w64-x86_64-hackrf \
-             mingw-w64-x86_64-rtl-sdr \
-             mingw-w64-x86_64-fdk-aac \
-             mingw-w64-x86_64-fftw \
-             mingw-w64-x86_64-portaudio \
-             mingw-w64-x86_64-opus
+          mingw-w64-x86_64-libusb \
+          mingw-w64-x86_64-hackrf \
+          mingw-w64-x86_64-rtl-sdr \
+          mingw-w64-x86_64-fdk-aac \
+          mingw-w64-x86_64-fftw \
+          mingw-w64-x86_64-portaudio \
+          mingw-w64-x86_64-opus
 ```
 
 ### 3. Set up PKG_CONFIG_PATH
