@@ -52,5 +52,6 @@ pacman -S --needed \
 ### 3. Set up PKG_CONFIG_PATH
 
 ```bash
+ADD PATH : C:\msys64\mingw64\bin
 export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:$PKG_CONFIG_PATH
 ```
