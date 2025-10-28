@@ -31,7 +31,7 @@ MainWindow::MainWindow(QWidget *parent)
     audioDemodulationInProgress(0)
 {
     QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
-    m_sSettingsFile = homePath + "/hacktv_settings.ini";   
+    m_sSettingsFile = homePath + "/hacktv_settings.ini";
 
     // Settings handling
     try {
@@ -479,7 +479,7 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 
                 auto fullFrame = palFrameBuffer->getFrame();
 
-                if (!fullFrame.empty() && fullFrame.size() < 10000000) { // Size check                    
+                if (!fullFrame.empty() && fullFrame.size() < 10000000) { // Size check
 
                     auto framePtr = std::make_shared<std::vector<std::complex<float>>>(
                         std::move(fullFrame)

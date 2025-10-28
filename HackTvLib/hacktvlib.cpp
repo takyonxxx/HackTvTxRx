@@ -125,6 +125,7 @@ static void print_usage(void)
 HackTvLib::HackTvLib()
     : m_abort(false), m_signal(0), m_rxTxMode(RX_MODE)
 {
+
 }
 
 HackTvLib::~HackTvLib()
@@ -172,9 +173,9 @@ bool HackTvLib::start()
 #endif
 
     /* Default configuration */
-    s.output_type = "hackrf";
+    s.output_type = strdup("hackrf");
     s.output = NULL;
-    s.mode = "b";
+    s.mode = strdup("b");
     s.samplerate = 16000000;
     s.pixelrate = 0;
     s.level = 1.0;
