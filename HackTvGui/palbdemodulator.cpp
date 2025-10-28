@@ -1,395 +1,464 @@
-#include "palbdemodulator.h"
-#include <cmath>
+#include "PALBDemodulator.h"
 #include <algorithm>
 #include <numeric>
+#include <QPainter>
+#include <QtMath>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+// ============================================================================
+// CONSTRUCTOR / DESTRUCTOR
+// ============================================================================
 PALBDemodulator::PALBDemodulator(double _sampleRate, QObject *parent)
     : QObject(parent)
     , sampleRate(_sampleRate)
-    , m_brightness(0.0f)    // Add this
-    , m_contrast(1.0f)      // Add this
-    , m_gamma(1.0f)         // Add this
+    , effectiveSampleRate(_sampleRate)
 {
-    m_fltBufferI.fill(0.0f);
-    m_fltBufferQ.fill(0.0f);
+    calculateLineParameters();
+    initializeFilters();
+    resetToDefaults();
 
-    qDebug() << "PAL-B Demodulator initialized:";
-    qDebug() << "  Sample Rate:" << sampleRate / 1e6 << "MHz";
-    qDebug() << "  Video Carrier:" << videoCarrier / 1e6 << "MHz";
-    qDebug() << "  Audio Carrier:" << AUDIO_CARRIER / 1e6 << "MHz";
-    qDebug() << "  Color Subcarrier:" << COLOR_SUBCARRIER / 1e6 << "MHz";
+    qDebug() << "PALBDemodulator initialized:"
+             << "SampleRate:" << sampleRate
+             << "PointsPerLine:" << pointsPerLine
+             << "SamplesPerLine:" << samplesPerLine;
+}
+
+PALBDemodulator::~PALBDemodulator()
+{
 }
 
 // ============================================================================
-// MAIN DEMODULATION FUNCTION
+// INITIALIZATION
+// ============================================================================
+void PALBDemodulator::resetToDefaults()
+{
+    videoCarrier = 0.0;  // Baseband
+    fmDeviation = 6.0e6;
+
+    lineDuration = PAL_LINE_DURATION;
+    horizontalOffset = (PAL_H_SYNC_DURATION + PAL_BACK_PORCH) / PAL_LINE_DURATION;
+
+    pixelsPerLine = 720;
+    visibleLines = 576;
+    vbiLines = PAL_VBI_LINES_PER_FIELD;
+
+    decimationFactor = 1;
+    agcAttackRate = 0.001f;
+    agcDecayRate = 0.0001f;
+    vSyncThreshold = 0.15f;
+
+    m_brightness = 0.0f;
+    m_contrast = 1.0f;
+    m_gamma = 1.0f;
+
+    enableDeinterlace = false;
+
+    agcLevel = 1.0f;
+    peakLevel = 0.0f;
+    vSyncLocked = false;
+    lastPhase = 0.0f;
+}
+
+void PALBDemodulator::setSampleRate(double rate)
+{
+    sampleRate = rate;
+    effectiveSampleRate = rate / decimationFactor;
+    calculateLineParameters();
+    initializeFilters();
+}
+
+void PALBDemodulator::setPixelsPerLine(int pixels)
+{
+    pixelsPerLine = pixels;
+    calculateLineParameters();
+}
+
+void PALBDemodulator::setDecimationFactor(int factor)
+{
+    decimationFactor = std::max(1, factor);
+    effectiveSampleRate = sampleRate / decimationFactor;
+    calculateLineParameters();
+    initializeFilters();
+}
+
+void PALBDemodulator::calculateLineParameters()
+{
+    effectiveSampleRate = sampleRate / decimationFactor;
+    pointsPerLine = effectiveSampleRate / lineFrequency;
+    samplesPerLine = static_cast<int>(pointsPerLine);
+    fractionalOffset = pointsPerLine - samplesPerLine;
+
+    // Reserve line buffer
+    lineBuffer.resize(samplesPerLine * 2);
+
+    qDebug() << "Line parameters updated:"
+             << "Effective SR:" << effectiveSampleRate
+             << "Points/Line:" << pointsPerLine
+             << "Samples/Line:" << samplesPerLine
+             << "Fractional:" << fractionalOffset;
+}
+
+void PALBDemodulator::initializeFilters()
+{
+    try {
+        effectiveSampleRate = sampleRate / decimationFactor;
+
+        // Limit filter size based on sample rate
+        int numTaps = 65;
+        if (effectiveSampleRate > 10e6) {
+            numTaps = 33;  // Reduce for high sample rates
+        }
+
+        qDebug() << "Designing filters with" << numTaps << "taps for SR:" << effectiveSampleRate;
+
+        // Design lowpass filter for video (5.5 MHz cutoff)
+        float videoCutoff = std::min(5.5e6, effectiveSampleRate * 0.4);
+        lowpassCoeffs = designLowPassFIR(numTaps, videoCutoff, effectiveSampleRate);
+
+        if (lowpassCoeffs.empty()) {
+            qWarning() << "Failed to design lowpass filter, using simple averaging";
+            lowpassCoeffs = std::vector<float>(5, 0.2f);  // Simple 5-tap averaging filter
+        }
+
+        // Design filter for decimation anti-aliasing
+        float decimCutoff = effectiveSampleRate * 0.4f;
+        videoFilterCoeffs = designLowPassFIR(numTaps, decimCutoff, sampleRate);
+
+        if (videoFilterCoeffs.empty()) {
+            videoFilterCoeffs = std::vector<float>(5, 0.2f);  // Fallback
+        }
+
+        // Pre-allocate filter states with reasonable sizes
+        complexFilterState.clear();
+        complexFilterState.resize(numTaps, std::complex<float>(0, 0));
+
+        realFilterState.clear();
+        realFilterState.resize(numTaps, 0.0f);
+
+        qDebug() << "Filters initialized successfully";
+    }
+    catch (const std::exception& e) {
+        qCritical() << "Failed to initialize filters:" << e.what();
+        // Use minimal filters as fallback
+        lowpassCoeffs = {0.25f, 0.5f, 0.25f};
+        videoFilterCoeffs = {0.25f, 0.5f, 0.25f};
+    }
+}
+
+// ============================================================================
+// MAIN DEMODULATION FUNCTIONS
 // ============================================================================
 PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
     const std::vector<std::complex<float>>& samples)
 {
     DemodulatedFrame frame;
 
-    try {
-        if (samples.empty()) {
-            qWarning() << "Empty samples received";
-            return frame;
-        }
-
-        // ====================================================================
-        // VIDEO PROCESSING CHAIN
-        // ====================================================================
-
-        // Frequency shift to baseband
-        auto shiftedVideo = frequencyShift(
-            std::vector<std::complex<float>>(samples),
-            videoCarrier
-            );
-
-        // Low-pass filter (video bandwidth)
-        float videoBandwidth = 5.5e6f;
-        shiftedVideo = complexLowPassFilter(std::move(shiftedVideo), videoBandwidth);
-
-        // AM demodulation (artık shiftedVideo'yu move edebiliriz)
-        auto videoSignal = amDemodulate(std::move(shiftedVideo));
-
-        // Decimate
-        videoSignal = decimate(std::move(videoSignal), decimationFactor);
-
-        double workingSampleRate = sampleRate / decimationFactor;
-        double savedRate = sampleRate;
-        sampleRate = workingSampleRate;
-
-        // Remove DC offset
-        videoSignal = removeDCOffset(std::move(videoSignal));
-
-        // Apply AGC
-        videoSignal = applyAGC(std::move(videoSignal));
-
-        // ====================================================================
-        // AUDIO PROCESSING CHAIN
-        // ====================================================================
-
-        // Shift audio carrier to baseband
-        auto shiftedAudio = frequencyShift(
-            std::vector<std::complex<float>>(samples),
-            AUDIO_CARRIER  // 5.5 MHz
-            );
-
-        // Low-pass filter for audio bandwidth (±200 kHz)
-        shiftedAudio = complexLowPassFilter(std::move(shiftedAudio), 200e3f);
-
-        // ÖNCE quadrature rate'e decimate (240 kHz - 48'in katı)
-        int audioDecimation1 = static_cast<int>(savedRate / 240e3);  // 20MHz / 240kHz ≈ 83
-        auto decimatedAudio = decimateComplex(std::move(shiftedAudio), audioDecimation1);
-        double audioQuadratureRate = savedRate / audioDecimation1;
-
-        // FM Demodulation
-        frame.audio = fmDemodulateAudio(decimatedAudio, audioQuadratureRate);
-
-        // Remove DC offset
-        if (!frame.audio.empty()) {
-            float sum = std::accumulate(frame.audio.begin(), frame.audio.end(), 0.0f);
-            float dcOffset = sum / frame.audio.size();
-            for (auto& s : frame.audio) {
-                s -= dcOffset;
-            }
-        }
-
-        // Apply low-pass filter
-        frame.audio = applyAudioLowPassFilter(std::move(frame.audio));
-
-        // RESAMPLE 240 kHz → 48 kHz (decimation: 5)
-        int audioDecimation2 = 5;  // 240 kHz / 5 = 48 kHz
-        std::vector<float> resampledAudio;
-        resampledAudio.reserve(frame.audio.size() / audioDecimation2);
-
-        for (size_t i = 0; i < frame.audio.size(); i += audioDecimation2) {
-            resampledAudio.push_back(frame.audio[i]);
-        }
-
-        frame.audio = std::move(resampledAudio);
-
-        // Normalize
-        if (!frame.audio.empty()) {
-            float maxAudio = 0.0f;
-            for (const auto& s : frame.audio) {
-                maxAudio = std::max(maxAudio, std::abs(s));
-            }
-            if (maxAudio > 1e-6f) {
-                float gain = 0.8f / maxAudio;
-                for (auto& s : frame.audio) {
-                    s = std::clamp(s * gain, -1.0f, 1.0f);
-                }
-            }
-        }
+    if (samples.empty()) {
+        frame.valid = false;
+        return frame;
     }
-    catch (const std::bad_alloc& e) {
-        qCritical() << "OUT OF MEMORY in PAL demodulation:" << e.what();
-        frame.image = QImage(pixelsPerLine, visibleLines, QImage::Format_RGB888);
-        frame.image.fill(Qt::black);
+
+    // Demodulate video
+    frame.image = demodulateVideoOnly(samples);
+
+    // Demodulate audio if needed
+    if (audioCarrier > 0) {
+        frame.audio = demodulateAudioFM(samples);
     }
-    catch (const std::exception& e) {
-        qCritical() << "EXCEPTION in PAL demodulation:" << e.what();
-        frame.image = QImage(pixelsPerLine, visibleLines, QImage::Format_RGB888);
-        frame.image.fill(Qt::black);
-    }
+
+    frame.valid = !frame.image.isNull();
+    frame.fieldNumber = currentField;
 
     return frame;
-}
-
-std::vector<float> PALBDemodulator::demodulateAudioOnly(
-    const std::vector<std::complex<float>>& samples)
-{
-    std::vector<float> audio;
-
-    try {
-        if (samples.empty()) return audio;
-
-        // Sadece audio processing - video atla
-        auto shiftedAudio = frequencyShift(
-            std::vector<std::complex<float>>(samples),
-            AUDIO_CARRIER
-            );
-
-        shiftedAudio = complexLowPassFilter(std::move(shiftedAudio), 200e3f);
-
-        int audioDecimation = static_cast<int>(sampleRate / 240e3);
-        auto decimatedAudio = decimateComplex(std::move(shiftedAudio), audioDecimation);
-        double audioQuadratureRate = sampleRate / audioDecimation;
-
-        audio = fmDemodulateAudio(decimatedAudio, audioQuadratureRate);
-
-        // DC offset removal
-        if (!audio.empty()) {
-            float sum = std::accumulate(audio.begin(), audio.end(), 0.0f);
-            float dcOffset = sum / audio.size();
-            for (auto& s : audio) s -= dcOffset;
-        }
-
-        // Low-pass filter
-        audio = applyAudioLowPassFilter(std::move(audio));
-
-        // Resample to 48 kHz
-        int resampleFactor = static_cast<int>(audioQuadratureRate / 48000.0);
-        std::vector<float> resampledAudio;
-        resampledAudio.reserve(audio.size() / resampleFactor);
-
-        for (size_t i = 0; i < audio.size(); i += resampleFactor) {
-            resampledAudio.push_back(audio[i]);
-        }
-
-        audio = std::move(resampledAudio);
-
-        // Normalize
-        if (!audio.empty()) {
-            float maxAudio = 0.0f;
-            for (const auto& s : audio) {
-                maxAudio = std::max(maxAudio, std::abs(s));
-            }
-            if (maxAudio > 1e-6f) {
-                float gain = 0.8f / maxAudio;
-                for (auto& s : audio) {
-                    s = std::clamp(s * gain, -1.0f, 1.0f);
-                }
-            }
-        }
-
-    } catch (const std::exception& e) {
-        qCritical() << "Audio-only demodulation error:" << e.what();
-    }
-
-    return audio;
 }
 
 QImage PALBDemodulator::demodulateVideoOnly(
     const std::vector<std::complex<float>>& samples)
 {
-    QImage image;
+    qDebug() << "=== demodulateVideoOnly START ===";
+    qDebug() << "Input samples size:" << samples.size();
 
-    try {
-        if (samples.empty()) return image;
-
-        // Sadece video processing - audio atla
-        auto shiftedVideo = frequencyShift(
-            std::vector<std::complex<float>>(samples),
-            videoCarrier
-            );
-
-        float videoBandwidth = 5.5e6f;
-        shiftedVideo = complexLowPassFilter(std::move(shiftedVideo), videoBandwidth);
-
-        auto decimatedComplex = decimateComplex(
-            std::vector<std::complex<float>>(shiftedVideo),
-            decimationFactor
-            );
-
-        auto videoSignal = amDemodulate(std::move(shiftedVideo));
-        videoSignal = decimate(std::move(videoSignal), decimationFactor);
-
-        double workingSampleRate = sampleRate / decimationFactor;
-        double savedRate = sampleRate;
-        sampleRate = workingSampleRate;
-
-        videoSignal = removeDCOffset(std::move(videoSignal));
-
-        if (!videoSignal.empty()) {
-            float sum = std::accumulate(videoSignal.begin(), videoSignal.end(), 0.0f);
-            float mean = sum / videoSignal.size();
-            if (mean < -0.1f) {
-                for (auto& sample : videoSignal) sample = -sample;
-            }
-        }
-
-        videoSignal = applyAGC(std::move(videoSignal));
-
-        // ====================================================================
-        // SYNCHRONIZATION DETECTION
-        // ====================================================================
-        size_t vSyncStart = 0;
-        bool vSyncFound = detectVerticalSync(videoSignal, vSyncStart);
-
-        if (!vSyncFound) {           
-        } else {
-            size_t skipLines = vbiLines;
-            size_t skipSamples = skipLines * pixelsPerLine;
-            if (vSyncStart + skipSamples < videoSignal.size()) {
-                videoSignal.erase(
-                    videoSignal.begin(),
-                    videoSignal.begin() + vSyncStart + skipSamples
-                    );
-            }
-        }
-
-        // ====================================================================
-        // TIMING RECOVERY
-        // ====================================================================
-        videoSignal = timingRecovery(std::move(videoSignal));
-
-        // ====================================================================
-        // CHROMA EXTRACTION
-        // ====================================================================
-        auto [chromaU, chromaV] = extractChroma(decimatedComplex, videoSignal.size());
-
-        // ====================================================================
-        // CONVERSION TO IMAGE
-        // ====================================================================
-        QImage colorImage = convertYUVtoRGB(videoSignal, chromaU, chromaV);
-
-        // ====================================================================
-        // APPLY GAMMA CORRECTION IF NEEDED
-        // ====================================================================
-        if (m_gamma != 1.0f && !colorImage.isNull()) {
-            colorImage = applyGammaCorrection(colorImage, m_gamma);
-        }
-
-        // ====================================================================
-        // DEINTERLACING
-        // ====================================================================
-        if (enableDeinterlace && !colorImage.isNull()) {
-            colorImage = colorImage.scaled(
-                colorImage.width(),
-                colorImage.height() / 2,
-                Qt::IgnoreAspectRatio,
-                Qt::SmoothTransformation
-                );
-        }
-
-        sampleRate = savedRate;
-        image = colorImage;
-
-    } catch (const std::bad_alloc& e) {
-        qCritical() << "OUT OF MEMORY in video-only demodulation:" << e.what();
-        image = QImage(pixelsPerLine, visibleLines, QImage::Format_RGB888);
-        image.fill(Qt::black);
-    } catch (const std::exception& e) {
-        qCritical() << "EXCEPTION in video-only demodulation:" << e.what();
-        image = QImage(pixelsPerLine, visibleLines, QImage::Format_RGB888);
-        image.fill(Qt::black);
+    if (samples.empty()) {
+        qDebug() << "ERROR: Empty samples";
+        return QImage();
     }
 
-    return image;
+    try {
+        // 1. Frequency shift to baseband
+        qDebug() << "Step 1: Frequency shift, video carrier:" << videoCarrier;
+        std::vector<std::complex<float>> shifted;
+        if (std::abs(videoCarrier) > 1.0) {
+            shifted = frequencyShift(samples, -videoCarrier);
+        } else {
+            shifted = samples;
+        }
+        qDebug() << "After shift, size:" << shifted.size();
+
+        // 2. Pre-filter and decimate if needed
+        qDebug() << "Step 2: Decimation factor:" << decimationFactor;
+        if (decimationFactor > 1) {
+            qDebug() << "Applying lowpass filter before decimation";
+            shifted = complexLowPassFilter(shifted, effectiveSampleRate * 0.45f);
+            qDebug() << "After filter, size:" << shifted.size();
+
+            shifted = decimateComplex(shifted, decimationFactor);
+            qDebug() << "After decimation, size:" << shifted.size();
+        }
+
+        // 3. FM demodulation
+        qDebug() << "Step 3: FM demodulation";
+        std::vector<float> demodulated;
+        if (demodMode == DEMOD_AM) {
+            qDebug() << "Using AM demodulation";
+            demodulated = amDemodulate(shifted);
+        } else {
+            qDebug() << "Using FM demodulation";
+            demodulated = fmDemodulateAtan2(shifted);
+        }
+        if (demodulated.empty()) {
+            qDebug() << "ERROR: FM demodulation returned empty";
+            return QImage();
+        }
+
+        // Check for NaN or Inf values
+        int nanCount = 0;
+        for (size_t i = 0; i < std::min<size_t>(100, demodulated.size()); i++) {
+            if (std::isnan(demodulated[i]) || std::isinf(demodulated[i])) {
+                nanCount++;
+            }
+        }
+        if (nanCount > 0) {
+            qDebug() << "WARNING: Found" << nanCount << "NaN/Inf values in first 100 samples";
+        }
+
+        // 4. Video lowpass filter
+        qDebug() << "Step 4: Video lowpass filter (5.5 MHz)";
+        demodulated = lowPassFilter(demodulated, 5.5e6);
+        qDebug() << "After video filter, size:" << demodulated.size();
+
+        if (demodulated.empty()) {
+            qDebug() << "ERROR: Lowpass filter returned empty";
+            return QImage();
+        }
+
+        // 5. Apply AGC
+        qDebug() << "Step 5: AGC";
+        demodulated = applyAGC(demodulated);
+        qDebug() << "After AGC, size:" << demodulated.size();
+
+        // 6. Remove DC offset and normalize
+        qDebug() << "Step 6: DC removal and normalization";
+        demodulated = removeDCOffset(demodulated);
+        demodulated = normalizeSignal(demodulated);
+        qDebug() << "After normalization, size:" << demodulated.size();
+
+        // Check signal range
+        if (!demodulated.empty()) {
+            auto minmax = std::minmax_element(demodulated.begin(), demodulated.end());
+            qDebug() << "Signal range: min=" << *minmax.first << "max=" << *minmax.second;
+        }
+
+        // 7. Detect vertical sync
+        qDebug() << "Step 7: Vertical sync detection";
+        size_t vsyncPos = 0;
+        int fieldType = 0;
+        bool syncFound = detectVerticalSync(demodulated, vsyncPos, fieldType);
+        qDebug() << "VSync found:" << syncFound << "at position:" << vsyncPos << "field:" << fieldType;
+
+        if (!syncFound) {
+            qDebug() << "WARNING: No vertical sync found, continuing anyway";
+        }
+
+        // 8. Skip VBI if sync found
+        if (syncFound && vsyncPos + vbiLines * samplesPerLine < demodulated.size()) {
+            qDebug() << "Step 8: Removing VBI lines:" << vbiLines;
+            std::vector<float> videoOnly(
+                demodulated.begin() + vsyncPos + vbiLines * samplesPerLine,
+                demodulated.end()
+                );
+            demodulated = videoOnly;
+            qDebug() << "After VBI removal, size:" << demodulated.size();
+        }
+
+        // 9. Timing recovery
+        qDebug() << "Step 9: Timing recovery";
+        demodulated = timingRecovery(demodulated);
+        qDebug() << "After timing recovery, size:" << demodulated.size();
+
+        if (demodulated.empty()) {
+            qDebug() << "ERROR: Timing recovery returned empty";
+            return QImage();
+        }
+
+        // 10. Deinterlace if enabled
+        if (enableDeinterlace && vSyncLocked) {
+            qDebug() << "Step 10: Deinterlacing";
+            demodulated = deinterlaceFields(demodulated);
+            qDebug() << "After deinterlace, size:" << demodulated.size();
+        }
+
+        // 11. Convert to image
+        qDebug() << "Step 11: Converting to image";
+        qDebug() << "Brightness:" << m_brightness << "Contrast:" << m_contrast;
+        qDebug() << "Expected pixels per line:" << pixelsPerLine;
+        qDebug() << "Expected visible lines:" << visibleLines;
+
+        QImage image = convertToImage(demodulated, m_brightness, m_contrast);
+
+        if (image.isNull()) {
+            qDebug() << "ERROR: convertToImage returned null";
+            return QImage();
+        }
+
+        qDebug() << "Image created:" << image.width() << "x" << image.height();
+
+        // 12. Apply gamma correction
+        if (std::abs(m_gamma - 1.0f) > 0.01f) {
+            qDebug() << "Step 12: Gamma correction:" << m_gamma;
+            image = applyGammaCorrection(image, m_gamma);
+        }
+
+        qDebug() << "=== demodulateVideoOnly SUCCESS ===";
+        return image;
+    }
+    catch (const std::exception& e) {
+        qCritical() << "EXCEPTION in demodulateVideoOnly:" << e.what();
+        return QImage();
+    }
+    catch (...) {
+        qCritical() << "UNKNOWN EXCEPTION in demodulateVideoOnly";
+        return QImage();
+    }
+}
+
+std::vector<float> PALBDemodulator::demodulateAudioOnly(
+    const std::vector<std::complex<float>>& samples)
+{
+    if (samples.empty() || audioCarrier <= 0) {
+        return std::vector<float>();
+    }
+
+    // Shift to audio carrier frequency
+    auto audioSignal = frequencyShift(samples, -audioCarrier);
+
+    // FM demodulate
+    auto audio = fmDemodulateAtan2(audioSignal);
+
+    // Audio lowpass filter (15 kHz)
+    audio = lowPassFilter(audio, 15000.0f);
+
+    // Decimate to audio rate if needed
+    if (effectiveSampleRate > 48000) {
+        int audioDecim = static_cast<int>(effectiveSampleRate / 48000);
+        audio = decimate(audio, audioDecim);
+    }
+
+    return audio;
+}
+
+// ============================================================================
+// FM DEMODULATION
+// ============================================================================
+std::vector<float> PALBDemodulator::fmDemodulateAtan2(
+    const std::vector<std::complex<float>>& signal)
+{
+    if (signal.empty()) return std::vector<float>();
+
+    std::vector<float> demod(signal.size());
+
+    // Debug: Check signal amplitude
+    float maxMag = 0;
+    for (size_t i = 0; i < std::min<size_t>(1000, signal.size()); i++) {
+        float mag = std::abs(signal[i]);
+        maxMag = std::max(maxMag, mag);
+    }
+    qDebug() << "FM input signal max magnitude:" << maxMag;
+
+    for (size_t i = 0; i < signal.size(); i++) {
+        float phase = std::atan2(signal[i].imag(), signal[i].real());
+        float delta = unwrapPhase(phase, lastPhase);
+
+        // Try different scaling for FM deviation
+        // Standard PAL uses different deviation on UHF
+        demod[i] = delta * effectiveSampleRate / (2.0f * M_PI * fmDeviation);
+
+        lastPhase = phase;
+    }
+
+    // Debug: Check output range
+    if (!demod.empty()) {
+        auto minmax = std::minmax_element(demod.begin(), demod.end());
+        qDebug() << "FM demod output range:" << *minmax.first << "to" << *minmax.second;
+    }
+
+    return demod;
+}
+
+std::vector<float> PALBDemodulator::fmDemodulateDifferential(
+    const std::vector<std::complex<float>>& signal)
+{
+    if (signal.size() < 2) return std::vector<float>();
+
+    std::vector<float> demod(signal.size());
+
+    for (size_t i = 1; i < signal.size(); i++) {
+        // Differential phase detection
+        std::complex<float> conj = std::conj(signal[i-1]);
+        std::complex<float> product = signal[i] * conj;
+
+        // Extract phase difference
+        float phase = std::atan2(product.imag(), product.real());
+
+        // Scale to frequency
+        demod[i] = phase * effectiveSampleRate / (2.0f * M_PI * fmDeviation);
+    }
+    demod[0] = demod[1];  // Fill first sample
+
+    return demod;
+}
+
+// ============================================================================
+// AM DEMODULATION
+// ============================================================================
+std::vector<float> PALBDemodulator::amDemodulate(
+    const std::vector<std::complex<float>>& signal)
+{
+    std::vector<float> demod(signal.size());
+
+    for (size_t i = 0; i < signal.size(); i++) {
+        demod[i] = std::abs(signal[i]);
+    }
+
+    return demod;
 }
 
 // ============================================================================
 // FREQUENCY OPERATIONS
 // ============================================================================
 std::vector<std::complex<float>> PALBDemodulator::frequencyShift(
-    std::vector<std::complex<float>> signal,
+    const std::vector<std::complex<float>>& signal,
     double shiftFreq)
 {
-    if (signal.empty()) return signal;
+    if (std::abs(shiftFreq) < 1.0) return signal;
 
-    double phaseIncrement = -2.0 * M_PI * shiftFreq / sampleRate;
-    std::complex<float> phase(1.0f, 0.0f);
-    std::complex<float> phaseStep(
-        std::cos(phaseIncrement),
-        std::sin(phaseIncrement)
-        );
+    std::vector<std::complex<float>> shifted(signal.size());
+    double phaseInc = 2.0 * M_PI * shiftFreq / sampleRate;
+    double phase = 0.0;
 
-    for (size_t i = 0; i < signal.size(); ++i) {
-        signal[i] *= phase;
-        phase *= phaseStep;
+    for (size_t i = 0; i < signal.size(); i++) {
+        std::complex<float> shift(std::cos(phase), std::sin(phase));
+        shifted[i] = signal[i] * shift;
+        phase += phaseInc;
 
-        // Periodic normalization to prevent accumulation error
-        if (i % 10000 == 0) {
-            float mag = std::abs(phase);
-            if (mag > 0.0f) {
-                phase /= mag;
-            }
-        }
+        // Wrap phase to prevent numerical issues
+        if (phase > 2.0 * M_PI) phase -= 2.0 * M_PI;
+        if (phase < -2.0 * M_PI) phase += 2.0 * M_PI;
     }
 
-    return signal;
-}
-
-// ============================================================================
-// DEMODULATION
-// ============================================================================
-std::vector<float> PALBDemodulator::amDemodulate(
-    const std::vector<std::complex<float>>& signal)
-{
-    std::vector<float> demodulated;
-    demodulated.reserve(signal.size());
-
-    for (const auto& sample : signal) {
-        demodulated.push_back(std::abs(sample));
-    }
-
-    return demodulated;
-}
-
-std::vector<float> PALBDemodulator::fmDemodulateYDiff(
-    const std::vector<std::complex<float>>& signal)
-{
-    if (signal.empty()) return std::vector<float>();
-
-    std::vector<float> demodulated(signal.size(), 0.0f);
-    float prevPhase = std::arg(signal[0]);
-
-    for (size_t i = 1; i < signal.size(); ++i) {
-        float phase = std::arg(signal[i]);
-        float diff = phase - prevPhase;
-
-        // Unwrap phase
-        if (diff > M_PI) diff -= 2.0f * M_PI;
-        if (diff < -M_PI) diff += 2.0f * M_PI;
-
-        demodulated[i] = diff;
-        prevPhase = phase;
-    }
-
-    // Normalize
-    float maxVal = 0.0f;
-    for (auto s : demodulated) {
-        maxVal = std::max(maxVal, std::abs(s));
-    }
-
-    if (maxVal > 1e-6f) {
-        for (auto& s : demodulated) {
-            s /= maxVal;
-        }
-    }
-
-    return demodulated;
+    return shifted;
 }
 
 // ============================================================================
@@ -400,100 +469,188 @@ std::vector<float> PALBDemodulator::designLowPassFIR(
     float cutoffFreq,
     float sampleRate)
 {
-    if (numTaps <= 0 || numTaps > 1000) {
-        qWarning() << "Invalid numTaps:" << numTaps;
-        return std::vector<float>();
-    }
-
-    if (cutoffFreq <= 0 || cutoffFreq >= sampleRate / 2) {
-        qWarning() << "Invalid cutoff frequency:" << cutoffFreq;
-        return std::vector<float>();
-    }
-
-    std::vector<float> h(numTaps, 0.0f);
-    float fc = cutoffFreq / sampleRate;
+    std::vector<float> coeffs(numTaps);
+    float fc = cutoffFreq / sampleRate;  // Normalized frequency
     int center = numTaps / 2;
 
-    // Generate sinc function with Hamming window
-    for (int i = 0; i < numTaps; ++i) {
-        int n = i - center;
-
-        if (n == 0) {
-            h[i] = 2.0f * fc;
+    for (int i = 0; i < numTaps; i++) {
+        if (i == center) {
+            coeffs[i] = 2.0f * fc;
         } else {
-            h[i] = std::sin(2.0f * M_PI * fc * n) / (M_PI * n);
+            float n = i - center;
+            coeffs[i] = std::sin(2.0f * M_PI * fc * n) / (M_PI * n);
         }
 
-        // Hamming window
+        // Apply Hamming window
         float window = 0.54f - 0.46f * std::cos(2.0f * M_PI * i / (numTaps - 1));
-        h[i] *= window;
+        coeffs[i] *= window;
     }
 
     // Normalize
-    float sum = std::accumulate(h.begin(), h.end(), 0.0f);
-    if (sum != 0.0f && !std::isnan(sum) && !std::isinf(sum)) {
-        for (auto& coef : h) {
-            coef /= sum;
-        }
+    float sum = std::accumulate(coeffs.begin(), coeffs.end(), 0.0f);
+    if (sum != 0) {
+        for (auto& c : coeffs) c /= sum;
     }
 
-    return h;
+    return coeffs;
 }
 
 std::vector<std::complex<float>> PALBDemodulator::complexLowPassFilter(
-    std::vector<std::complex<float>> signal,
+    const std::vector<std::complex<float>>& signal,
     float cutoffFreq)
 {
     if (signal.empty()) return signal;
 
-    const int numTaps = 51;
-    auto h = designLowPassFIR(numTaps, cutoffFreq, sampleRate);
-
-    if (h.empty()) return signal;
-
-    int center = numTaps / 2;
-
-    // Zero-pad signal
-    std::vector<std::complex<float>> padded(signal.size() + numTaps, {0.0f, 0.0f});
-    std::copy(signal.begin(), signal.end(), padded.begin() + center);
-
-    // Apply filter (in-place to save memory)
-    for (size_t i = 0; i < signal.size(); ++i) {
-        std::complex<float> sum(0.0f, 0.0f);
-        for (int j = 0; j < numTaps; ++j) {
-            sum += padded[i + j] * h[j];
-        }
-        signal[i] = sum;
+    // Check for unreasonably large signals
+    if (signal.size() > 10000000) {
+        qCritical() << "Signal too large for filtering:" << signal.size();
+        return std::vector<std::complex<float>>();
     }
 
-    return signal;
+    try {
+        // Use pre-calculated coefficients if available
+        std::vector<float> coeffs;
+        if (cutoffFreq <= 6e6 && !lowpassCoeffs.empty()) {
+            coeffs = lowpassCoeffs;
+        } else {
+            // Reduce filter taps for large signals to save memory
+            int numTaps = 65;
+            if (signal.size() > 500000) {
+                numTaps = 33;  // Use fewer taps for large signals
+            }
+            coeffs = designLowPassFIR(numTaps, cutoffFreq, effectiveSampleRate);
+        }
+
+        if (coeffs.empty()) {
+            qCritical() << "Failed to design filter coefficients";
+            return signal;  // Return unfiltered rather than crash
+        }
+
+        // Process in chunks if signal is very large
+        const size_t CHUNK_SIZE = 100000;  // Process 100k samples at a time
+
+        if (signal.size() > CHUNK_SIZE * 2) {
+            qDebug() << "Processing large signal in chunks";
+
+            std::vector<std::complex<float>> filtered;
+            filtered.reserve(signal.size());
+
+            size_t halfTaps = coeffs.size() / 2;
+
+            // Process in overlapping chunks
+            for (size_t chunkStart = 0; chunkStart < signal.size(); chunkStart += CHUNK_SIZE) {
+                size_t chunkEnd = std::min(chunkStart + CHUNK_SIZE + coeffs.size(), signal.size());
+                size_t actualStart = (chunkStart > halfTaps) ? chunkStart - halfTaps : 0;
+
+                // Extract chunk with overlap for filter continuity
+                std::vector<std::complex<float>> chunk(
+                    signal.begin() + actualStart,
+                    signal.begin() + chunkEnd
+                    );
+
+                // Filter the chunk
+                std::vector<std::complex<float>> chunkFiltered(chunk.size());
+                for (size_t i = 0; i < chunk.size(); i++) {
+                    std::complex<float> sum(0, 0);
+
+                    for (size_t j = 0; j < coeffs.size(); j++) {
+                        int idx = i - halfTaps + j;
+                        if (idx >= 0 && idx < static_cast<int>(chunk.size())) {
+                            sum += chunk[idx] * coeffs[j];
+                        }
+                    }
+
+                    chunkFiltered[i] = sum;
+                }
+
+                // Add the filtered chunk (skip overlap regions)
+                size_t copyStart = (chunkStart > 0) ? halfTaps : 0;
+                size_t copyEnd = std::min(copyStart + CHUNK_SIZE, chunkFiltered.size());
+
+                filtered.insert(filtered.end(),
+                                chunkFiltered.begin() + copyStart,
+                                chunkFiltered.begin() + copyEnd);
+            }
+
+            return filtered;
+        } else {
+            // Small signal - process normally
+            std::vector<std::complex<float>> filtered(signal.size());
+            int halfTaps = coeffs.size() / 2;
+
+            for (size_t i = 0; i < signal.size(); i++) {
+                std::complex<float> sum(0, 0);
+
+                for (size_t j = 0; j < coeffs.size(); j++) {
+                    int idx = i - halfTaps + j;
+                    if (idx >= 0 && idx < static_cast<int>(signal.size())) {
+                        sum += signal[idx] * coeffs[j];
+                    }
+                }
+
+                filtered[i] = sum;
+            }
+
+            return filtered;
+        }
+    }
+    catch (const std::bad_alloc& e) {
+        qCritical() << "Memory allocation failed in complexLowPassFilter:" << e.what();
+        // Return a decimated version instead of crashing
+        std::vector<std::complex<float>> decimated;
+        for (size_t i = 0; i < signal.size(); i += 2) {
+            decimated.push_back(signal[i]);
+        }
+        return decimated;
+    }
+    catch (const std::exception& e) {
+        qCritical() << "Exception in complexLowPassFilter:" << e.what();
+        return signal;  // Return unfiltered
+    }
 }
 
-std::vector<float> PALBDemodulator::lowPassFilter(
-    std::vector<float> signal,
-    float cutoffFreq)
+std::vector<float> PALBDemodulator::applyFIRFilter(
+    const std::vector<float>& signal,
+    const std::vector<float>& coeffs)
 {
-    if (signal.empty()) return signal;
+    if (signal.empty() || coeffs.empty()) {
+        return std::vector<float>();
+    }
 
-    const int numTaps = 51;
-    auto h = designLowPassFIR(numTaps, cutoffFreq, sampleRate);
+    const size_t signalSize = signal.size();
+    const size_t filterSize = coeffs.size();
+    const int halfTaps = filterSize / 2;
 
-    if (h.empty()) return signal;
+    std::vector<float> filtered(signalSize);
 
-    int center = numTaps / 2;
-    size_t validStart = center;
-    size_t validEnd = signal.size() > center ? signal.size() - center : 0;
-
-    if (validEnd <= validStart) return signal;
-
-    std::vector<float> filtered = signal;
-
-    for (size_t i = validStart; i < validEnd; ++i) {
+    // Process the beginning (partial convolution)
+    for (size_t i = 0; i < halfTaps && i < signalSize; i++) {
         float sum = 0.0f;
-        for (int j = 0; j < numTaps; ++j) {
-            size_t idx = i - center + j;
-            if (idx < signal.size()) {
-                sum += signal[idx] * h[j];
+        for (size_t j = 0; j < filterSize; j++) {
+            int idx = i - halfTaps + j;
+            if (idx >= 0 && idx < static_cast<int>(signalSize)) {
+                sum += signal[idx] * coeffs[j];
+            }
+        }
+        filtered[i] = sum;
+    }
+
+    // Process the middle (full convolution - no boundary checks needed)
+    for (size_t i = halfTaps; i < signalSize - halfTaps; i++) {
+        float sum = 0.0f;
+        for (size_t j = 0; j < filterSize; j++) {
+            sum += signal[i - halfTaps + j] * coeffs[j];
+        }
+        filtered[i] = sum;
+    }
+
+    // Process the end (partial convolution)
+    for (size_t i = signalSize - halfTaps; i < signalSize; i++) {
+        float sum = 0.0f;
+        for (size_t j = 0; j < filterSize; j++) {
+            int idx = i - halfTaps + j;
+            if (idx >= 0 && idx < static_cast<int>(signalSize)) {
+                sum += signal[idx] * coeffs[j];
             }
         }
         filtered[i] = sum;
@@ -502,17 +659,39 @@ std::vector<float> PALBDemodulator::lowPassFilter(
     return filtered;
 }
 
+std::vector<float> PALBDemodulator::lowPassFilter(
+    const std::vector<float>& signal,
+    float cutoffFreq)
+{
+    if (signal.empty()) return signal;
+
+    // Check for unreasonably large signals
+    if (signal.size() > 10000000) {  // 10M samples max
+        qCritical() << "Signal too large for filtering:" << signal.size();
+        return std::vector<float>();
+    }
+
+    try {
+        std::vector<float> coeffs = designLowPassFIR(65, cutoffFreq, effectiveSampleRate);
+        return applyFIRFilter(signal, coeffs);
+    }
+    catch (const std::exception& e) {
+        qCritical() << "Filter error:" << e.what();
+        return std::vector<float>();
+    }
+}
+
 // ============================================================================
 // DECIMATION
 // ============================================================================
 std::vector<float> PALBDemodulator::decimate(
-    std::vector<float> signal,
+    const std::vector<float>& signal,
     int factor)
 {
-    if (factor <= 1 || signal.empty()) return signal;
+    if (factor <= 1) return signal;
 
     std::vector<float> decimated;
-    decimated.reserve(signal.size() / factor + 1);
+    decimated.reserve(signal.size() / factor);
 
     for (size_t i = 0; i < signal.size(); i += factor) {
         decimated.push_back(signal[i]);
@@ -522,13 +701,13 @@ std::vector<float> PALBDemodulator::decimate(
 }
 
 std::vector<std::complex<float>> PALBDemodulator::decimateComplex(
-    std::vector<std::complex<float>> signal,
+    const std::vector<std::complex<float>>& signal,
     int factor)
 {
-    if (factor <= 1 || signal.empty()) return signal;
+    if (factor <= 1) return signal;
 
     std::vector<std::complex<float>> decimated;
-    decimated.reserve(signal.size() / factor + 1);
+    decimated.reserve(signal.size() / factor);
 
     for (size_t i = 0; i < signal.size(); i += factor) {
         decimated.push_back(signal[i]);
@@ -541,72 +720,91 @@ std::vector<std::complex<float>> PALBDemodulator::decimateComplex(
 // SIGNAL CONDITIONING
 // ============================================================================
 std::vector<float> PALBDemodulator::removeDCOffset(
-    std::vector<float> signal)
+    const std::vector<float>& signal)
 {
     if (signal.empty()) return signal;
 
+    // Calculate mean
     float mean = std::accumulate(signal.begin(), signal.end(), 0.0f) / signal.size();
 
-    for (auto& sample : signal) {
-        sample -= mean;
-    }
+    // Subtract mean
+    std::vector<float> dcRemoved(signal.size());
+    std::transform(signal.begin(), signal.end(), dcRemoved.begin(),
+                   [mean](float x) { return x - mean; });
 
-    return signal;
+    return dcRemoved;
 }
 
 std::vector<float> PALBDemodulator::applyAGC(
-    std::vector<float> signal)
+    const std::vector<float>& signal)
 {
     if (signal.empty()) return signal;
 
-    // Calculate RMS for proper normalization
-    float rms = 0.0f;
-    for (const auto& sample : signal) {
-        rms += sample * sample;
-    }
-    rms = std::sqrt(rms / signal.size());
+    std::vector<float> agcSignal(signal.size());
+    const float targetLevel = 0.7f;
 
-    if (rms < 1e-6f) {
-        qWarning() << "Signal RMS too low, skipping AGC";
-        return signal;
-    }
+    for (size_t i = 0; i < signal.size(); i++) {
+        float absSample = std::abs(signal[i]);
 
-    // Normalize to target RMS
-    const float targetRMS = 0.5f;
-    float globalGain = targetRMS / rms;
-    globalGain = std::clamp(globalGain, 0.1f, 100.0f);
+        // Update peak with decay
+        peakLevel = std::max(peakLevel * 0.9999f, absSample);
 
-    // Apply global normalization first
-    for (auto& sample : signal) {
-        sample *= globalGain;
-    }
+        // Calculate error
+        float error = targetLevel - peakLevel;
 
-    // Then apply adaptive AGC
-    const float targetAmplitude = 0.7f;
-    float currentGain = 1.0f;
-
-    for (auto& sample : signal) {
-        float absValue = std::abs(sample);
-        float desiredGain = targetAmplitude / std::max(absValue, 1e-6f);
-
-        if (currentGain > desiredGain) {
-            currentGain += agcAttackRate * (desiredGain - currentGain);
+        // Update AGC level
+        if (error < 0) {
+            // Signal too high - attack
+            agcLevel *= (1.0f - agcAttackRate);
         } else {
-            currentGain += agcDecayRate * (desiredGain - currentGain);
+            // Signal too low - decay
+            agcLevel *= (1.0f + agcDecayRate);
         }
 
-        currentGain = std::clamp(currentGain, 0.1f, 10.0f);
-        sample *= currentGain;
+        // Limit AGC range
+        agcLevel = clamp(agcLevel, 0.1f, 10.0f);
+
+        // Apply AGC
+        agcSignal[i] = signal[i] * agcLevel;
     }
 
-    // Calculate final RMS
-    rms = 0.0f;
-    for (const auto& sample : signal) {
-        rms += sample * sample;
-    }
-    rms = std::sqrt(rms / signal.size());
+    return agcSignal;
+}
 
-    return signal;
+std::vector<float> PALBDemodulator::normalizeSignal(
+    const std::vector<float>& signal)
+{
+    if (signal.empty()) return signal;
+
+    auto minmax = std::minmax_element(signal.begin(), signal.end());
+    float minVal = *minmax.first;
+    float maxVal = *minmax.second;
+
+    float range = maxVal - minVal;
+    if (range < 0.001f) return signal;
+
+    std::vector<float> normalized(signal.size());
+
+    if (invertVideo) {
+        // Invert the signal
+        std::transform(signal.begin(), signal.end(), normalized.begin(),
+                       [minVal, range](float x) {
+                           return 1.0f - (x - minVal) / range;
+                       });
+    } else {
+        std::transform(signal.begin(), signal.end(), normalized.begin(),
+                       [minVal, range](float x) {
+                           return (x - minVal) / range;
+                       });
+    }
+
+    // Debug: Print some samples to see sync levels
+    qDebug() << "Normalized samples (first 10):";
+    for (size_t i = 0; i < std::min<size_t>(10, normalized.size()); i++) {
+        qDebug() << i << ":" << normalized[i];
+    }
+
+    return normalized;
 }
 
 // ============================================================================
@@ -614,86 +812,99 @@ std::vector<float> PALBDemodulator::applyAGC(
 // ============================================================================
 bool PALBDemodulator::detectVerticalSync(
     const std::vector<float>& signal,
-    size_t& syncStart)
+    size_t& syncStart,
+    int& fieldType)
 {
-    if (signal.size() < 10000) {
-        qWarning() << "Signal too short for sync detection:" << signal.size();
-        return false;
-    }
+    const float SYNC_THRESHOLD = vSyncThreshold;
+    const int vsyncSamples = static_cast<int>(PAL_VSYNC_DURATION * effectiveSampleRate);
+    const int minVSyncWidth = vsyncSamples * 0.5;  // Lower requirement
 
-    // Calculate signal statistics
-    float minVal = *std::min_element(signal.begin(), signal.end());
-    float maxVal = *std::max_element(signal.begin(), signal.end());
-    float range = maxVal - minVal;
+    int syncCount = 0;
+    size_t bestSyncPos = 0;
+    int maxSyncCount = 0;
 
-    if (range < 0.01f) {
-        qWarning() << "Signal range too small:" << range;
-        return false;
-    }
+    // Search through the signal
+    for (size_t i = 0; i < signal.size(); i++) {
+        if (signal[i] < SYNC_THRESHOLD) {
+            syncCount++;
 
-    // Adaptive threshold - sync pulses are at the minimum
-    float syncThreshold = minVal + range * 0.3f;  // 30% from minimum
-
-    const size_t minSyncDuration = static_cast<size_t>(sampleRate * 27e-6);   // 27 μs
-    const size_t maxSyncDuration = static_cast<size_t>(sampleRate * 200e-6);  // 200 μs
-
-    // Look for long sync pulse (vertical sync = multiple H-sync pulses)
-    size_t longestSyncPos = 0;
-    size_t longestSyncDuration = 0;
-
-    for (size_t i = 0; i < signal.size() - maxSyncDuration; ++i) {
-        if (signal[i] < syncThreshold) {
-            size_t lowSamples = 0;
-
-            // Count consecutive samples below threshold
-            while (i + lowSamples < signal.size() &&
-                   signal[i + lowSamples] < syncThreshold &&
-                   lowSamples < maxSyncDuration * 2) {
-                ++lowSamples;
+            if (syncCount > maxSyncCount) {
+                maxSyncCount = syncCount;
+                bestSyncPos = i - syncCount + 1;
             }
+        } else {
+            syncCount = 0;
+        }
 
-            // Track longest sync pulse (vertical sync is longer than H-sync)
-            if (lowSamples > longestSyncDuration && lowSamples >= minSyncDuration) {
-                longestSyncDuration = lowSamples;
-                longestSyncPos = i;
-            }
+        // Check if we've found enough consecutive sync samples
+        if (maxSyncCount >= minVSyncWidth) {
+            syncStart = bestSyncPos;
 
-            i += lowSamples;
+            // Simple field detection
+            fieldType = (bestSyncPos % (samplesPerLine * 2)) > samplesPerLine ? 1 : 0;
+
+            lastVSyncPosition = bestSyncPos;
+            qDebug() << "VSync detected at" << bestSyncPos << "width:" << maxSyncCount;
+            return true;
         }
     }
 
-    // Need at least 3 H-sync pulses worth of sync (vertical sync indicator)
-    const size_t minVerticalSyncDuration = static_cast<size_t>(sampleRate * 100e-6); // 100 μs
+    qDebug() << "No VSync found, max sync count was:" << maxSyncCount
+             << "needed:" << minVSyncWidth;
+    return false;
+}
 
-    if (longestSyncDuration >= minVerticalSyncDuration) {
-        syncStart = longestSyncPos;
+bool PALBDemodulator::detectHorizontalSync(
+    const std::vector<float>& signal,
+    size_t startPos,
+    size_t& syncPos)
+{
+    const float SYNC_THRESHOLD = vSyncThreshold * 1.5f; // More lenient threshold
+    const int hsyncSamples = static_cast<int>(PAL_H_SYNC_DURATION * effectiveSampleRate);
+    const int searchWindow = samplesPerLine + samplesPerLine / 4;
+
+    size_t endPos = std::min(startPos + searchWindow, signal.size());
+
+    int syncCount = 0;
+    int maxSyncCount = 0;
+    size_t bestSyncPos = 0;
+
+    for (size_t i = startPos; i < endPos; i++) {
+        if (signal[i] < SYNC_THRESHOLD) {
+            syncCount++;
+            if (syncCount > maxSyncCount) {
+                maxSyncCount = syncCount;
+                bestSyncPos = i - syncCount + 1;
+            }
+        } else {
+            // Check if we found a good enough sync
+            if (syncCount >= hsyncSamples * 0.5) { // Lower requirement to 50%
+                syncPos = i - syncCount;
+                return true;
+            }
+            syncCount = 0;
+        }
+    }
+
+    // Accept the best sync we found if it's reasonable
+    if (maxSyncCount >= hsyncSamples * 0.3) { // Very lenient - 30% of expected
+        syncPos = bestSyncPos;
         return true;
     }
-    syncStart = 0;
+
     return false;
 }
 
 std::vector<float> PALBDemodulator::removeVBI(
-    std::vector<float> signal)
+    const std::vector<float>& signal)
 {
-    const double samplesPerLine = sampleRate * lineDuration;
-    const size_t vbiSamples = static_cast<size_t>(vbiLines * samplesPerLine);
+    // Skip VBI lines at the beginning
+    size_t skipSamples = vbiLines * samplesPerLine;
 
-    if (signal.size() <= vbiSamples) return signal;
+    if (signal.size() > skipSamples) {
+        return std::vector<float>(signal.begin() + skipSamples, signal.end());
+    }
 
-    signal.erase(signal.begin(), signal.begin() + vbiSamples);
-    return signal;
-}
-
-std::vector<std::complex<float>> PALBDemodulator::removeVBIComplex(
-    std::vector<std::complex<float>> signal)
-{
-    const double samplesPerLine = sampleRate * lineDuration;
-    const size_t vbiSamples = static_cast<size_t>(vbiLines * samplesPerLine);
-
-    if (signal.size() <= vbiSamples) return signal;
-
-    signal.erase(signal.begin(), signal.begin() + vbiSamples);
     return signal;
 }
 
@@ -701,117 +912,169 @@ std::vector<std::complex<float>> PALBDemodulator::removeVBIComplex(
 // TIMING RECOVERY
 // ============================================================================
 std::vector<float> PALBDemodulator::timingRecovery(
-    std::vector<float> signal)
+    const std::vector<float>& signal)
 {
-    if (signal.empty()) return signal;
+    qDebug() << "timingRecovery: input size:" << signal.size()
+             << "samplesPerLine:" << samplesPerLine;
 
-    const double samplesPerLine = sampleRate * lineDuration;
-    const size_t numLines = static_cast<size_t>(signal.size() / samplesPerLine);
+    if (signal.empty()) {
+        qDebug() << "timingRecovery: empty input";
+        return signal;
+    }
 
-    if (numLines == 0) return signal;
+    // If signal is too small, return as-is
+    if (signal.size() < samplesPerLine * 2) {
+        qDebug() << "timingRecovery: signal too small, returning as-is";
+        return signal;
+    }
 
     std::vector<float> recovered;
-    recovered.reserve(numLines * pixelsPerLine);
+    recovered.reserve(signal.size());
 
-    const size_t skipSamples = static_cast<size_t>(samplesPerLine * horizontalOffset);
-    const double activeSamplesPerLine = samplesPerLine - skipSamples;
+    size_t pos = 0;
+    float fractionalPos = 0.0f;
+    int linesProcessed = 0;
+    int syncFoundCount = 0;
 
-    for (size_t line = 0; line < numLines; ++line) {
-        size_t lineStart = static_cast<size_t>(line * samplesPerLine) + skipSamples;
+    // If we can't find sync, just reshape the signal based on expected line length
+    bool useFallbackMode = false;
 
-        if (lineStart >= signal.size()) break;
+    while (pos < signal.size() - samplesPerLine) {
+        size_t syncPos;
 
-        for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
-            double srcPos = lineStart + (pixel * activeSamplesPerLine / pixelsPerLine);
-            size_t idx = static_cast<size_t>(srcPos);
+        // Try to find horizontal sync
+        bool syncFound = detectHorizontalSync(signal, pos, syncPos);
 
-            if (idx + 1 >= signal.size()) {
-                if (idx < signal.size()) {
-                    recovered.push_back(signal[idx]);
-                }
-                break;
+        if (syncFound) {
+            syncFoundCount++;
+
+            // Extract active video portion of the line
+            size_t videoStart = syncPos + static_cast<size_t>(
+                                    (PAL_H_SYNC_DURATION + PAL_BACK_PORCH) * effectiveSampleRate
+                                    );
+
+            if (videoStart + pixelsPerLine < signal.size()) {
+                // Interpolate line to exact pixel count
+                auto line = interpolateLine(signal, videoStart, pixelsPerLine);
+                recovered.insert(recovered.end(), line.begin(), line.end());
+                linesProcessed++;
             }
 
-            // Linear interpolation
-            double frac = srcPos - idx;
-            float interpolated = signal[idx] * (1.0f - frac) + signal[idx + 1] * frac;
-            recovered.push_back(interpolated);
+            // Move to next line with fractional accumulation
+            pos = syncPos + samplesPerLine;
+            fractionalPos += fractionalOffset;
+
+            if (fractionalPos >= 1.0f) {
+                pos += static_cast<size_t>(fractionalPos);
+                fractionalPos -= static_cast<int>(fractionalPos);
+            }
+        } else {
+            // No sync found - use fallback mode
+            useFallbackMode = true;
+            break;
+        }
+
+        // If we've processed enough lines or aren't finding syncs, switch to fallback
+        if (linesProcessed > 10 && syncFoundCount < 5) {
+            useFallbackMode = true;
+            break;
         }
     }
+
+    // FALLBACK MODE: No sync or poor sync - just reshape based on timing
+    if (useFallbackMode || recovered.empty()) {
+        qDebug() << "timingRecovery: Using fallback mode (no sync), syncs found:" << syncFoundCount;
+
+        recovered.clear();
+        recovered.reserve(signal.size());
+
+        // Skip the first portion to align better
+        size_t skipSamples = static_cast<size_t>(horizontalOffset * samplesPerLine);
+        pos = skipSamples;
+
+        while (pos + pixelsPerLine < signal.size()) {
+            // Just extract pixelsPerLine samples at regular intervals
+            for (int i = 0; i < pixelsPerLine && pos + i < signal.size(); i++) {
+                recovered.push_back(signal[pos + i]);
+            }
+
+            // Move to next line
+            pos += samplesPerLine;
+
+            // Add fractional offset
+            fractionalPos += fractionalOffset;
+            if (fractionalPos >= 1.0f) {
+                pos += static_cast<size_t>(fractionalPos);
+                fractionalPos -= static_cast<int>(fractionalPos);
+            }
+
+            linesProcessed++;
+        }
+    }
+
+    qDebug() << "timingRecovery: output size:" << recovered.size()
+             << "lines processed:" << linesProcessed
+             << "syncs found:" << syncFoundCount;
 
     return recovered;
 }
 
-std::vector<std::complex<float>> PALBDemodulator::timingRecoveryComplex(
-    std::vector<std::complex<float>> signal)
+std::vector<float> PALBDemodulator::interpolateLine(
+    const std::vector<float>& signal,
+    size_t startPos,
+    int targetSamples)
 {
-    if (signal.empty()) return signal;
+    std::vector<float> line(targetSamples);
 
-    const double samplesPerLine = sampleRate * lineDuration;
-    const size_t numLines = static_cast<size_t>(signal.size() / samplesPerLine);
+    // Calculate source samples available
+    size_t sourceSamples = std::min(
+        static_cast<size_t>(targetSamples),
+        signal.size() - startPos
+        );
 
-    if (numLines == 0) return signal;
+    if (sourceSamples == static_cast<size_t>(targetSamples)) {
+        // Direct copy if sizes match
+        std::copy(signal.begin() + startPos,
+                  signal.begin() + startPos + targetSamples,
+                  line.begin());
+    } else {
+        // Linear interpolation
+        float ratio = static_cast<float>(sourceSamples - 1) / (targetSamples - 1);
 
-    std::vector<std::complex<float>> recovered;
-    recovered.reserve(numLines * pixelsPerLine);
+        for (int i = 0; i < targetSamples; i++) {
+            float srcIdx = i * ratio;
+            int idx0 = static_cast<int>(srcIdx);
+            int idx1 = std::min(idx0 + 1, static_cast<int>(sourceSamples - 1));
+            float frac = srcIdx - idx0;
 
-    const size_t skipSamples = static_cast<size_t>(samplesPerLine * horizontalOffset);
-    const double activeSamplesPerLine = samplesPerLine - skipSamples;
-
-    for (size_t line = 0; line < numLines; ++line) {
-        size_t lineStart = static_cast<size_t>(line * samplesPerLine) + skipSamples;
-
-        if (lineStart >= signal.size()) break;
-
-        for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
-            double srcPos = lineStart + (pixel * activeSamplesPerLine / pixelsPerLine);
-            size_t idx = static_cast<size_t>(srcPos);
-
-            if (idx + 1 >= signal.size()) {
-                if (idx < signal.size()) {
-                    recovered.push_back(signal[idx]);
-                }
-                break;
+            if (startPos + idx1 < signal.size()) {
+                line[i] = signal[startPos + idx0] * (1.0f - frac) +
+                          signal[startPos + idx1] * frac;
             }
-
-            // Linear interpolation
-            double frac = srcPos - idx;
-            std::complex<float> interpolated =
-                signal[idx] * static_cast<float>(1.0 - frac) +
-                signal[idx + 1] * static_cast<float>(frac);
-            recovered.push_back(interpolated);
         }
     }
 
-    return recovered;
+    return line;
 }
 
 // ============================================================================
 // FIELD PROCESSING
 // ============================================================================
 std::vector<float> PALBDemodulator::extractSingleField(
-    std::vector<float> signal,
+    const std::vector<float>& signal,
     bool oddField)
 {
-    if (signal.size() < pixelsPerLine * 2) {
-        qWarning() << "Signal too small for field extraction:" << signal.size();
-        return signal;
-    }
-
     std::vector<float> field;
-    size_t totalLines = signal.size() / pixelsPerLine;
+    int lineStart = oddField ? 1 : 0;
 
-    field.reserve(totalLines / 2 * pixelsPerLine);
+    for (size_t line = lineStart; line < signal.size() / pixelsPerLine; line += 2) {
+        size_t start = line * pixelsPerLine;
+        size_t end = std::min(start + pixelsPerLine, signal.size());
 
-    // Extract odd or even lines
-    for (size_t line = oddField ? 0 : 1; line < totalLines; line += 2) {
-        size_t lineStart = line * pixelsPerLine;
-        size_t lineEnd = lineStart + pixelsPerLine;
-
-        if (lineEnd <= signal.size()) {
+        if (end > start) {
             field.insert(field.end(),
-                         signal.begin() + lineStart,
-                         signal.begin() + lineEnd);
+                         signal.begin() + start,
+                         signal.begin() + end);
         }
     }
 
@@ -819,66 +1082,27 @@ std::vector<float> PALBDemodulator::extractSingleField(
 }
 
 std::vector<float> PALBDemodulator::deinterlaceFields(
-    std::vector<float> signal)
+    const std::vector<float>& signal)
 {
-    // Extract only odd field (first field)
-    return extractSingleField(std::move(signal), true);
-}
+    // Simple bob deinterlacing - duplicate lines
+    std::vector<float> deinterlaced;
+    deinterlaced.reserve(signal.size() * 2);
 
-// ============================================================================
-// CHROMA EXTRACTION
-// ============================================================================
-std::pair<std::vector<float>, std::vector<float>> PALBDemodulator::extractChroma(
-    const std::vector<std::complex<float>>& signal,
-    size_t targetSize)
-{
-    std::vector<float> chromaU;
-    std::vector<float> chromaV;
+    size_t numLines = signal.size() / pixelsPerLine;
 
-    if (signal.empty()) {
-        chromaU.resize(targetSize, 0.0f);
-        chromaV.resize(targetSize, 0.0f);
-        return {chromaU, chromaV};
-    }
+    for (size_t line = 0; line < numLines; line++) {
+        size_t start = line * pixelsPerLine;
+        size_t end = std::min(start + pixelsPerLine, signal.size());
 
-    size_t actualSize = std::min(signal.size(), targetSize);
-    chromaU.reserve(actualSize);
-    chromaV.reserve(actualSize);
-
-    double chromaFreq = COLOR_SUBCARRIER / 2.0;
-    double phaseInc = 2.0 * M_PI * chromaFreq / (sampleRate / 2.0);
-
-    bool vSwitch = false;
-    double samplesPerLine = (sampleRate / 2.0) * lineDuration;
-    int samplesPerLineInt = static_cast<int>(samplesPerLine);
-
-    for (size_t i = 0; i < actualSize; ++i) {
-        float phase = static_cast<float>(i * phaseInc);
-
-        // Demodulate U and V
-        float u = signal[i].real() * std::cos(phase) + signal[i].imag() * std::sin(phase);
-        float v = -signal[i].real() * std::sin(phase) + signal[i].imag() * std::cos(phase);
-
-        // PAL phase alternation (V inverts every line)
-        if (samplesPerLineInt > 0 && i > 0 && i % samplesPerLineInt == 0) {
-            vSwitch = !vSwitch;
+        // Add line twice for simple deinterlacing
+        for (int repeat = 0; repeat < 2; repeat++) {
+            deinterlaced.insert(deinterlaced.end(),
+                                signal.begin() + start,
+                                signal.begin() + end);
         }
-
-        if (vSwitch) {
-            v = -v;
-        }
-
-        chromaU.push_back(u * 2.0f);
-        chromaV.push_back(v * 2.0f);
     }
 
-    // Pad if needed
-    while (chromaU.size() < targetSize) {
-        chromaU.push_back(0.0f);
-        chromaV.push_back(0.0f);
-    }
-
-    return {chromaU, chromaV};
+    return deinterlaced;
 }
 
 // ============================================================================
@@ -889,218 +1113,132 @@ QImage PALBDemodulator::convertToImage(
     float brightness,
     float contrast)
 {
-    // Use member variables if parameters are default
-    if (brightness == 0.0f && m_brightness != 0.0f) {
-        brightness = m_brightness;
-    }
-    if (contrast == 1.0f && m_contrast != 1.0f) {
-        contrast = m_contrast;
-    }
+    qDebug() << "convertToImage: signal size:" << videoSignal.size()
+             << "pixels/line:" << pixelsPerLine
+             << "visible lines:" << visibleLines;
 
-    QImage image(pixelsPerLine, visibleLines, QImage::Format_Grayscale8);
-
-    size_t expectedSize = pixelsPerLine * visibleLines;
-
-    if (videoSignal.size() < expectedSize) {
-        image.fill(Qt::black);
-        return image;
+    if (videoSignal.empty()) {
+        qDebug() << "ERROR: Empty video signal";
+        return QImage();
     }
 
-    float minVal = *std::min_element(
-        videoSignal.begin(),
-        videoSignal.begin() + expectedSize
-        );
-    float maxVal = *std::max_element(
-        videoSignal.begin(),
-        videoSignal.begin() + expectedSize
-        );
+    int width = pixelsPerLine;
+    int height = visibleLines;
 
-    if (maxVal == minVal) {
-        maxVal = minVal + 1.0f;
+    // Calculate actual available lines
+    size_t availableLines = videoSignal.size() / pixelsPerLine;
+    qDebug() << "Available lines in signal:" << availableLines;
+
+    if (availableLines < 100) {  // Too few lines
+        qDebug() << "ERROR: Too few lines available:" << availableLines;
+        return QImage();
     }
 
-    for (int line = 0; line < visibleLines; ++line) {
-        uchar* scanLine = image.scanLine(line);
+    // Adjust height to available data
+    height = std::min(height, static_cast<int>(availableLines));
+    qDebug() << "Creating image:" << width << "x" << height;
 
-        for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
-            size_t index = line * pixelsPerLine + pixel;
+    QImage image(width, height, QImage::Format_RGB32);
+    if (image.isNull()) {
+        qDebug() << "ERROR: Failed to create QImage";
+        return QImage();
+    }
 
-            if (index < videoSignal.size()) {
-                float normalized = (videoSignal[index] - minVal) / (maxVal - minVal);
-                normalized = (normalized - 0.5f) * contrast + 0.5f + brightness;
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            size_t idx = y * width + x;
 
-                int value = static_cast<int>(normalized * 255.0f);
-                value = std::clamp(value, 0, 255);
+            if (idx < videoSignal.size()) {
+                float value = videoSignal[idx];
+                value = (value - 0.5f) * contrast + 0.5f + brightness;
+                value = std::max(0.0f, std::min(1.0f, value));
 
-                scanLine[pixel] = static_cast<uchar>(value);
-            } else {
-                scanLine[pixel] = 0;
+                uint8_t gray = static_cast<uint8_t>(value * 255.0f);
+                image.setPixel(x, y, qRgb(gray, gray, gray));
             }
         }
     }
 
-    return image;
-}
-
-QImage PALBDemodulator::convertYUVtoRGB(
-    const std::vector<float>& luma,
-    const std::vector<float>& chromaU,
-    const std::vector<float>& chromaV)
-{
-    QImage image(pixelsPerLine, visibleLines, QImage::Format_RGB888);
-
-    size_t expectedSize = pixelsPerLine * visibleLines;
-
-    if (luma.size() < expectedSize) {
-        image.fill(Qt::black);
-        return image;
-    }
-
-    // Normalize luma
-    float minY = *std::min_element(luma.begin(), luma.begin() + expectedSize);
-    float maxY = *std::max_element(luma.begin(), luma.begin() + expectedSize);
-
-    if (maxY == minY) {
-        maxY = minY + 1.0f;
-    }
-
-    for (int line = 0; line < visibleLines; ++line) {
-        uchar* scanLine = image.scanLine(line);
-
-        for (int pixel = 0; pixel < pixelsPerLine; ++pixel) {
-            size_t index = line * pixelsPerLine + pixel;
-
-            if (index < luma.size()) {
-                // Normalize Y with brightness and contrast
-                float y = (luma[index] - minY) / (maxY - minY);
-                y = (y - 0.5f) * m_contrast + 0.5f + m_brightness;
-
-                // Get U and V
-                float u = (index < chromaU.size()) ? chromaU[index] * 0.5f : 0.0f;
-                float v = (index < chromaV.size()) ? chromaV[index] * 0.5f : 0.0f;
-
-                // YUV to RGB conversion (ITU-R BT.601)
-                float r = y + 1.140f * v;
-                float g = y - 0.395f * u - 0.581f * v;
-                float b = y + 2.032f * u;
-
-                // Clamp and convert to 8-bit
-                int red = std::clamp(static_cast<int>(r * 255.0f), 0, 255);
-                int green = std::clamp(static_cast<int>(g * 255.0f), 0, 255);
-                int blue = std::clamp(static_cast<int>(b * 255.0f), 0, 255);
-
-                scanLine[pixel * 3 + 0] = static_cast<uchar>(red);
-                scanLine[pixel * 3 + 1] = static_cast<uchar>(green);
-                scanLine[pixel * 3 + 2] = static_cast<uchar>(blue);
-            } else {
-                scanLine[pixel * 3 + 0] = 0;
-                scanLine[pixel * 3 + 1] = 0;
-                scanLine[pixel * 3 + 2] = 0;
-            }
-        }
-    }
-
+    qDebug() << "Image created successfully";
     return image;
 }
 
 QImage PALBDemodulator::applyGammaCorrection(const QImage& image, float gamma)
 {
-    if (image.isNull() || gamma <= 0) return image;
+    if (image.isNull() || gamma <= 0) {
+        return image;
+    }
 
     QImage corrected = image.copy();
 
     // Create gamma lookup table
-    std::array<uchar, 256> gammaLUT;
-    for (int i = 0; i < 256; ++i) {
+    std::vector<uint8_t> lut(256);
+    float invGamma = 1.0f / gamma;
+
+    for (int i = 0; i < 256; i++) {
         float normalized = i / 255.0f;
-        float correctedValue = std::pow(normalized, gamma);
-        gammaLUT[i] = static_cast<uchar>(std::clamp(correctedValue * 255.0f, 0.0f, 255.0f));
+        float correctedVal = std::pow(normalized, invGamma);
+        lut[i] = floatToUint8(correctedVal);
     }
 
-    // Apply to image
-    if (image.format() == QImage::Format_Grayscale8) {
-        for (int y = 0; y < image.height(); ++y) {
-            uchar* line = corrected.scanLine(y);
-            for (int x = 0; x < image.width(); ++x) {
-                line[x] = gammaLUT[line[x]];
-            }
-        }
-    }
-    else if (image.format() == QImage::Format_RGB888) {
-        for (int y = 0; y < image.height(); ++y) {
-            uchar* line = corrected.scanLine(y);
-            for (int x = 0; x < image.width() * 3; ++x) {
-                line[x] = gammaLUT[line[x]];
-            }
+    // Apply LUT to image
+    for (int y = 0; y < corrected.height(); y++) {
+        for (int x = 0; x < corrected.width(); x++) {
+            QRgb pixel = corrected.pixel(x, y);
+            int gray = qGray(pixel);
+            uint8_t newGray = lut[gray];
+            corrected.setPixel(x, y, qRgb(newGray, newGray, newGray));
         }
     }
 
     return corrected;
 }
 
-std::vector<float> PALBDemodulator::fmDemodulateAudio(
-    const std::vector<std::complex<float>>& samples,
-    double quadratureRate)
+// ============================================================================
+// AUDIO PROCESSING
+// ============================================================================
+std::vector<float> PALBDemodulator::demodulateAudioFM(
+    const std::vector<std::complex<float>>& signal)
 {
-    if (samples.size() < 2) {
-        return std::vector<float>();
+    // Shift to audio carrier (5.5 MHz offset from video)
+    auto audioShifted = frequencyShift(signal, -AUDIO_CARRIER_OFFSET);
+
+    // FM demodulate
+    auto audio = fmDemodulateAtan2(audioShifted);
+
+    // Lowpass filter to 15 kHz
+    audio = lowPassFilter(audio, 15000.0f);
+
+    // Decimate to 48 kHz if needed
+    if (effectiveSampleRate > 48000) {
+        int decimFactor = static_cast<int>(effectiveSampleRate / 48000);
+        audio = decimate(audio, decimFactor);
     }
 
-    std::vector<float> demodulated;
-    demodulated.reserve(samples.size());
-
-    std::complex<float> prevSample = samples[0];
-    demodulated.push_back(0.0f);  // İlk sample
-
-    // Phase discriminator (FM radyo gibi)
-    for (size_t i = 1; i < samples.size(); i++) {
-        // Conjugate multiplication
-        std::complex<float> product = samples[i] * std::conj(prevSample);
-        float phase = std::arg(product);
-
-        // NaN/Inf kontrolü
-        if (std::isnan(phase) || std::isinf(phase)) {
-            phase = 0.0f;
-        }
-
-        // Normalize by max deviation (50 kHz for PAL-B audio)
-        // phase * (sample_rate / (2*π * max_deviation))
-        float demodValue = phase * (quadratureRate / (2.0f * M_PI * 50e3f));
-
-        // Soft clipping
-        demodValue = softClip(demodValue);
-
-        demodulated.push_back(demodValue);
-        prevSample = samples[i];
-    }
-
-    return demodulated;
+    return audio;
 }
 
-std::vector<float> PALBDemodulator::applyAudioLowPassFilter(
-    std::vector<float> signal)
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+float PALBDemodulator::clamp(float value, float min, float max)
 {
-    if (signal.empty()) return signal;
-
-    // Simple IIR low-pass filter (similar to FM demodulator)
-    const float alpha = 0.3f;  // Adjust for cutoff (~15 kHz)
-
-    float prev = signal[0];
-    for (size_t i = 1; i < signal.size(); ++i) {
-        signal[i] = prev + alpha * (signal[i] - prev);
-        prev = signal[i];
-    }
-
-    return signal;
+    return std::max(min, std::min(max, value));
 }
 
-float PALBDemodulator::softClip(float x)
+uint8_t PALBDemodulator::floatToUint8(float value)
 {
-    const float threshold = 0.8f;
-    if (x > threshold) {
-        return threshold + std::tanh(x - threshold);
-    } else if (x < -threshold) {
-        return -threshold - std::tanh(-x - threshold);
-    }
-    return x;
+    int intVal = static_cast<int>(value * 255.0f + 0.5f);
+    return static_cast<uint8_t>(clamp(intVal, 0, 255));
+}
+
+float PALBDemodulator::unwrapPhase(float phase, float lastPhase)
+{
+    float delta = phase - lastPhase;
+
+    // Unwrap phase jumps
+    while (delta > M_PI) delta -= 2.0f * M_PI;
+    while (delta < -M_PI) delta += 2.0f * M_PI;
+
+    return delta;
 }

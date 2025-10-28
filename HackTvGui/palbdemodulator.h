@@ -9,8 +9,13 @@
 #include <vector>
 #include <array>
 #include <complex>
+#include <deque>
 #include <QDebug>
+#include <cmath>
 
+// ============================================================================
+// THREAD-SAFE FRAME BUFFER
+// ============================================================================
 // ============================================================================
 // THREAD-SAFE FRAME BUFFER
 // ============================================================================
@@ -88,6 +93,7 @@ public:
         return frame;
     }
 
+    // Get half frame for audio processing (with overlap)
     std::vector<std::complex<float>> getHalfFrame()
     {
         QMutexLocker lock(&m_mutex);
@@ -98,14 +104,48 @@ public:
             return std::vector<std::complex<float>>();
         }
 
-        // Yarım frame çıkar
+        // Extract half frame
         std::vector<std::complex<float>> frame(halfSize);
         std::copy(m_buffer.begin(), m_buffer.begin() + halfSize, frame.begin());
 
-        // Sadece yarısını sil (overlap için)
-        m_buffer.remove(0, halfSize / 2);
+        // Remove only 1/4 of the frame to maintain overlap for better audio continuity
+        qsizetype removeSize = halfSize / 2;
+        m_buffer.remove(0, removeSize);
 
         return frame;
+    }
+
+    // Get specific amount of samples for audio (non-destructive peek)
+    std::vector<std::complex<float>> peekSamples(qsizetype numSamples) const
+    {
+        QMutexLocker lock(&m_mutex);
+
+        if (m_buffer.size() < numSamples) {
+            return std::vector<std::complex<float>>();
+        }
+
+        std::vector<std::complex<float>> samples(numSamples);
+        std::copy(m_buffer.begin(), m_buffer.begin() + numSamples, samples.begin());
+
+        return samples;
+    }
+
+    // Get and remove specific amount of samples
+    std::vector<std::complex<float>> getSamples(qsizetype numSamples)
+    {
+        QMutexLocker lock(&m_mutex);
+
+        if (m_buffer.size() < numSamples) {
+            return std::vector<std::complex<float>>();
+        }
+
+        std::vector<std::complex<float>> samples(numSamples);
+        std::copy(m_buffer.begin(), m_buffer.begin() + numSamples, samples.begin());
+
+        // Remove extracted samples
+        m_buffer.remove(0, numSamples);
+
+        return samples;
     }
 
     void clear()
@@ -126,6 +166,12 @@ public:
         return m_targetSize;
     }
 
+    qsizetype halfTargetSize() const
+    {
+        QMutexLocker lock(&m_mutex);
+        return m_targetSize / 2;
+    }
+
     double sampleRate() const { return m_sampleRate; }
     double frameDuration() const { return m_frameDuration; }
 
@@ -136,18 +182,23 @@ public:
         return (static_cast<float>(m_buffer.size()) / m_targetSize) * 100.0f;
     }
 
+    bool isHalfFrameReady() const
+    {
+        QMutexLocker lock(&m_mutex);
+        return m_buffer.size() >= (m_targetSize / 2);
+    }
+
 private:
     void updateTargetSize()
     {
         m_targetSize = static_cast<qsizetype>(m_sampleRate * m_frameDuration);
-
         const qsizetype RESERVE_SIZE = m_targetSize * 3;
         if (m_buffer.capacity() < RESERVE_SIZE) {
             m_buffer.reserve(RESERVE_SIZE);
         }
-
         qDebug() << "FrameBuffer target size:" << m_targetSize
-                 << "(" << m_frameDuration * 1000 << "ms)";
+                 << "(" << m_frameDuration * 1000 << "ms)"
+                 << "Half size:" << (m_targetSize / 2);
     }
 
     QList<std::complex<float>> m_buffer;
@@ -166,50 +217,67 @@ class PALBDemodulator : public QObject
 
 public:
     explicit PALBDemodulator(double _sampleRate, QObject *parent = nullptr);
+    virtual ~PALBDemodulator();
 
     struct DemodulatedFrame {
         QImage image;
         std::vector<float> audio;
+        bool valid = false;
+        int fieldNumber = 0;
+    };
+    // Add to PALBDemodulator
+    enum DemodMode {
+        DEMOD_FM,
+        DEMOD_AM
     };
 
+public:
+    void setDemodMode(DemodMode mode) { demodMode = mode; }
+    void setInvertVideo(bool invert) { invertVideo = invert; }
+
+    // Main demodulation functions
     DemodulatedFrame demodulate(const std::vector<std::complex<float>>& samples);
+    std::vector<float> demodulateAudioOnly(const std::vector<std::complex<float>>& samples);
+    QImage demodulateVideoOnly(const std::vector<std::complex<float>>& samples);
 
     // Sample rate
-    void setSampleRate(double rate) { sampleRate = rate; }
+    void setSampleRate(double rate);
     double getSampleRate() const { return sampleRate; }
+    double getEffectiveSampleRate() const { return effectiveSampleRate; }
 
     // Carrier frequencies
     void setVideoCarrier(double freq) { videoCarrier = freq; }
     double getVideoCarrier() const { return videoCarrier; }
+    void setAudioCarrier(double freq) { audioCarrier = freq; }
+    double getAudioCarrier() const { return audioCarrier; }
 
     // Timing parameters
     void setHorizontalOffset(double offset) { horizontalOffset = offset; }
     double getHorizontalOffset() const { return horizontalOffset; }
-
     void setLineDuration(double duration) { lineDuration = duration; }
     double getLineDuration() const { return lineDuration; }
 
     // Image parameters
-    void setPixelsPerLine(int pixels) { pixelsPerLine = pixels; }
+    void setPixelsPerLine(int pixels);
     int getPixelsPerLine() const { return pixelsPerLine; }
-
     void setVisibleLines(int lines) { visibleLines = lines; }
     int getVisibleLines() const { return visibleLines; }
-
     void setVBILines(int lines) { vbiLines = lines; }
     int getVBILines() const { return vbiLines; }
 
     // Processing parameters
-    void setDecimationFactor(int factor) { decimationFactor = factor; }
+    void setDecimationFactor(int factor);
     int getDecimationFactor() const { return decimationFactor; }
-
     void setAGCAttack(float rate) { agcAttackRate = rate; }
     void setAGCDecay(float rate) { agcDecayRate = rate; }
     float getAGCAttack() const { return agcAttackRate; }
     float getAGCDecay() const { return agcDecayRate; }
-
     void setVSyncThreshold(float threshold) { vSyncThreshold = threshold; }
     float getVSyncThreshold() const { return vSyncThreshold; }
+
+    // FM deviation
+    void setFMDeviation(double deviation) { fmDeviation = deviation; }
+    double getFMDeviation() const { return fmDeviation; }
 
     // Interlacing control
     void setDeinterlace(bool enable) { enableDeinterlace = enable; }
@@ -219,51 +287,69 @@ public:
     void setVideoBrightness(float brightness) { m_brightness = brightness; }
     void setVideoContrast(float contrast) { m_contrast = contrast; }
     void setVideoGamma(float gamma) { m_gamma = gamma; }
-
     float getVideoBrightness() const { return m_brightness; }
     float getVideoContrast() const { return m_contrast; }
     float getVideoGamma() const { return m_gamma; }
 
-    std::vector<float> demodulateAudioOnly(const std::vector<std::complex<float>>& samples);
-    QImage demodulateVideoOnly(const std::vector<std::complex<float>>& samples);
+    // Reset to defaults
+    void resetToDefaults();
 
 private:
     // ========================================================================
     // PAL-B/G STANDARD CONSTANTS
     // ========================================================================
     static constexpr double PAL_LINE_DURATION = 64e-6;         // 64 μs
+    static constexpr double PAL_LINE_FREQUENCY = 15625.0;      // 15.625 kHz
     static constexpr double PAL_H_SYNC_DURATION = 4.7e-6;      // 4.7 μs
     static constexpr double PAL_BACK_PORCH = 5.7e-6;           // 5.7 μs
     static constexpr double PAL_FRONT_PORCH = 1.65e-6;         // 1.65 μs
     static constexpr double PAL_ACTIVE_VIDEO = 51.95e-6;       // 51.95 μs
+    static constexpr double PAL_VSYNC_DURATION = 160e-6;       // 2.5 lines
 
     static constexpr int PAL_TOTAL_LINES = 625;
     static constexpr int PAL_VISIBLE_LINES = 576;
     static constexpr int PAL_VBI_LINES_PER_FIELD = 25;
-
     static constexpr double PAL_FIELD_RATE = 50.0;             // 50 Hz
     static constexpr double PAL_FRAME_RATE = 25.0;             // 25 fps
 
-    static constexpr double AUDIO_CARRIER = 5.74e6;            // 5.74 MHz
+    static constexpr double AUDIO_CARRIER_OFFSET = 5.5e6;      // 5.5 MHz from video
     static constexpr double COLOR_SUBCARRIER = 4.43361875e6;   // 4.433619 MHz
+
+    // Video signal levels (0-1 scale)
+    static constexpr float SYNC_LEVEL = 0.0f;      // Sync tip level
+    static constexpr float BLANKING_LEVEL = 0.3f;  // Blanking/black level
+    static constexpr float BLACK_LEVEL = 0.3f;     // Black level
+    static constexpr float WHITE_LEVEL = 1.0f;     // Peak white level
+
+    DemodMode demodMode = DEMOD_FM;
+    bool invertVideo = false;
 
     // ========================================================================
     // CONFIGURABLE PARAMETERS
     // ========================================================================
     double sampleRate;
-    double videoCarrier = 5.5e6;
+    double effectiveSampleRate;     // After decimation
+    double videoCarrier = 0.0;      // 0 for baseband
+    double audioCarrier = AUDIO_CARRIER_OFFSET;
+    double fmDeviation = 6.0e6;     // 6 MHz for UHF PAL
 
     // Timing
     double lineDuration = PAL_LINE_DURATION;
-    double horizontalOffset = (PAL_H_SYNC_DURATION + PAL_BACK_PORCH) / PAL_LINE_DURATION;
+    double horizontalOffset = 0.148;  // ~9.5μs/64μs
+    double lineFrequency = PAL_LINE_FREQUENCY;
 
     // Image dimensions
-    int pixelsPerLine = 702;        // Standard PAL: 702 or 720
-    int visibleLines = 576;         // Single field: 288 lines (576/2)
+    int pixelsPerLine = 720;
+    int visibleLines = 576;
     int vbiLines = PAL_VBI_LINES_PER_FIELD;
 
+    // Calculated parameters
+    double pointsPerLine = 0;
+    double fractionalOffset = 0;
+    int samplesPerLine = 0;
+
     // Processing
-    int decimationFactor = 2;
+    int decimationFactor = 1;
     float agcAttackRate = 0.001f;
     float agcDecayRate = 0.0001f;
     float vSyncThreshold = 0.15f;
@@ -275,25 +361,55 @@ private:
 
     // Interlacing
     bool enableDeinterlace = false;
+    int currentField = 0;  // 0 = even, 1 = odd
 
-    // Filter state
-    std::array<float, 6> m_fltBufferI;
-    std::array<float, 6> m_fltBufferQ;
+    // AGC state
+    float agcLevel = 1.0f;
+    float peakLevel = 0.0f;
+
+    // Sync detection state
+    bool vSyncLocked = false;
+    int vSyncCounter = 0;
+    size_t lastVSyncPosition = 0;
+
+    // Phase tracking for FM demod
+    float lastPhase = 0.0f;
+    std::deque<float> phaseHistory;
+
+    // FIR filter coefficients
+    std::vector<float> lowpassCoeffs;
+    std::vector<float> videoFilterCoeffs;
+
+    // Filter state buffers
+    std::vector<std::complex<float>> complexFilterState;
+    std::vector<float> realFilterState;
+
+    // Line buffer for timing recovery
+    std::vector<float> lineBuffer;
+    size_t lineBufferIndex = 0;
 
     // ========================================================================
-    // SIGNAL PROCESSING FUNCTIONS (MOVE-ENABLED)
+    // SIGNAL PROCESSING FUNCTIONS
     // ========================================================================
+
+    // Initialization
+    void initializeFilters();
+    void calculateLineParameters();
 
     // Frequency operations
     std::vector<std::complex<float>> frequencyShift(
-        std::vector<std::complex<float>> signal,
+        const std::vector<std::complex<float>>& signal,
         double shiftFreq);
 
-    // Demodulation
-    std::vector<float> amDemodulate(
+    // FM Demodulation methods
+    std::vector<float> fmDemodulateAtan2(
         const std::vector<std::complex<float>>& signal);
 
-    std::vector<float> fmDemodulateYDiff(
+    std::vector<float> fmDemodulateDifferential(
+        const std::vector<std::complex<float>>& signal);
+
+    // AM Demodulation
+    std::vector<float> amDemodulate(
         const std::vector<std::complex<float>>& signal);
 
     // Filtering
@@ -303,59 +419,66 @@ private:
         float sampleRate);
 
     std::vector<std::complex<float>> complexLowPassFilter(
-        std::vector<std::complex<float>> signal,
+        const std::vector<std::complex<float>>& signal,
         float cutoffFreq);
 
     std::vector<float> lowPassFilter(
-        std::vector<float> signal,
+        const std::vector<float>& signal,
         float cutoffFreq);
+
+    std::vector<float> applyFIRFilter(
+        const std::vector<float>& signal,
+        const std::vector<float>& coeffs);
 
     // Decimation
     std::vector<float> decimate(
-        std::vector<float> signal,
+        const std::vector<float>& signal,
         int factor);
 
     std::vector<std::complex<float>> decimateComplex(
-        std::vector<std::complex<float>> signal,
+        const std::vector<std::complex<float>>& signal,
         int factor);
 
     // Signal conditioning
     std::vector<float> removeDCOffset(
-        std::vector<float> signal);
+        const std::vector<float>& signal);
 
     std::vector<float> applyAGC(
-        std::vector<float> signal);
+        const std::vector<float>& signal);
+
+    std::vector<float> normalizeSignal(
+        const std::vector<float>& signal);
 
     // Synchronization
     bool detectVerticalSync(
         const std::vector<float>& signal,
-        size_t& syncStart);
+        size_t& syncStart,
+        int& fieldType);
+
+    bool detectHorizontalSync(
+        const std::vector<float>& signal,
+        size_t startPos,
+        size_t& syncPos);
 
     std::vector<float> removeVBI(
-        std::vector<float> signal);
-
-    std::vector<std::complex<float>> removeVBIComplex(
-        std::vector<std::complex<float>> signal);
+        const std::vector<float>& signal);
 
     // Timing recovery
     std::vector<float> timingRecovery(
-        std::vector<float> signal);
+        const std::vector<float>& signal);
 
-    std::vector<std::complex<float>> timingRecoveryComplex(
-        std::vector<std::complex<float>> signal);
+    std::vector<float> interpolateLine(
+        const std::vector<float>& signal,
+        size_t startPos,
+        int targetSamples);
 
     // Field processing
     std::vector<float> extractSingleField(
-        std::vector<float> signal,
+        const std::vector<float>& signal,
         bool oddField);
 
     std::vector<float> deinterlaceFields(
-        std::vector<float> signal);
-
-    // Chroma
-    std::pair<std::vector<float>, std::vector<float>> extractChroma(
-        const std::vector<std::complex<float>>& signal,
-        size_t targetSize);
+        const std::vector<float>& signal);
 
     // Image conversion
     QImage convertToImage(
@@ -363,21 +486,18 @@ private:
         float brightness = 0.0f,
         float contrast = 1.0f);
 
-    QImage convertYUVtoRGB(
-        const std::vector<float>& luma,
-        const std::vector<float>& chromaU,
-        const std::vector<float>& chromaV);
+    QImage applyGammaCorrection(
+        const QImage& image,
+        float gamma);
 
-    std::vector<float> fmDemodulateAudio(
-        const std::vector<std::complex<float>>& signal,
-        double quadratureRate);
+    // Audio processing
+    std::vector<float> demodulateAudioFM(
+        const std::vector<std::complex<float>>& signal);
 
-    std::vector<float> applyAudioLowPassFilter(
-        std::vector<float> signal);
-
-    float softClip(float x);
-
-    QImage applyGammaCorrection(const QImage& image, float gamma);
+    // Helper functions
+    float clamp(float value, float min, float max);
+    uint8_t floatToUint8(float value);
+    float unwrapPhase(float phase, float lastPhase);
 };
 
 #endif // PALBDEMODULATOR_H

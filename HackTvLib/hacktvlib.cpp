@@ -15,6 +15,7 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvRe
 {
     return DllEntryPoint(hinstDLL, fdwReason, lpvReserved);
 }
+
 #endif
 
 #include "hacktvlib.h"
@@ -122,11 +123,8 @@ static void print_usage(void)
 }
 
 HackTvLib::HackTvLib()
-    : m_abort(false), m_signal(0)
+    : m_abort(false), m_signal(0), m_rxTxMode(RX_MODE)
 {
-    log("HackTvLib initialized.");
-    memset(&s, 0, sizeof(hacktv_t));
-    m_rxTxMode = RX_MODE;
 }
 
 HackTvLib::~HackTvLib()

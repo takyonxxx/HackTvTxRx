@@ -62,15 +62,18 @@ MainWindow::MainWindow(QWidget *parent)
     palbDemodulator->setVBILines(49);
     palbDemodulator->setLineDuration(64e-6);
     palbDemodulator->setHorizontalOffset(0.148);
-    palbDemodulator->setDecimationFactor(3);
+    palbDemodulator->setFMDeviation(5.0e6);
+    palbDemodulator->setDecimationFactor(2);
     palbDemodulator->setDeinterlace(false);
     palbDemodulator->setAGCAttack(0.001f);
     palbDemodulator->setAGCDecay(0.0001f);
     palbDemodulator->setVSyncThreshold(0.25f);
+    palbDemodulator->setInvertVideo(false);
+    palbDemodulator->setDemodMode(PALBDemodulator::DEMOD_FM);
 
     m_threadPool = new QThreadPool(this);
     if (m_threadPool) {
-        m_threadPool->setMaxThreadCount(QThread::idealThreadCount());
+        m_threadPool->setMaxThreadCount(QThread::idealThreadCount() / 2);
     }
 
     setupUi();
@@ -324,7 +327,7 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
                         sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
                     }
 
-                    audioOutput->enqueueAudio(demodulatedSamples);
+                    audioOutput->enqueueAudio(std::move(demodulatedSamples));
                 }
             }
             catch (const std::bad_alloc& e) {
@@ -346,85 +349,281 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
             return;
         }
 
+        // Validate sample size
+        if (samples.size() > 10000000) {
+            qWarning() << "Sample buffer too large:" << samples.size() << "- skipping";
+            return;
+        }
+
+        // Add samples to buffer
         palFrameBuffer->addBuffer(samples);
 
-        // Audio processing öncelikli - daha sık çalış
-        if (palFrameBuffer->size() >= palFrameBuffer->targetSize() / 2) {
-            // AUDIO-ONLY PROCESSING (hızlı, her yarım frame'de)
+        // Get current buffer status for debugging
+        static int frameCounter = 0;
+        static auto lastDebugTime = std::chrono::steady_clock::now();
 
+        // Timeout mechanism for stuck demodulation
+        static QElapsedTimer videoDemodTimer;
+        static QElapsedTimer audioDemodTimer;
+        static bool videoTimerStarted = false;
+        static bool audioTimerStarted = false;
+
+        // ====================================================================
+        // CHECK FOR STUCK DEMODULATION
+        // ====================================================================
+
+        // Check video demodulation timeout
+        if (palDemodulationInProgress.loadAcquire() == 1) {
+            if (!videoTimerStarted) {
+                videoDemodTimer.start();
+                videoTimerStarted = true;
+            } else if (videoDemodTimer.elapsed() > 3000) { // 3 second timeout
+                qCritical() << "Video demodulation stuck for 3 seconds, resetting";
+                palDemodulationInProgress.storeRelease(0);
+                videoTimerStarted = false;
+            }
+        } else {
+            videoTimerStarted = false;
+        }
+
+        // Check audio demodulation timeout
+        if (audioDemodulationInProgress.loadAcquire() == 1) {
+            if (!audioTimerStarted) {
+                audioDemodTimer.start();
+                audioTimerStarted = true;
+            } else if (audioDemodTimer.elapsed() > 1000) { // 1 second timeout
+                qCritical() << "Audio demodulation stuck for 1 second, resetting";
+                audioDemodulationInProgress.storeRelease(0);
+                audioTimerStarted = false;
+            }
+        } else {
+            audioTimerStarted = false;
+        }
+
+        // ====================================================================
+        // AUDIO PROCESSING - Higher frequency (every 1/4 frame for low latency)
+        // ====================================================================
+
+        qsizetype quarterFrameSize = palFrameBuffer->targetSize() / 4;
+
+        if (palFrameBuffer->size() >= quarterFrameSize) {
             int expectedAudio = 0;
             if (audioDemodulationInProgress.testAndSetAcquire(expectedAudio, 1)) {
 
-                // Yarım frame al (audio için yeterli)
-                auto halfFrame = palFrameBuffer->getHalfFrame();
+                auto audioSamples = palFrameBuffer->getSamples(quarterFrameSize);
 
-                if (!halfFrame.empty()) {
-                    auto halfFramePtr = std::make_shared<std::vector<std::complex<float>>>(
-                        std::move(halfFrame)
+                if (!audioSamples.empty() && audioSamples.size() < 5000000) { // Size check
+                    auto audioPtr = std::make_shared<std::vector<std::complex<float>>>(
+                        std::move(audioSamples)
                         );
 
-                    // HIGH PRIORITY THREAD - Sadece audio
-                    QtConcurrent::run(QThreadPool::globalInstance(), [this, halfFramePtr]() {
-                        struct Guard {
-                            QAtomicInt& counter;
-                            Guard(QAtomicInt& c) : counter(c) {}
-                            ~Guard() { counter.storeRelease(0); }
-                        } guard(audioDemodulationInProgress);
+                    QtConcurrent::run(QThreadPool::globalInstance(),
+                                      [this, audioPtr]() {
 
-                        try {
-                            auto audio = palbDemodulator->demodulateAudioOnly(*halfFramePtr);
+                                          // CRITICAL: Guard MUST be first thing in lambda
+                                          struct Guard {
+                                              QAtomicInt& counter;
+                                              bool released;
+                                              Guard(QAtomicInt& c) : counter(c), released(false) {}
+                                              ~Guard() {
+                                                  if (!released) {
+                                                      counter.storeRelease(0);
+                                                      released = true;
+                                                  }
+                                              }
+                                              void release() {
+                                                  if (!released) {
+                                                      counter.storeRelease(0);
+                                                      released = true;
+                                                  }
+                                              }
+                                          } guard(audioDemodulationInProgress);
 
-                            if (!audio.empty()) {
-                                for (auto& sample : audio) {
-                                    sample = std::clamp(sample * audioGain, -1.0f, 1.0f);
-                                }
-                                audioOutput->enqueueAudio(std::move(audio));
-                            }
-                        }
-                        catch (const std::exception& e) {
-                            qCritical() << "Audio demodulation error:" << e.what();
-                        }
-                    });
+                                          try {
+                                              // Safety check
+                                              if (audioPtr->size() > 5000000) {
+                                                  qCritical() << "Audio frame too large:" << audioPtr->size();
+                                                  return;
+                                              }
+
+                                              auto audio = palbDemodulator->demodulateAudioOnly(*audioPtr);
+
+                                              if (!audio.empty() && audio.size() < 1000000) {
+                                                  const float gain = audioGain;
+                                                  for (auto& sample : audio) {
+                                                      sample = std::clamp(sample * gain, -0.95f, 0.95f);
+                                                  }
+                                                  audioOutput->enqueueAudio(std::move(audio));
+                                              }
+                                          }
+                                          catch (const std::bad_alloc& e) {
+                                              qCritical() << "OUT OF MEMORY in PAL audio:" << e.what();
+                                          }
+                                          catch (const std::exception& e) {
+                                              qCritical() << "PAL audio demodulation error:" << e.what();
+                                          }
+                                          catch (...) {
+                                              qCritical() << "Unknown exception in PAL audio demodulation";
+                                          }
+                                      });
+                } else {
+                    // Release immediately if we're not processing
+                    audioDemodulationInProgress.storeRelease(0);
                 }
             }
         }
 
-        // Video processing - daha az sıklıkta (tam frame)
-        if (palFrameBuffer->isFrameReady()) {
+        // ====================================================================
+        // VIDEO PROCESSING - Lower frequency (full frames at 50Hz)
+        // ====================================================================
 
+        if (palFrameBuffer->isFrameReady()) {
             int expectedVideo = 0;
             if (palDemodulationInProgress.testAndSetAcquire(expectedVideo, 1)) {
 
                 auto fullFrame = palFrameBuffer->getFrame();
 
-                if (!fullFrame.empty()) {
-                    auto fullFramePtr = std::make_shared<std::vector<std::complex<float>>>(
+                if (!fullFrame.empty() && fullFrame.size() < 10000000) { // Size check
+                    frameCounter++;
+
+                    // Debug output every second
+                    auto now = std::chrono::steady_clock::now();
+                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now - lastDebugTime
+                        );
+
+                    if (elapsed.count() >= 1000) {
+                        qDebug() << "PAL TV Processing:"
+                                 << "FPS:" << frameCounter
+                                 << "Buffer fill:" << palFrameBuffer->fillPercentage() << "%"
+                                 << "Frame size:" << fullFrame.size();
+                        frameCounter = 0;
+                        lastDebugTime = now;
+                    }
+
+                    auto framePtr = std::make_shared<std::vector<std::complex<float>>>(
                         std::move(fullFrame)
                         );
 
-                    // NORMAL PRIORITY THREAD - Sadece video
-                    QtConcurrent::run(m_threadPool, [this, fullFramePtr]() {
+                    QtConcurrent::run(m_threadPool, [this, framePtr]() {
+
+                        // CRITICAL: Guard MUST be first thing in lambda
                         struct Guard {
                             QAtomicInt& counter;
-                            Guard(QAtomicInt& c) : counter(c) {}
-                            ~Guard() { counter.storeRelease(0); }
+                            bool released;
+                            Guard(QAtomicInt& c) : counter(c), released(false) {}
+                            ~Guard() {
+                                if (!released) {
+                                    counter.storeRelease(0);
+                                    released = true;
+                                    qDebug() << "Video demodulation guard released";
+                                }
+                            }
+                            void release() {
+                                if (!released) {
+                                    counter.storeRelease(0);
+                                    released = true;
+                                }
+                            }
                         } guard(palDemodulationInProgress);
 
                         try {
-                            auto image = palbDemodulator->demodulateVideoOnly(*fullFramePtr);
+                            // Safety check
+                            if (framePtr->size() > 10000000) {
+                                qCritical() << "Video frame too large:" << framePtr->size();
+                                return;
+                            }
+
+                            qDebug() << "Starting video demodulation, size:" << framePtr->size();
+
+                            auto image = palbDemodulator->demodulateVideoOnly(*framePtr);
 
                             if (!image.isNull()) {
-                                QImage imageCopy = image.copy();
-                                QMetaObject::invokeMethod(this, "updateDisplay",
-                                                          Qt::QueuedConnection,
-                                                          Q_ARG(const QImage&, imageCopy));
+                                qDebug() << "Image demodulated:" << image.width() << "x" << image.height();
+
+                                // Validate image size
+                                if (image.width() > 2048 || image.height() > 2048) {
+                                    qWarning() << "Image too large, skipping display";
+                                    return;
+                                }
+
+                                QImage displayImage = image;
+
+                                // Scale if needed
+                                if (image.width() > 1024 || image.height() > 768) {
+                                    displayImage = image.scaled(
+                                        1024, 768,
+                                        Qt::KeepAspectRatio,
+                                        Qt::FastTransformation  // Use fast scaling
+                                        );
+                                }
+
+                                // Update UI
+                                QMetaObject::invokeMethod(this,
+                                    [this, img = std::move(displayImage)]() {
+                                        if (this) {  // Check if MainWindow still exists
+                                            updateDisplay(img);
+                                        }
+                                    },
+                                    Qt::QueuedConnection
+                                    );
+                            } else {
+                                qDebug() << "Demodulation returned null image";
                             }
                         }
+                        catch (const std::bad_alloc& e) {
+                            qCritical() << "OUT OF MEMORY in PAL video:" << e.what();
+
+                            // Try to recover
+                            QMetaObject::invokeMethod(this, [this]() {
+                                    if (palFrameBuffer) {
+                                        palFrameBuffer->clear();
+                                    }
+                                }, Qt::QueuedConnection);
+                        }
                         catch (const std::exception& e) {
-                            qCritical() << "Video demodulation error:" << e.what();
+                            qCritical() << "PAL video demodulation error:" << e.what();
+                        }
+                        catch (...) {
+                            qCritical() << "Unknown exception in PAL video demodulation";
                         }
                     });
+                } else {
+                    // Release immediately if we're not processing
+                    palDemodulationInProgress.storeRelease(0);
+                    if (fullFrame.size() >= 10000000) {
+                        qWarning() << "Frame too large to process:" << fullFrame.size();
+                    }
                 }
+            } else {
+                // Video processing still in progress
+                static int skippedFrames = 0;
+                skippedFrames++;
+
+                if (skippedFrames % 50 == 0) {
+                    qDebug() << "Skipped" << skippedFrames << "video frames (processing busy)";
+                }
+            }
+        }
+
+        // ====================================================================
+        // BUFFER OVERFLOW PROTECTION
+        // ====================================================================
+
+        if (palFrameBuffer->fillPercentage() > 200.0f) {
+            qWarning() << "PAL buffer overflow, clearing old data";
+
+            // Try to keep recent data
+            try {
+                auto recentData = palFrameBuffer->getFrame();
+                palFrameBuffer->clear();
+                if (!recentData.empty() && recentData.size() < 5000000) {
+                    palFrameBuffer->addBuffer(recentData);
+                }
+            }
+            catch (...) {
+                // If even this fails, just clear
+                palFrameBuffer->clear();
             }
         }
     }

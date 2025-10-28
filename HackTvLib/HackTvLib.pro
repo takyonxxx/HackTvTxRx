@@ -9,18 +9,57 @@ DEFINES += HAVE_HACKRF
 
 win32 {
     DEFINES += _WIN32
+    DEFINES += _WIN32_WINNT=0x0601
+    DEFINES += WINVER=0x0601
+    DEFINES += __USE_MINGW_ANSI_STDIO=1
+
     MSYS2_PATH = C:/msys64/mingw64
 
     # Include paths for dependencies from MSYS2
     INCLUDEPATH += $$MSYS2_PATH/include
+    INCLUDEPATH += $$MSYS2_PATH/include/libusb-1.0
 
-    # Library paths
+    # Library paths - ORDER MATTERS!
     LIBS += -L$$MSYS2_PATH/lib
     LIBS += -L$$MSYS2_PATH/bin
 
-    # Link to libraries
-    LIBS += -lusb-1.0 -lhackrf -lfftw3f -lfdk-aac -lopus -lportaudio -lrtlsdr
-    LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
+    # CRITICAL: Add pthread and Windows libraries FIRST
+    LIBS += -lwinpthread -lpthread
+    LIBS += -lws2_32 -lmingw32 -lmingwex
+
+    # HackRF and USB (depends on pthread)
+    LIBS += -lhackrf -lusb-1.0
+
+    # Audio/Signal processing libraries
+    LIBS += -lfftw3f -lfdk-aac -lopus -lportaudio -lrtlsdr
+
+    # FFmpeg libraries (ORDER MATTERS - most dependent first)
+    LIBS += -lavdevice -lavfilter -lavformat -lavcodec -lswresample -lswscale -lavutil
+
+    # Additional Windows runtime libraries
+    LIBS += -lm -lz -lbz2
+
+    # Static linking for C++ runtime to avoid DLL dependencies
+    QMAKE_LFLAGS += -static-libgcc -static-libstdc++
+
+    # Enable large address aware (for 32-bit builds) - CORRECTED SYNTAX
+    # Only use for 32-bit builds, comment out for 64-bit
+    # QMAKE_LFLAGS += -Wl,--large-address-aware
+
+    # Export all symbols for DLL (optional, can cause larger DLL)
+    # QMAKE_LFLAGS += -Wl,--export-all-symbols
+
+    # Better: Export only needed symbols
+    QMAKE_LFLAGS += -Wl,--enable-auto-import
+
+    # Compiler flags
+    QMAKE_CXXFLAGS += -fpermissive
+    QMAKE_CXXFLAGS += -D__STDC_CONSTANT_MACROS
+    QMAKE_CXXFLAGS += -D__STDC_FORMAT_MACROS
+
+    # For nanosleep compatibility
+    QMAKE_CXXFLAGS += -D_POSIX_C_SOURCE=200112L
+    QMAKE_CXXFLAGS += -D_GNU_SOURCE
 
     # Define the target library directory
     DESTDIR = $$PWD/../lib/windows
@@ -33,18 +72,14 @@ win32 {
     # Windows uses different naming for debug/release builds
     CONFIG(debug, debug|release) {
         TARGET = HackTvLibd  # Add 'd' suffix for debug builds
+        QMAKE_CXXFLAGS += -g -O0
     } else {
         TARGET = HackTvLib
+        QMAKE_CXXFLAGS += -O2
     }
 
-    # pacman -S mingw-w64-x86_64-ffmpeg \
-    #           mingw-w64-x86_64-libusb \
-    #           mingw-w64-x86_64-hackrf \
-    #           mingw-w64-x86_64-rtl-sdr \
-    #           mingw-w64-x86_64-fdk-aac \
-    #           mingw-w64-x86_64-fftw \
-    #           mingw-w64-x86_64-portaudio \
-    #           mingw-w64-x86_64-opus
+    # Copy required DLLs to output directory (optional)
+    # QMAKE_POST_LINK += $$quote(cmd /c copy /y $$shell_path($$MSYS2_PATH/bin/libwinpthread-1.dll) $$shell_path($$DESTDIR))
 }
 
 macx {
@@ -60,6 +95,7 @@ macx {
 
     # Library paths
     LIBS += -L$$MACPORTS_PREFIX/lib
+    LIBS += -lwinpthread
 
     # Libraries
     LIBS += -lusb-1.0 -lhackrf -lfftw3f -lfdk-aac -lopus -lportaudio -lrtlsdr
@@ -142,18 +178,6 @@ linux {
     headers.path = /usr/local/include/hacktvlib
     headers.files = $$HEADERS
     INSTALLS += target headers
-
-    # Package-specific configurations for different distributions
-
-    # Ubuntu/Debian package installation command:
-    # sudo apt install build-essential \
-    #                  libusb-1.0-0-dev libhackrf-dev libfftw3-dev \
-    #                  libosmo-fl2k-dev portaudio19-dev libfltk1.3-dev \
-    #                  libavcodec-dev libavdevice-dev libavfilter-dev \
-    #                  libavformat-dev libavutil-dev libswscale-dev \
-    #                  libswresample-dev libfdk-aac-dev libopus-dev \
-    #                  librtlsdr-dev
-
 }
 
 SOURCES += \
