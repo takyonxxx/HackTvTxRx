@@ -36,6 +36,13 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
+    struct AtomicGuard {
+        QAtomicInt& counter;
+        // CRITICAL: Kilit açma işlemini sadece yıkıcı (destructor) içinde yapıyoruz.
+        AtomicGuard(QAtomicInt& c) : counter(c) {}
+        ~AtomicGuard() { counter.storeRelease(0); }
+    };
+
 public slots:
     void updatePlotter(float* fft_data, int size);
 
@@ -73,6 +80,8 @@ private:
     void setCurrentSampleRate(int sampleRate);
     void processFft(const std::vector<std::complex<float>>& samples);
     void processDemod(const std::vector<std::complex<float>>& samples);
+    void startPalVideoProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr);
+    void startPalAudioProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr);
     void handleLog(const std::string& logMessage);
     void handleReceivedData(const int8_t *data, size_t len);
 

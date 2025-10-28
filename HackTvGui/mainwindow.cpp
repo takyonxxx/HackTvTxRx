@@ -296,42 +296,30 @@ void MainWindow::handleReceivedData(const int8_t *data, size_t len)
 
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-    // ========================================================================
-    // FREQUENCY BAND DEFINITIONS
-    // ========================================================================
     constexpr double FM_BAND_LOW = 87e6;
     constexpr double FM_BAND_HIGH = 108e6;
     constexpr double PAL_BAND_LOW = 45e6;
     constexpr double PAL_BAND_HIGH = 860e6;
 
     // ========================================================================
-    // FM RADIO DEMODULATION (87-108 MHz)
+    // FM RADYO DEMODÜLASYONU
     // ========================================================================
     if (m_frequency >= FM_BAND_LOW && m_frequency <= FM_BAND_HIGH)
     {
         if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
         {
             try {
-                // Apply low-pass filter
                 auto filteredSamples = lowPassFilter->apply(samples);
-
-                // Resample to audio rate
                 auto resampledSamples = rationalResampler->resample(std::move(filteredSamples));
+                auto demodulatedAudio = fmDemodulator->demodulate(std::move(resampledSamples));
 
-                // FM demodulation
-                auto demodulatedSamples = fmDemodulator->demodulate(std::move(resampledSamples));
-
-                if (!demodulatedSamples.empty()) {
-                    // Apply gain and clipping in-place
-                    for (auto& sample : demodulatedSamples) {
+                if (!demodulatedAudio.empty()) {
+                    // Kazanç ve kesme (clipping)
+                    for (auto& sample : demodulatedAudio) {
                         sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
                     }
-
-                    audioOutput->enqueueAudio(std::move(demodulatedSamples));
+                    audioOutput->enqueueAudio(std::move(demodulatedAudio));
                 }
-            }
-            catch (const std::bad_alloc& e) {
-                qCritical() << "OUT OF MEMORY in FM processing:" << e.what();
             }
             catch (const std::exception& e) {
                 qCritical() << "Exception in FM signal processing:" << e.what();
@@ -341,268 +329,129 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
     }
 
     // ========================================================================
-    // PAL-B TV DEMODULATION (45-860 MHz)
+    // PAL-B TV DEMODÜLASYONU
     // ========================================================================
     if (m_frequency >= PAL_BAND_LOW && m_frequency <= PAL_BAND_HIGH)
     {
-        if (!palbDemodulator || !palFrameBuffer || !audioOutput) {
+        if (!palbDemodulator || !palFrameBuffer || !audioOutput || samples.size() > 10000000) {
+            if (samples.size() > 10000000) {
+                qWarning() << "Sample buffer too large:" << samples.size() << "- skipping";
+            }
             return;
         }
 
-        // Validate sample size
-        if (samples.size() > 10000000) {
-            qWarning() << "Sample buffer too large:" << samples.size() << "- skipping";
-            return;
-        }
-
-        // Add samples to buffer
         palFrameBuffer->addBuffer(samples);
 
-        // Timeout mechanism for stuck demodulation
-        static QElapsedTimer videoDemodTimer;
-        static QElapsedTimer audioDemodTimer;
-        static bool videoTimerStarted = false;
-        static bool audioTimerStarted = false;
-
-        // ====================================================================
-        // CHECK FOR STUCK DEMODULATION
-        // ====================================================================
-
-        // Check video demodulation timeout
-        if (palDemodulationInProgress.loadAcquire() == 1) {
-            if (!videoTimerStarted) {
-                videoDemodTimer.start();
-                videoTimerStarted = true;
-            } else if (videoDemodTimer.elapsed() > 3000) { // 3 second timeout
-                qCritical() << "Video demodulation stuck for 3 seconds, resetting";
-                palDemodulationInProgress.storeRelease(0);
-                videoTimerStarted = false;
-            }
-        } else {
-            videoTimerStarted = false;
-        }
-
-        // Check audio demodulation timeout
-        if (audioDemodulationInProgress.loadAcquire() == 1) {
-            if (!audioTimerStarted) {
-                audioDemodTimer.start();
-                audioTimerStarted = true;
-            } else if (audioDemodTimer.elapsed() > 1000) { // 1 second timeout
-                qCritical() << "Audio demodulation stuck for 1 second, resetting";
-                audioDemodulationInProgress.storeRelease(0);
-                audioTimerStarted = false;
-            }
-        } else {
-            audioTimerStarted = false;
-        }
-
-        // ====================================================================
-        // AUDIO PROCESSING - Higher frequency (every 1/4 frame for low latency)
-        // ====================================================================
-
+        // --- 1. SES İŞLEME ---
         qsizetype quarterFrameSize = palFrameBuffer->targetSize() / 4;
 
         if (palFrameBuffer->size() >= quarterFrameSize) {
             int expectedAudio = 0;
+            // Ses işlemi meşgul değilse ve kilit alınabilirse...
             if (audioDemodulationInProgress.testAndSetAcquire(expectedAudio, 1)) {
-
                 auto audioSamples = palFrameBuffer->getSamples(quarterFrameSize);
 
-                if (!audioSamples.empty() && audioSamples.size() < 5000000) { // Size check
+                if (!audioSamples.empty() && audioSamples.size() < 5000000) {
                     auto audioPtr = std::make_shared<std::vector<std::complex<float>>>(
                         std::move(audioSamples)
                         );
-
-                    QtConcurrent::run(QThreadPool::globalInstance(),
-                                      [this, audioPtr]() {
-
-                                          // CRITICAL: Guard MUST be first thing in lambda
-                                          struct Guard {
-                                              QAtomicInt& counter;
-                                              bool released;
-                                              Guard(QAtomicInt& c) : counter(c), released(false) {}
-                                              ~Guard() {
-                                                  if (!released) {
-                                                      counter.storeRelease(0);
-                                                      released = true;
-                                                  }
-                                              }
-                                              void release() {
-                                                  if (!released) {
-                                                      counter.storeRelease(0);
-                                                      released = true;
-                                                  }
-                                              }
-                                          } guard(audioDemodulationInProgress);
-
-                                          try {
-                                              // Safety check
-                                              if (audioPtr->size() > 5000000) {
-                                                  qCritical() << "Audio frame too large:" << audioPtr->size();
-                                                  return;
-                                              }
-
-                                              auto audio = palbDemodulator->demodulateAudioOnly(*audioPtr);
-
-                                              if (!audio.empty() && audio.size() < 1000000) {
-                                                  const float gain = audioGain;
-                                                  for (auto& sample : audio) {
-                                                      sample = std::clamp(sample * gain, -0.95f, 0.95f);
-                                                  }
-                                                  audioOutput->enqueueAudio(std::move(audio));
-                                              }
-                                          }
-                                          catch (const std::bad_alloc& e) {
-                                              qCritical() << "OUT OF MEMORY in PAL audio:" << e.what();
-                                          }
-                                          catch (const std::exception& e) {
-                                              qCritical() << "PAL audio demodulation error:" << e.what();
-                                          }
-                                          catch (...) {
-                                              qCritical() << "Unknown exception in PAL audio demodulation";
-                                          }
-                                      });
+                    // Asenkron görevi başlat
+                    startPalAudioProcessing(audioPtr);
                 } else {
-                    // Release immediately if we're not processing
+                    // İşlemeyeceksek kilidi hemen bırak
                     audioDemodulationInProgress.storeRelease(0);
                 }
             }
         }
 
-        // ====================================================================
-        // VIDEO PROCESSING - Lower frequency (full frames at 50Hz)
-        // ====================================================================
-
+        // --- 2. VİDEO İŞLEME ---
         if (palFrameBuffer->isFrameReady()) {
             int expectedVideo = 0;
+            // Video işlemi meşgul değilse ve kilit alınabilirse...
             if (palDemodulationInProgress.testAndSetAcquire(expectedVideo, 1)) {
-
                 auto fullFrame = palFrameBuffer->getFrame();
 
-                if (!fullFrame.empty() && fullFrame.size() < 10000000) { // Size check
-
+                if (!fullFrame.empty() && fullFrame.size() < 10000000) {
                     auto framePtr = std::make_shared<std::vector<std::complex<float>>>(
                         std::move(fullFrame)
                         );
-
-                    QtConcurrent::run(m_threadPool, [this, framePtr]() {
-
-                        // CRITICAL: Guard MUST be first thing in lambda
-                        struct Guard {
-                            QAtomicInt& counter;
-                            bool released;
-                            Guard(QAtomicInt& c) : counter(c), released(false) {}
-                            ~Guard() {
-                                if (!released) {
-                                    counter.storeRelease(0);
-                                    released = true;
-                                }
-                            }
-                            void release() {
-                                if (!released) {
-                                    counter.storeRelease(0);
-                                    released = true;
-                                }
-                            }
-                        } guard(palDemodulationInProgress);
-
-                        try {
-                            // Safety check
-                            if (framePtr->size() > 10000000) {
-                                qCritical() << "Video frame too large:" << framePtr->size();
-                                return;
-                            }
-
-                            auto image = palbDemodulator->demodulateVideoOnly(*framePtr);
-
-                            if (!image.isNull()) {
-
-                                // Validate image size
-                                if (image.width() > 2048 || image.height() > 2048) {
-                                    qWarning() << "Image too large, skipping display";
-                                    return;
-                                }
-
-                                QImage displayImage = image;
-
-                                // Scale if needed
-                                if (image.width() > 1024 || image.height() > 768) {
-                                    displayImage = image.scaled(
-                                        1024, 768,
-                                        Qt::KeepAspectRatio,
-                                        Qt::FastTransformation  // Use fast scaling
-                                        );
-                                }
-
-                                // Update UI
-                                QMetaObject::invokeMethod(this,
-                                    [this, img = std::move(displayImage)]() {
-                                        if (this) {  // Check if MainWindow still exists
-                                            updateDisplay(img);
-                                        }
-                                    },
-                                    Qt::QueuedConnection
-                                    );
-                            } else {
-                                qDebug() << "Demodulation returned null image";
-                            }
-                        }
-                        catch (const std::bad_alloc& e) {
-                            qCritical() << "OUT OF MEMORY in PAL video:" << e.what();
-
-                            // Try to recover
-                            QMetaObject::invokeMethod(this, [this]() {
-                                    if (palFrameBuffer) {
-                                        palFrameBuffer->clear();
-                                    }
-                                }, Qt::QueuedConnection);
-                        }
-                        catch (const std::exception& e) {
-                            qCritical() << "PAL video demodulation error:" << e.what();
-                        }
-                        catch (...) {
-                            qCritical() << "Unknown exception in PAL video demodulation";
-                        }
-                    });
+                    // Asenkron görevi başlat
+                    startPalVideoProcessing(framePtr);
                 } else {
-                    // Release immediately if we're not processing
+                    // İşlemeyeceksek kilidi hemen bırak
                     palDemodulationInProgress.storeRelease(0);
-                    if (fullFrame.size() >= 10000000) {
-                        qWarning() << "Frame too large to process:" << fullFrame.size();
-                    }
                 }
-            } else {
-                // Video processing still in progress
-                static int skippedFrames = 0;
-                skippedFrames++;
-
-                if (skippedFrames % 50 == 0) {
-                    qDebug() << "Skipped" << skippedFrames << "video frames (processing busy)";
-                }
-            }
-        }
-
-        // ====================================================================
-        // BUFFER OVERFLOW PROTECTION
-        // ====================================================================
-
-        if (palFrameBuffer->fillPercentage() > 200.0f) {
-            qWarning() << "PAL buffer overflow, clearing old data";
-
-            // Try to keep recent data
-            try {
-                auto recentData = palFrameBuffer->getFrame();
-                palFrameBuffer->clear();
-                if (!recentData.empty() && recentData.size() < 5000000) {
-                    palFrameBuffer->addBuffer(recentData);
-                }
-            }
-            catch (...) {
-                // If even this fails, just clear
-                palFrameBuffer->clear();
             }
         }
     }
+}
+
+// --- startPalAudioProcessing Uygulaması ---
+void MainWindow::startPalAudioProcessing(std::shared_ptr<std::vector<std::complex<float>>> audioPtr)
+{
+    QtConcurrent::run(QThreadPool::globalInstance(), [this, audioPtr]() {
+        AtomicGuard guard(audioDemodulationInProgress); // CRITICAL: Kilit ilk açılmalı
+
+        try {
+            if (audioPtr->size() > 5000000) {
+                qCritical() << "Audio frame too large:" << audioPtr->size();
+                return;
+            }
+
+            auto audio = palbDemodulator->demodulateAudioOnly(*audioPtr);
+
+            if (!audio.empty() && audio.size() < 1000000) {
+                const float gain = audioGain;
+                for (auto& sample : audio) {
+                    sample = std::clamp(sample * gain, -0.95f, 0.95f);
+                }
+                audioOutput->enqueueAudio(std::move(audio));
+            }
+        }
+        catch (const std::exception& e) {
+            qCritical() << "PAL audio demodulation error:" << e.what();
+        }
+        catch (...) {
+            qCritical() << "Unknown exception in PAL audio demodulation";
+        }
+    });
+}
+
+// --- startPalVideoProcessing Uygulaması ---
+void MainWindow::startPalVideoProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr)
+{
+    QtConcurrent::run(m_threadPool, [this, framePtr]() {
+        AtomicGuard guard(palDemodulationInProgress); // CRITICAL: Kilit ilk açılmalı
+
+        try {
+            if (framePtr->size() > 10000000) {
+                qCritical() << "Video frame too large:" << framePtr->size();
+                return;
+            }
+
+            auto image = palbDemodulator->demodulateVideoOnly(*framePtr);
+
+            if (!image.isNull()) {
+                // UI Güncelleme ve ölçekleme mantığı
+                QImage displayImage = image;
+                if (image.width() > 1024 || image.height() > 768) {
+                    displayImage = image.scaled(1024, 768, Qt::KeepAspectRatio, Qt::FastTransformation);
+                }
+
+                QMetaObject::invokeMethod(this, [this, img = std::move(displayImage)]() {
+                        if (this) {
+                            updateDisplay(img);
+                        }
+                    }, Qt::QueuedConnection);
+            }
+        }
+        catch (const std::exception& e) {
+            qCritical() << "PAL video demodulation error:" << e.what();
+        }
+        catch (...) {
+            qCritical() << "Unknown exception in PAL video demodulation";
+        }
+    });
 }
 
 void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
