@@ -373,49 +373,9 @@ std::vector<float> PALBDemodulator::amDemodulate(
 
     std::vector<float> demod(signal.size());
 
-    // Envelope detection
+    // Basic envelope detection - this is correct!
     for (size_t i = 0; i < signal.size(); i++) {
         demod[i] = std::abs(signal[i]);
-    }
-
-    // Optional: Low-pass filter to remove carrier residue
-    // (for vestigial sideband AM)
-    if (videoCarrier > 0) {
-        demod = lowPassFilter(demod, 5.5e6);
-    }
-
-    // DC removal with tracking
-    float dcLevel = 0.0f;
-    for (size_t i = 0; i < demod.size(); i++) {
-        dcLevel = dcTrackingSpeed * demod[i] + (1.0f - dcTrackingSpeed) * dcLevel;
-        demod[i] -= dcLevel;
-    }
-
-    // Find dynamic range
-    float minVal = *std::min_element(demod.begin(), demod.end());
-    float maxVal = *std::max_element(demod.begin(), demod.end());
-    float range = maxVal - minVal;
-
-    if (range < 0.001f) return std::vector<float>(signal.size(), 0.5f);
-
-    // Apply user-adjustable scale factor
-    range /= amScaleFactor;
-
-    // Normalize and position black level
-    for (size_t i = 0; i < demod.size(); i++) {
-        // Normalize to 0-1
-        demod[i] = (demod[i] - minVal) / range;
-
-        // Apply level shift
-        demod[i] += amLevelShift;
-
-        // Scale to position black level
-        if (demod[i] > 0) {
-            demod[i] = demod[i] * (1.0f - blackLevelTarget) + blackLevelTarget;
-        }
-
-        // Clamp
-        demod[i] = clamp(demod[i], 0.0f, 1.0f);
     }
 
     return demod;
@@ -760,27 +720,29 @@ std::vector<float> PALBDemodulator::normalizeSignal(
 {
     if (signal.empty()) return signal;
 
+    // Find the sync tip (minimum) and peak white (maximum)
     auto minmax = std::minmax_element(signal.begin(), signal.end());
-    float minVal = *minmax.first;
-    float maxVal = *minmax.second;
+    float syncTip = *minmax.first;
+    float peakWhite = *minmax.second;
 
-    float range = maxVal - minVal;
+    float range = peakWhite - syncTip;
     if (range < 0.001f) return signal;
 
     std::vector<float> normalized(signal.size());
 
-    if (invertVideo) {
-        // Invert the signal
-        std::transform(signal.begin(), signal.end(), normalized.begin(),
-                       [minVal, range](float x) {
-                           return 1.0f - (x - minVal) / range;
-                       });
-    } else {
-        std::transform(signal.begin(), signal.end(), normalized.begin(),
-                       [minVal, range](float x) {
-                           return (x - minVal) / range;
-                       });
+    // Normalize with sync at 0.0 and white at 1.0
+    // Black level should end up around 0.3
+    for (size_t i = 0; i < signal.size(); i++) {
+        normalized[i] = (signal[i] - syncTip) / range;
+        normalized[i] = clamp(normalized[i], 0.0f, 1.0f);
     }
+
+    if (invertVideo) {
+        for (auto& val : normalized) {
+            val = 1.0f - val;
+        }
+    }
+
     return normalized;
 }
 

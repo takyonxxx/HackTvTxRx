@@ -48,13 +48,17 @@ MainWindow::MainWindow(QWidget *parent)
 
     tvDisplay = new TVDisplay(this);
     audioOutput = std::make_unique<AudioOutput>();
+    // Set audio volume if available
+    if (audioOutput) {
+        audioOutput->setVolume(m_volumeLevel);
+    }
 
     // PAL-B/G System Constants
     const int PAL_TOTAL_LINES = 625;
     const int PAL_VISIBLE_LINES = 576;
     const int PAL_VBI_LINES_PER_FIELD = 25;
     const double PAL_LINE_DURATION = 64e-6;
-    const double PAL_FRAME_DURATION = 0.05;  // 25 Hz
+    const double PAL_FRAME_DURATION = 0.05;
 
     // Initialize with correct parameters
     palbDemodulator = new PALBDemodulator(m_sampleRate);
@@ -250,8 +254,6 @@ void MainWindow::initializeHackTvLib() {
             return;
         }
 
-        qDebug() << "Setting up callbacks...";
-
         // Set callbacks with safety checks
         m_hackTvLib->setLogCallback([this](const std::string& msg) {
             // Add safety check for shutdown
@@ -270,14 +272,7 @@ void MainWindow::initializeHackTvLib() {
         // Set mic disabled
         m_hackTvLib->setMicEnabled(false);
 
-        // Set audio volume if available
-        if (audioOutput) {
-            audioOutput->setVolume(m_volumeLevel);
-        }
-
         qDebug() << "HackTvLib initialized successfully";
-
-        // DO NOT call start() here - let executeButton handle it
 
     } catch (const std::exception& e) {
         qDebug() << QString("HackTvLib initialization failed: %1").arg(e.what());
@@ -1251,16 +1246,6 @@ void MainWindow::executeCommand()
 {
     if (palFrameBuffer) {
         palFrameBuffer->clear();
-        qDebug() << "PAL FrameBuffer cleared on stop";
-    }
-
-    if (!m_hackTvLib) {
-        qDebug() << "HackTvLib not initialized, trying to initialize...";
-        initializeHackTvLib();
-        if (!m_hackTvLib) {
-            qDebug() << "Failed to initialize HackTvLib";
-            return;
-        }
     }
 
     if (executeButton->text() == "Start")
@@ -1287,22 +1272,24 @@ void MainWindow::executeCommand()
             stdArgs.push_back(arg.toStdString());
         }
 
-        try
-        {
-            m_hackTvLib->setArguments(stdArgs);
-            m_hackTvLib->setAmplitude(tx_amplitude);
-            if(m_hackTvLib->start()) {
-                executeButton->setText("Stop");
-                QString argsString = args.join(' ');
-                logBrowser->append(argsString);
-                m_isProcessing.store(true);
-            } else {
-                logBrowser->append("Failed to start HackTvLib.");
-            }
+        // CHECK: Is m_hackTvLib null?
+        if (!m_hackTvLib) {
+            qDebug() << "ERROR: m_hackTvLib is null!";
+            logBrowser->append("HackTvLib not initialized!");
+            return;
         }
-        catch (const std::exception& e) {
-            QMessageBox::critical(this, "Error", QString("HackTvLib error: %1").arg(e.what()));
+
+        m_hackTvLib->setArguments(stdArgs);
+        m_hackTvLib->setAmplitude(tx_amplitude);
+        if(!m_hackTvLib->start()) {
+            logBrowser->append("Failed to start HackTvLib.");
+            return;
         }
+
+        executeButton->setText("Stop");
+        QString argsString = args.join(' ');
+        logBrowser->append(argsString);
+        m_isProcessing.store(true);
     }
     else if (executeButton->text() == "Stop")
     {

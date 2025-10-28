@@ -117,6 +117,7 @@ public:
     void setVgaGain(unsigned int vga_gain);
     void setTxAmpGain(unsigned int tx_amp_gain);
     void setRxAmpGain(unsigned int rx_amp_gain);
+    void cleanup();
 
 private slots:
     void emitReceivedData(const int8_t *data, size_t data_len);
@@ -132,7 +133,7 @@ private:
     std::vector<char*> m_argv;
 
     // SADECE BU İKİ SATIR EKLENDİ (Global değişkenler sınıfa taşındı - DLL entry point sorunu için)
-    hacktv_t s;
+    hacktv_t* s;
     rxtx_mode m_rxTxMode;
 
     bool openDevice();
