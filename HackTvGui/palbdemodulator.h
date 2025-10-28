@@ -291,6 +291,16 @@ public:
     float getVideoContrast() const { return m_contrast; }
     float getVideoGamma() const { return m_gamma; }
 
+    void setAMScaleFactor(float factor) {
+        amScaleFactor = clamp(factor, 0.5f, 2.0f);
+    }
+    void setAMLevelShift(float shift) {
+        amLevelShift = clamp(shift, -0.5f, 0.5f);
+    }
+    void setBlackLevel(float level) {
+        blackLevelTarget = clamp(level, 0.2f, 0.4f);
+    }
+
     // Reset to defaults
     void resetToDefaults();
 
@@ -387,6 +397,11 @@ private:
     // Line buffer for timing recovery
     std::vector<float> lineBuffer;
     size_t lineBufferIndex = 0;
+
+    float amScaleFactor = 1.0f;      // Range correction factor (0.5 to 2.0)
+    float amLevelShift = 0.0f;       // Level shift (-0.5 to +0.5)
+    float blackLevelTarget = 0.3f;   // Target black level (0.2 to 0.4)
+    float dcTrackingSpeed = 0.001f;  // DC removal time constant
 
     // ========================================================================
     // SIGNAL PROCESSING FUNCTIONS

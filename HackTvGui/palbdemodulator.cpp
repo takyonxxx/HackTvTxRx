@@ -369,10 +369,53 @@ std::vector<float> PALBDemodulator::fmDemodulateDifferential(
 std::vector<float> PALBDemodulator::amDemodulate(
     const std::vector<std::complex<float>>& signal)
 {
+    if (signal.empty()) return std::vector<float>();
+
     std::vector<float> demod(signal.size());
 
+    // Envelope detection
     for (size_t i = 0; i < signal.size(); i++) {
         demod[i] = std::abs(signal[i]);
+    }
+
+    // Optional: Low-pass filter to remove carrier residue
+    // (for vestigial sideband AM)
+    if (videoCarrier > 0) {
+        demod = lowPassFilter(demod, 5.5e6);
+    }
+
+    // DC removal with tracking
+    float dcLevel = 0.0f;
+    for (size_t i = 0; i < demod.size(); i++) {
+        dcLevel = dcTrackingSpeed * demod[i] + (1.0f - dcTrackingSpeed) * dcLevel;
+        demod[i] -= dcLevel;
+    }
+
+    // Find dynamic range
+    float minVal = *std::min_element(demod.begin(), demod.end());
+    float maxVal = *std::max_element(demod.begin(), demod.end());
+    float range = maxVal - minVal;
+
+    if (range < 0.001f) return std::vector<float>(signal.size(), 0.5f);
+
+    // Apply user-adjustable scale factor
+    range /= amScaleFactor;
+
+    // Normalize and position black level
+    for (size_t i = 0; i < demod.size(); i++) {
+        // Normalize to 0-1
+        demod[i] = (demod[i] - minVal) / range;
+
+        // Apply level shift
+        demod[i] += amLevelShift;
+
+        // Scale to position black level
+        if (demod[i] > 0) {
+            demod[i] = demod[i] * (1.0f - blackLevelTarget) + blackLevelTarget;
+        }
+
+        // Clamp
+        demod[i] = clamp(demod[i], 0.0f, 1.0f);
     }
 
     return demod;

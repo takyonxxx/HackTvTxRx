@@ -90,7 +90,7 @@ linux {
 
 SOURCES += \
     audiooutput.cpp \
-    cplotter.cpp \
+    cplotter.cpp \ 
     freqctrl.cpp \
     main.cpp \
     mainwindow.cpp \

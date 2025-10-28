@@ -49,27 +49,50 @@ MainWindow::MainWindow(QWidget *parent)
     tvDisplay = new TVDisplay(this);
     audioOutput = std::make_unique<AudioOutput>();
 
-    palbDemodulator = new PALBDemodulator(m_sampleRate);
-    palFrameBuffer = new FrameBuffer(m_sampleRate, 0.04); // 0.02s = 1 field
-    palbDemodulator->setSampleRate(m_sampleRate);
-    palbDemodulator->setVideoBrightness(0.2f);    // parlaklık
-    palbDemodulator->setVideoContrast(1.3f);      // kontrast
-    palbDemodulator->setVideoGamma(0.8f);         // gamma
+    // PAL-B/G System Constants
+    const int PAL_TOTAL_LINES = 625;
+    const int PAL_VISIBLE_LINES = 576;
+    const int PAL_VBI_LINES_PER_FIELD = 25;
+    const double PAL_LINE_DURATION = 64e-6;
+    const double PAL_FRAME_DURATION = 0.05;  // 25 Hz
 
-    palbDemodulator->setVideoCarrier(0.0);
-    palbDemodulator->setPixelsPerLine(720);
-    palbDemodulator->setVisibleLines(576);
-    palbDemodulator->setVBILines(49);
-    palbDemodulator->setLineDuration(64e-6);
-    palbDemodulator->setHorizontalOffset(0.148);
-    palbDemodulator->setFMDeviation(5.0e6);
+    // Initialize with correct parameters
+    palbDemodulator = new PALBDemodulator(m_sampleRate);
+    palFrameBuffer = new FrameBuffer(m_sampleRate, PAL_FRAME_DURATION); // 0.02s per field
+
+    // If receiving from 478 MHz, set carrier offset
+    // Assuming your SDR is tuned to 479.25 MHz (vision carrier)
+    palbDemodulator->setVideoCarrier(0.0);  // Already at baseband
+    palbDemodulator->setAudioCarrier(5.5e6); // Audio 5.5 MHz above video
+
+    // PAL-B/G timing
+    palbDemodulator->setPixelsPerLine(PAL_TOTAL_LINES);
+    palbDemodulator->setVisibleLines(PAL_VISIBLE_LINES);
+    palbDemodulator->setVBILines(PAL_VBI_LINES_PER_FIELD);
+    palbDemodulator->setLineDuration(PAL_LINE_DURATION);
+
+    // Horizontal timing (10.5 μs from sync start to active video)
+    palbDemodulator->setHorizontalOffset(0.164); // (4.7+5.8)/64 ≈ 0.164
+
+    // AM demodulation for analog TV
+    palbDemodulator->setDemodMode(PALBDemodulator::DEMOD_AM);
+
+    // Processing
     palbDemodulator->setDecimationFactor(2);
     palbDemodulator->setDeinterlace(false);
-    palbDemodulator->setAGCAttack(0.01f);
-    palbDemodulator->setAGCDecay(0.001f);
-    palbDemodulator->setVSyncThreshold(0.25f);
+
+    // AGC for AM video
+    palbDemodulator->setAGCAttack(0.001f);
+    palbDemodulator->setAGCDecay(0.0001f);
+
+    // Sync detection
+    palbDemodulator->setVSyncThreshold(0.15f);
+
+    // Video levels (adjust based on signal)
+    palbDemodulator->setVideoBrightness(0.0f);
+    palbDemodulator->setVideoContrast(1.0f);
+    palbDemodulator->setVideoGamma(1.0f);
     palbDemodulator->setInvertVideo(true);
-    palbDemodulator->setDemodMode(PALBDemodulator::DEMOD_AM);
 
     m_threadPool = new QThreadPool(this);
     if (m_threadPool) {
