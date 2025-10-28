@@ -358,10 +358,6 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
         // Add samples to buffer
         palFrameBuffer->addBuffer(samples);
 
-        // Get current buffer status for debugging
-        static int frameCounter = 0;
-        static auto lastDebugTime = std::chrono::steady_clock::now();
-
         // Timeout mechanism for stuck demodulation
         static QElapsedTimer videoDemodTimer;
         static QElapsedTimer audioDemodTimer;
@@ -483,23 +479,7 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 
                 auto fullFrame = palFrameBuffer->getFrame();
 
-                if (!fullFrame.empty() && fullFrame.size() < 10000000) { // Size check
-                    frameCounter++;
-
-                    // Debug output every second
-                    auto now = std::chrono::steady_clock::now();
-                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        now - lastDebugTime
-                        );
-
-                    if (elapsed.count() >= 1000) {
-                        qDebug() << "PAL TV Processing:"
-                                 << "FPS:" << frameCounter
-                                 << "Buffer fill:" << palFrameBuffer->fillPercentage() << "%"
-                                 << "Frame size:" << fullFrame.size();
-                        frameCounter = 0;
-                        lastDebugTime = now;
-                    }
+                if (!fullFrame.empty() && fullFrame.size() < 10000000) { // Size check                    
 
                     auto framePtr = std::make_shared<std::vector<std::complex<float>>>(
                         std::move(fullFrame)
@@ -516,7 +496,6 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
                                 if (!released) {
                                     counter.storeRelease(0);
                                     released = true;
-                                    qDebug() << "Video demodulation guard released";
                                 }
                             }
                             void release() {
@@ -534,12 +513,9 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
                                 return;
                             }
 
-                            qDebug() << "Starting video demodulation, size:" << framePtr->size();
-
                             auto image = palbDemodulator->demodulateVideoOnly(*framePtr);
 
                             if (!image.isNull()) {
-                                qDebug() << "Image demodulated:" << image.width() << "x" << image.height();
 
                                 // Validate image size
                                 if (image.width() > 2048 || image.height() > 2048) {

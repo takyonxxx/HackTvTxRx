@@ -178,9 +178,6 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
 QImage PALBDemodulator::demodulateVideoOnly(
     const std::vector<std::complex<float>>& samples)
 {
-    qDebug() << "=== demodulateVideoOnly START ===";
-    qDebug() << "Input samples size:" << samples.size();
-
     if (samples.empty()) {
         qDebug() << "ERROR: Empty samples";
         return QImage();
@@ -188,34 +185,24 @@ QImage PALBDemodulator::demodulateVideoOnly(
 
     try {
         // 1. Frequency shift to baseband
-        qDebug() << "Step 1: Frequency shift, video carrier:" << videoCarrier;
         std::vector<std::complex<float>> shifted;
         if (std::abs(videoCarrier) > 1.0) {
             shifted = frequencyShift(samples, -videoCarrier);
         } else {
             shifted = samples;
         }
-        qDebug() << "After shift, size:" << shifted.size();
 
         // 2. Pre-filter and decimate if needed
-        qDebug() << "Step 2: Decimation factor:" << decimationFactor;
         if (decimationFactor > 1) {
-            qDebug() << "Applying lowpass filter before decimation";
             shifted = complexLowPassFilter(shifted, effectiveSampleRate * 0.45f);
-            qDebug() << "After filter, size:" << shifted.size();
-
             shifted = decimateComplex(shifted, decimationFactor);
-            qDebug() << "After decimation, size:" << shifted.size();
         }
 
         // 3. FM demodulation
-        qDebug() << "Step 3: FM demodulation";
         std::vector<float> demodulated;
         if (demodMode == DEMOD_AM) {
-            qDebug() << "Using AM demodulation";
             demodulated = amDemodulate(shifted);
         } else {
-            qDebug() << "Using FM demodulation";
             demodulated = fmDemodulateAtan2(shifted);
         }
         if (demodulated.empty()) {
@@ -235,9 +222,7 @@ QImage PALBDemodulator::demodulateVideoOnly(
         }
 
         // 4. Video lowpass filter
-        qDebug() << "Step 4: Video lowpass filter (5.5 MHz)";
         demodulated = lowPassFilter(demodulated, 5.5e6);
-        qDebug() << "After video filter, size:" << demodulated.size();
 
         if (demodulated.empty()) {
             qDebug() << "ERROR: Lowpass filter returned empty";
@@ -245,48 +230,26 @@ QImage PALBDemodulator::demodulateVideoOnly(
         }
 
         // 5. Apply AGC
-        qDebug() << "Step 5: AGC";
         demodulated = applyAGC(demodulated);
-        qDebug() << "After AGC, size:" << demodulated.size();
-
-        // 6. Remove DC offset and normalize
-        qDebug() << "Step 6: DC removal and normalization";
         demodulated = removeDCOffset(demodulated);
         demodulated = normalizeSignal(demodulated);
-        qDebug() << "After normalization, size:" << demodulated.size();
-
-        // Check signal range
-        if (!demodulated.empty()) {
-            auto minmax = std::minmax_element(demodulated.begin(), demodulated.end());
-            qDebug() << "Signal range: min=" << *minmax.first << "max=" << *minmax.second;
-        }
 
         // 7. Detect vertical sync
-        qDebug() << "Step 7: Vertical sync detection";
         size_t vsyncPos = 0;
         int fieldType = 0;
         bool syncFound = detectVerticalSync(demodulated, vsyncPos, fieldType);
-        qDebug() << "VSync found:" << syncFound << "at position:" << vsyncPos << "field:" << fieldType;
-
-        if (!syncFound) {
-            qDebug() << "WARNING: No vertical sync found, continuing anyway";
-        }
 
         // 8. Skip VBI if sync found
         if (syncFound && vsyncPos + vbiLines * samplesPerLine < demodulated.size()) {
-            qDebug() << "Step 8: Removing VBI lines:" << vbiLines;
             std::vector<float> videoOnly(
                 demodulated.begin() + vsyncPos + vbiLines * samplesPerLine,
                 demodulated.end()
                 );
             demodulated = videoOnly;
-            qDebug() << "After VBI removal, size:" << demodulated.size();
         }
 
         // 9. Timing recovery
-        qDebug() << "Step 9: Timing recovery";
         demodulated = timingRecovery(demodulated);
-        qDebug() << "After timing recovery, size:" << demodulated.size();
 
         if (demodulated.empty()) {
             qDebug() << "ERROR: Timing recovery returned empty";
@@ -295,16 +258,8 @@ QImage PALBDemodulator::demodulateVideoOnly(
 
         // 10. Deinterlace if enabled
         if (enableDeinterlace && vSyncLocked) {
-            qDebug() << "Step 10: Deinterlacing";
             demodulated = deinterlaceFields(demodulated);
-            qDebug() << "After deinterlace, size:" << demodulated.size();
         }
-
-        // 11. Convert to image
-        qDebug() << "Step 11: Converting to image";
-        qDebug() << "Brightness:" << m_brightness << "Contrast:" << m_contrast;
-        qDebug() << "Expected pixels per line:" << pixelsPerLine;
-        qDebug() << "Expected visible lines:" << visibleLines;
 
         QImage image = convertToImage(demodulated, m_brightness, m_contrast);
 
@@ -313,15 +268,10 @@ QImage PALBDemodulator::demodulateVideoOnly(
             return QImage();
         }
 
-        qDebug() << "Image created:" << image.width() << "x" << image.height();
-
         // 12. Apply gamma correction
         if (std::abs(m_gamma - 1.0f) > 0.01f) {
-            qDebug() << "Step 12: Gamma correction:" << m_gamma;
             image = applyGammaCorrection(image, m_gamma);
         }
-
-        qDebug() << "=== demodulateVideoOnly SUCCESS ===";
         return image;
     }
     catch (const std::exception& e) {
@@ -375,7 +325,6 @@ std::vector<float> PALBDemodulator::fmDemodulateAtan2(
         float mag = std::abs(signal[i]);
         maxMag = std::max(maxMag, mag);
     }
-    qDebug() << "FM input signal max magnitude:" << maxMag;
 
     for (size_t i = 0; i < signal.size(); i++) {
         float phase = std::atan2(signal[i].imag(), signal[i].real());
@@ -386,12 +335,6 @@ std::vector<float> PALBDemodulator::fmDemodulateAtan2(
         demod[i] = delta * effectiveSampleRate / (2.0f * M_PI * fmDeviation);
 
         lastPhase = phase;
-    }
-
-    // Debug: Check output range
-    if (!demod.empty()) {
-        auto minmax = std::minmax_element(demod.begin(), demod.end());
-        qDebug() << "FM demod output range:" << *minmax.first << "to" << *minmax.second;
     }
 
     return demod;
@@ -530,8 +473,6 @@ std::vector<std::complex<float>> PALBDemodulator::complexLowPassFilter(
         const size_t CHUNK_SIZE = 100000;  // Process 100k samples at a time
 
         if (signal.size() > CHUNK_SIZE * 2) {
-            qDebug() << "Processing large signal in chunks";
-
             std::vector<std::complex<float>> filtered;
             filtered.reserve(signal.size());
 
@@ -797,13 +738,6 @@ std::vector<float> PALBDemodulator::normalizeSignal(
                            return (x - minVal) / range;
                        });
     }
-
-    // Debug: Print some samples to see sync levels
-    qDebug() << "Normalized samples (first 10):";
-    for (size_t i = 0; i < std::min<size_t>(10, normalized.size()); i++) {
-        qDebug() << i << ":" << normalized[i];
-    }
-
     return normalized;
 }
 
@@ -849,8 +783,6 @@ bool PALBDemodulator::detectVerticalSync(
         }
     }
 
-    qDebug() << "No VSync found, max sync count was:" << maxSyncCount
-             << "needed:" << minVSyncWidth;
     return false;
 }
 
@@ -914,9 +846,6 @@ std::vector<float> PALBDemodulator::removeVBI(
 std::vector<float> PALBDemodulator::timingRecovery(
     const std::vector<float>& signal)
 {
-    qDebug() << "timingRecovery: input size:" << signal.size()
-             << "samplesPerLine:" << samplesPerLine;
-
     if (signal.empty()) {
         qDebug() << "timingRecovery: empty input";
         return signal;
@@ -983,8 +912,6 @@ std::vector<float> PALBDemodulator::timingRecovery(
 
     // FALLBACK MODE: No sync or poor sync - just reshape based on timing
     if (useFallbackMode || recovered.empty()) {
-        qDebug() << "timingRecovery: Using fallback mode (no sync), syncs found:" << syncFoundCount;
-
         recovered.clear();
         recovered.reserve(signal.size());
 
@@ -1011,10 +938,6 @@ std::vector<float> PALBDemodulator::timingRecovery(
             linesProcessed++;
         }
     }
-
-    qDebug() << "timingRecovery: output size:" << recovered.size()
-             << "lines processed:" << linesProcessed
-             << "syncs found:" << syncFoundCount;
 
     return recovered;
 }
@@ -1113,10 +1036,6 @@ QImage PALBDemodulator::convertToImage(
     float brightness,
     float contrast)
 {
-    qDebug() << "convertToImage: signal size:" << videoSignal.size()
-             << "pixels/line:" << pixelsPerLine
-             << "visible lines:" << visibleLines;
-
     if (videoSignal.empty()) {
         qDebug() << "ERROR: Empty video signal";
         return QImage();
@@ -1127,7 +1046,6 @@ QImage PALBDemodulator::convertToImage(
 
     // Calculate actual available lines
     size_t availableLines = videoSignal.size() / pixelsPerLine;
-    qDebug() << "Available lines in signal:" << availableLines;
 
     if (availableLines < 100) {  // Too few lines
         qDebug() << "ERROR: Too few lines available:" << availableLines;
@@ -1136,7 +1054,6 @@ QImage PALBDemodulator::convertToImage(
 
     // Adjust height to available data
     height = std::min(height, static_cast<int>(availableLines));
-    qDebug() << "Creating image:" << width << "x" << height;
 
     QImage image(width, height, QImage::Format_RGB32);
     if (image.isNull()) {
@@ -1159,7 +1076,6 @@ QImage PALBDemodulator::convertToImage(
         }
     }
 
-    qDebug() << "Image created successfully";
     return image;
 }
 
