@@ -199,6 +199,8 @@ const char* getBoolString(int value) {
 
 void HackTvLib::setFrequency(uint64_t frequency_hz)
 {
+    if (!s) return;
+
     if(strcmp(s->output_type, "hackrf") == 0)
     {
         if (hackRfDevice) {
