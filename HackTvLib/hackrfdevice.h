@@ -34,6 +34,7 @@ public:
     // Ana fonksiyonlar
     int start(rf_mode mode);
     int stop();
+    void reset();
     bool isRunning() const { return m_isRunning.load() && !m_isStopped.load(); }
     bool isStopped() const { return m_isStopped.load(); }
     bool isInitialized() const { return h_device != nullptr; }
@@ -59,6 +60,7 @@ public:
     void setModulation_index(float newModulation_index);
     void setDecimation(int newDecimation);
     void setInterpolation(float newInterpolation);
+    void setMicEnabled(bool enable);
 
     // Getter'lar
     uint64_t getFrequency() const;

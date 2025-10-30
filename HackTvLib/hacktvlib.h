@@ -1,7 +1,6 @@
 #ifndef HACKTVLIB_H
 #define HACKTVLIB_H
 
-// Basit export macro (hacktvlib_global.h'a gerek yok)
 #ifdef _WIN32
 #ifdef HACKTVLIB_LIBRARY
 #define HACKTVLIB_EXPORT __declspec(dllexport)
@@ -116,14 +115,9 @@ public:
 
     bool start();
     bool stop();
-
     void setLogCallback(LogCallback callback);
     void setReceivedDataCallback(DataCallback callback);
-
-    void clearCallbacks();                    // Tüm callback'leri temizle
-    void resetLogCallback();                  // Sadece log callback'i temizle
-    void resetReceivedDataCallback();         // Sadece data callback'i temizle
-
+    void clearCallbacks();
     bool setArguments(const std::vector<std::string>& args);
     void setMicEnabled(bool newMicEnabled);
     void setFrequency(uint64_t frequency_hz);
@@ -137,7 +131,6 @@ public:
     void setVgaGain(unsigned int vga_gain);
     void setTxAmpGain(unsigned int tx_amp_gain);
     void setRxAmpGain(unsigned int rx_amp_gain);
-    void cleanup();
 
 private slots:
     void emitReceivedData(const int8_t *data, size_t data_len);
@@ -146,7 +139,6 @@ private slots:
 private:
     LogCallback m_logCallback;
     DataCallback m_dataCallback;
-
     std::thread m_txThread;
     std::mutex m_mutex;
     std::atomic<bool> m_abort;
@@ -161,9 +153,7 @@ private:
     bool setVideo();
     bool initAv();
     bool parseArguments();
-
     bool micEnabled = false;
-
     void log(const char* format, ...);
     void cleanupArgv();
     void rfTxLoop();

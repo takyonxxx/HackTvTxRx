@@ -1,15 +1,17 @@
-QT += core
+QT += core multimedia
 
 TEMPLATE = lib
-CONFIG += shared c++17
+CONFIG += c++17 shared
 
 DEFINES += HACKTVLIB_LIBRARY
+DEFINES += _USE_MATH_DEFINES
+DEFINES += HAVE_HACKRF
 
-win32-g++ {
-
-    QMAKE_LFLAGS += -Wl,-e,_DllMainCRTStartup
-    QMAKE_LFLAGS -= -mdll
-    QMAKE_LFLAGS += -shared
+win32 {
+    DEFINES += _WIN32
+    DEFINES += _WIN32_WINNT=0x0601
+    DEFINES += WINVER=0x0601
+    DEFINES += __USE_MINGW_ANSI_STDIO=1
 
     MSYS2_PATH = C:/msys64/mingw64
 

@@ -177,6 +177,7 @@ void MainWindow::setupUi()
     //rxtxCombo->setCurrentIndex(0);
     onRxTxTypeChanged(0);
     setCurrentSampleRate(DEFAULT_SAMPLE_RATE);
+    //setFixedWidth(1024);
     //showMaximized();
 }
 
@@ -446,40 +447,40 @@ void MainWindow::updatePlotter(float* fft_data, int size)
 
 void MainWindow::addVideoControls()
 {
-    QGroupBox* videoGroup = new QGroupBox("Video Controls");
+    videoGroup = new QGroupBox("Video Controls");
     QGridLayout* videoLayout = new QGridLayout(videoGroup);
     videoLayout->setSpacing(3);
 
     // Labels in first row
-    QLabel* brightLabel = new QLabel("Brightness:");
-    QLabel* contrastLabel = new QLabel("Contrast:");
-    QLabel* gammaLabel = new QLabel("Gamma:");
+    brightLabel = new QLabel("Brightness:");
+    contrastLabel = new QLabel("Contrast:");
+    gammaLabel = new QLabel("Gamma:");
 
     // Sliders in second row
-    QSlider* brightSlider = new QSlider(Qt::Horizontal);
+    brightSlider = new QSlider(Qt::Horizontal);
     brightSlider->setRange(-50, 50);
     brightSlider->setValue(20);
 
-    QSlider* contrastSlider = new QSlider(Qt::Horizontal);
+    contrastSlider = new QSlider(Qt::Horizontal);
     contrastSlider->setRange(50, 200);
     contrastSlider->setValue(130);
 
-    QSlider* gammaSlider = new QSlider(Qt::Horizontal);
+    gammaSlider = new QSlider(Qt::Horizontal);
     gammaSlider->setRange(50, 150);
     gammaSlider->setValue(80);
 
     // Values in third row
-    QLabel* brightValue = new QLabel("20");
+    brightValue = new QLabel("20");
     brightValue->setAlignment(Qt::AlignCenter);
 
-    QLabel* contrastValue = new QLabel("1.3");
+    contrastValue = new QLabel("1.3");
     contrastValue->setAlignment(Qt::AlignCenter);
 
-    QLabel* gammaValue = new QLabel("0.8");
+    gammaValue = new QLabel("0.8");
     gammaValue->setAlignment(Qt::AlignCenter);
 
     // Invert checkbox in fourth row
-    QCheckBox* invertCheckBox = new QCheckBox("Invert Video ");
+    invertCheckBox = new QCheckBox("Invert Video ");
     invertCheckBox->setChecked(true);
 
     // Controls on the left (columns 0, 1, 2)
@@ -512,7 +513,7 @@ void MainWindow::addVideoControls()
     videoLayout->addWidget(tvDisplay, 0, 4, 4, 1);  // row=0, col=4, rowSpan=4, colSpan=1
 
     // Connect signals
-    connect(brightSlider, &QSlider::valueChanged, [this, brightValue](int value) {
+    connect(brightSlider, &QSlider::valueChanged, [this](int value) {
         m_videoBrightness = value / 100.0f;
         brightValue->setText(QString::number(value));
         if (palbDemodulator) {
@@ -520,7 +521,7 @@ void MainWindow::addVideoControls()
         }
     });
 
-    connect(contrastSlider, &QSlider::valueChanged, [this, contrastValue](int value) {
+    connect(contrastSlider, &QSlider::valueChanged, [this](int value) {
         m_videoContrast = value / 100.0f;
         contrastValue->setText(QString::number(m_videoContrast, 'f', 1));
         if (palbDemodulator) {
@@ -528,7 +529,7 @@ void MainWindow::addVideoControls()
         }
     });
 
-    connect(gammaSlider, &QSlider::valueChanged, [this, gammaValue](int value) {
+    connect(gammaSlider, &QSlider::valueChanged, [this](int value) {
         m_videoGamma = value / 100.0f;
         gammaValue->setText(QString::number(m_videoGamma, 'f', 2));
         if (palbDemodulator) {
@@ -565,7 +566,7 @@ void MainWindow::addOutputGroup()
     }
     ampEnabled = new QCheckBox("Amp", this);
     ampEnabled->setChecked(true);
-    colorDisabled = new QCheckBox("Disable colour", this);
+    colorDisabled = new QCheckBox("Disable Colour ", this);
     colorDisabled->setChecked(false);
     QLabel *freqLabel = new QLabel("Frequency (Hz):", this);
     frequencyEdit = new QLineEdit(this);
@@ -825,7 +826,11 @@ void MainWindow::addinputTypeGroup()
     exitButton = new QPushButton("Exit", this);
     connect(exitButton, &QPushButton::clicked, this, &MainWindow::exitApp);
 
+    clearButton = new QPushButton("Clear", this);
+    connect(clearButton, &QPushButton::clicked, this, &MainWindow::clear);
+
     buttonLayout->addWidget(executeButton);
+    buttonLayout->addWidget(clearButton);
     buttonLayout->addWidget(exitButton);
 
     mainLayout->addLayout(buttonLayout);
@@ -1156,6 +1161,14 @@ void MainWindow::updateDisplay(const QImage& image)
     }
 }
 
+void MainWindow::clear()
+{
+    logBrowser->clear();
+    brightSlider->setValue(20);
+    contrastSlider->setValue(130);
+    gammaSlider->setValue(80);
+}
+
 void MainWindow::onFreqCtrl_setFrequency(qint64 freq)
 {
     m_frequency = freq;
@@ -1188,6 +1201,10 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
 
 void MainWindow::executeCommand()
 {
+    if (palFrameBuffer) {
+        palFrameBuffer->clear();
+    }
+
     if (executeButton->text() == "Start")
     {
         if (!m_hackTvLib) {
@@ -1254,10 +1271,6 @@ void MainWindow::executeCommand()
     }
     else if (executeButton->text() == "Stop")
     {
-        if (palFrameBuffer) {
-            palFrameBuffer->clear();
-        }
-
         palDemodulationInProgress.storeRelease(0);
         m_isProcessing.store(false);
 
@@ -1368,13 +1381,7 @@ void MainWindow::updateLogDisplay()
 }
 
 void MainWindow::onInputTypeChanged(int index)
-{
-    if(m_isProcessing && m_hackTvLib->stop())
-    {
-        m_isProcessing.store(false);
-        executeButton->setText("Start");
-    }
-
+{   
     isFmTransmit = (index == 0);
     isFile = (index == 1);
     isTest = (index == 2);
@@ -1419,12 +1426,6 @@ void MainWindow::onInputTypeChanged(int index)
 
 void MainWindow::onRxTxTypeChanged(int index)
 {
-    if(m_isProcessing && m_hackTvLib->stop())
-    {
-        m_isProcessing.store(false);
-        executeButton->setText("Start");
-    }
-
     isTx = (index == 1);
     inputTypeGroup->setVisible(isTx);
     modeGroup->setVisible(isTx);
@@ -1447,6 +1448,18 @@ void MainWindow::onRxTxTypeChanged(int index)
     txAmpSlider->setVisible(isTx);
     txAmpSpinBox->setVisible(isTx);
     tx_line->setVisible(isTx);
+
+    brightLabel->setVisible(!isTx);
+    contrastLabel->setVisible(!isTx);
+    gammaLabel->setVisible(!isTx);
+    brightSlider->setVisible(!isTx);
+    contrastSlider->setVisible(!isTx);
+    gammaSlider->setVisible(!isTx);
+    brightValue->setVisible(!isTx);
+    contrastValue->setVisible(!isTx);
+    gammaValue->setVisible(!isTx);
+    invertCheckBox->setVisible(!isTx);
+    tvDisplay->setVisible(!isTx);
 
     // Also hide/show labels
     for (int i = 0; i < txControlsLayout->rowCount(); ++i) {

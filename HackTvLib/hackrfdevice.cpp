@@ -202,6 +202,30 @@ int HackRfDevice::stop()
     }
 }
 
+void HackRfDevice::reset()
+{
+    // Tüm durumları sıfırla
+    m_isRunning.store(false);
+    m_isStopped.store(true);
+    mode = RX;
+
+    // Audio input'u temizle
+    if(m_audioInput) {
+        m_audioInput->stop();
+        m_audioInput.reset();
+    }
+
+    // Stream buffer'ları temizle
+    stream_tx.free();
+
+    // Modülasyon parametrelerini sıfırla
+    amplitude = 1.0f;
+    filter_size = 0.0f;
+    modulation_index = 5.0f;
+    interpolation = 48.0f;
+    decimation = 1;
+}
+
 int HackRfDevice::start(rf_mode _mode)
 {
     // Destroying kontrolü
@@ -266,21 +290,10 @@ int HackRfDevice::start(rf_mode _mode)
             printf("hackrf_start_rx() ok\n");
         }
         else if (mode == TX) {
-            m_audioInput = std::make_unique<PortAudioInput>(stream_tx);
-            if (!m_audioInput->start()) {
-                std::cerr << "Failed to start PortAudioInput" << std::endl;
-                m_isRunning.store(false);
-                m_isStopped.store(true);
-                cleanup();
-                return RF_ERROR;
-            }
-
             r = hackrf_start_tx(h_device, _tx_callback, this);
             if (r != HACKRF_SUCCESS) {
                 fprintf(stderr, "hackrf_start_tx() failed: %s (%d)\n",
-                        hackrf_error_name(static_cast<hackrf_error>(r)), r);
-                m_audioInput->stop();
-                m_audioInput.reset();
+                        hackrf_error_name(static_cast<hackrf_error>(r)), r);              
                 m_isRunning.store(false);
                 m_isStopped.store(true);
                 cleanup();
@@ -510,6 +523,21 @@ void HackRfDevice::setSampleRate(uint32_t sample_rate)
 void HackRfDevice::setInterpolation(float newInterpolation)
 {
     interpolation.store(newInterpolation);
+}
+
+void HackRfDevice::setMicEnabled(bool enable)
+{
+    if(!m_audioInput && enable)
+    {
+        m_audioInput = std::make_unique<PortAudioInput>(stream_tx);
+        if (!m_audioInput->start()) {
+            std::cerr << "Failed to start PortAudioInput" << std::endl;
+        }
+    }
+    else if (m_audioInput && !enable) {
+        m_audioInput->stop();
+        m_audioInput.reset();
+    }
 }
 
 void HackRfDevice::setDecimation(int newDecimation)

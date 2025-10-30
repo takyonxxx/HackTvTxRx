@@ -1,6 +1,7 @@
 #ifndef HACKTVLIB_H
 #define HACKTVLIB_H
 
+
 #ifdef _WIN32
 #ifdef HACKTVLIB_LIBRARY
 #define HACKTVLIB_EXPORT __declspec(dllexport)
@@ -23,24 +24,20 @@
 
 class HACKTVLIB_EXPORT HackTvLib : public QObject
 {
-    Q_OBJECT  // MOC için gerekli!
+    Q_OBJECT
 
 public:
-    using LogCallback = std::function<void(const std::string&)>;
-    using DataCallback = std::function<void(const int8_t*, size_t)>;
-
     explicit HackTvLib(QObject *parent = nullptr);
     ~HackTvLib();
 
+    using LogCallback = std::function<void(const std::string&)>;
+    using DataCallback = std::function<void(const int8_t*, size_t)>;
+
     bool start();
     bool stop();
-
     void setLogCallback(LogCallback callback);
     void setReceivedDataCallback(DataCallback callback);
     void clearCallbacks();
-    void resetLogCallback();
-    void resetReceivedDataCallback();
-
     bool setArguments(const std::vector<std::string>& args);
     void setMicEnabled(bool newMicEnabled);
     void setFrequency(uint64_t frequency_hz);
@@ -55,34 +52,22 @@ public:
     void setTxAmpGain(unsigned int tx_amp_gain);
     void setRxAmpGain(unsigned int rx_amp_gain);
 
-signals:
-    // Qt signals - callback'lere alternatif olarak kullanılabilir
-    void logMessage(const QString &message);
-    void dataReceivedSignal(const QByteArray &data);
-    void statusChanged(bool running);
-    void errorOccurred(const QString &error);
-
 private slots:
     void emitReceivedData(const int8_t *data, size_t data_len);
     void dataReceived(const int8_t* data, size_t data_len);
-
 private:
     LogCallback m_logCallback;
     DataCallback m_dataCallback;
-
     std::thread m_thread;
     std::mutex m_mutex;
     std::atomic<bool> m_abort;
     std::atomic<int> m_signal;
     std::vector<char*> m_argv;
-
     bool openDevice();
     bool setVideo();
     bool initAv();
     bool parseArguments();
-
-    bool micEnabled;
-
+    bool micEnabled = false;
     void log(const char* format, ...);
     void cleanupArgv();
     void rfTxLoop();

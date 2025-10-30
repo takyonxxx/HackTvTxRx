@@ -63,6 +63,7 @@ private slots:
     void onVgaSliderValueChanged(int value);
     void onRxAmpSliderValueChanged(int value);
     void updateDisplay(const QImage& image);
+    void clear();
     void exitApp();
 
 private:
@@ -92,10 +93,23 @@ private:
     QVBoxLayout *mainLayout;
 
     // UI Elements
+    QGroupBox* videoGroup;
+    QLabel* brightLabel;
+    QLabel* contrastLabel;
+    QLabel* gammaLabel;
+    QSlider* brightSlider;
+    QSlider* contrastSlider;
+    QSlider* gammaSlider;
+    QLabel* brightValue;
+    QLabel* contrastValue;
+    QLabel* gammaValue ;
+
+    // Invert checkbox in fourth row
+    QCheckBox* invertCheckBox;
     QComboBox *outputCombo, *channelCombo, *sampleRateCombo, *rxtxCombo, *inputTypeCombo, *modeCombo;
     QCheckBox *ampEnabled, *colorDisabled;
     QLineEdit *frequencyEdit, *inputFileEdit, *ffmpegOptionsEdit;
-    QPushButton *chooseFileButton, *executeButton, *exitButton;
+    QPushButton *chooseFileButton, *executeButton, *exitButton, *clearButton;
     QSlider *txAmplitudeSlider, *txFilterSizeSlider, *txModulationIndexSlider, *txInterpolationSlider;
     QDoubleSpinBox *txAmplitudeSpinBox, *txFilterSizeSpinBox, *txModulationIndexSpinBox, *txInterpolationSpinBox;
     QSpinBox *txAmpSpinBox;
