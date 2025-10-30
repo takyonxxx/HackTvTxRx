@@ -123,7 +123,7 @@ static void print_usage(void)
 }
 
 HackTvLib::HackTvLib()
-    : m_abort(false), m_signal(0), s(nullptr), m_rxTxMode(RX_MODE),  hackRfDevice(nullptr), rtlSdrDevice(nullptr)
+    : m_abort(false), m_signal(0), s(nullptr), m_rxTxMode(RX_MODE), micEnabled(false), hackRfDevice(nullptr), rtlSdrDevice(nullptr)
 {
 
 }
@@ -1142,6 +1142,25 @@ void HackTvLib::setReceivedDataCallback(DataCallback callback)
     m_dataCallback = std::move(callback);
 }
 
+void HackTvLib::clearCallbacks()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_logCallback = nullptr;
+    m_dataCallback = nullptr;
+}
+
+void HackTvLib::resetLogCallback()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_logCallback = nullptr;
+}
+
+void HackTvLib::resetReceivedDataCallback()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_dataCallback = nullptr;
+}
+
 void HackTvLib::emitReceivedData(const int8_t *data, size_t len)
 {
     if (m_dataCallback) {
@@ -1248,24 +1267,25 @@ void HackTvLib::rfRxLoop()
 
 bool HackTvLib::stop()
 {
-    if(m_rxTxMode == RX_MODE || micEnabled)
+    bool success = true;
+
+    log("Stopping HackTvLib...");
+
+    // 1. Stop RX devices if in RX mode
+    if(m_rxTxMode == RX_MODE)
     {
         if(strcmp(s->output_type, "hackrf") == 0)
         {
             if(hackRfDevice)
             {
-                if(hackRfDevice->stop() == 0)
-                {
-                    delete hackRfDevice;
-                    hackRfDevice = nullptr;  // ÖNEMLİ: nullptr yap
-                    log("HackTvLib stopped.");
-                    return true;
-                }
-                else
+                if(hackRfDevice->stop() != 0)
                 {
                     log("Failed to stop HackRF device");
-                    return false;
+                    success = false;
                 }
+                delete hackRfDevice;
+                hackRfDevice = nullptr;
+                log("HackRF device stopped.");
             }
         }
         else if(strcmp(s->output_type, "rtlsdr") == 0)
@@ -1274,52 +1294,62 @@ bool HackTvLib::stop()
             {
                 rtlSdrDevice->stop();
                 delete rtlSdrDevice;
-                rtlSdrDevice = nullptr;  // ÖNEMLİ: nullptr yap
-                log("RtlSdr stopped.");
-                return true;
+                rtlSdrDevice = nullptr;
+                log("RtlSdr device stopped.");
             }
         }
-        return false;
     }
 
-    // TX mode handling
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (!m_thread.joinable()) {
-        log("Thread not joinable");
-        return false;
+    // 2. Stop TX thread if running
+    if(m_thread.joinable())
+    {
+        m_abort.store(true, std::memory_order_relaxed);
+        m_thread.join();
+        log("TX thread stopped.");
     }
 
-    m_abort.store(true, std::memory_order_relaxed);
-    m_thread.join();
+    // 3. Stop TX HackRF device if in mic mode
+    if(micEnabled && hackRfDevice && m_rxTxMode == TX_MODE)
+    {
+        hackRfDevice->stop();
+        delete hackRfDevice;
+        hackRfDevice = nullptr;
+        log("TX HackRF (mic mode) stopped.");
+    }
 
-    // Close RF and video resources
-    rf_close(&s->rf);
-    vid_free(&s->vid);
-    av_ffmpeg_deinit();
+    // 4. Close RF and video resources
+    if(s)
+    {
+        rf_close(&s->rf);
+        vid_free(&s->vid);
+        av_ffmpeg_deinit();
+    }
 
     fprintf(stderr, "\n");
     log("HackTvLib stopped.");
 
-    return true;
+    return success;
 }
 
 bool HackTvLib::start()
 {
-
     /* Disable console output buffer in Windows */
 #ifdef WIN32
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 #endif
 
+    // Stop any running operations first
+    if(m_thread.joinable() || hackRfDevice || rtlSdrDevice)
+    {
+        log("Stopping previous operation before starting new one...");
+        stop();
+    }
+
+    // Initialize hacktv_t structure only once
     if(!s)
     {
-        s = new hacktv_t();
-        // veya
         s = (hacktv_t*)calloc(1, sizeof(hacktv_t));
-
-        // Initialize fields
-        s->output_type = strdup("hackrf");
 
         /* Default configuration */
         s->output_type = strdup("hackrf");
@@ -1333,10 +1363,9 @@ bool HackTvLib::start()
         s->interlace = 0;
         s->fit_mode = AV_FIT_FIT;
 
-        // Initialize the missing rational_t fields
-        s->min_aspect.num = 4;  // Default 4:3 minimum
+        s->min_aspect.num = 4;
         s->min_aspect.den = 3;
-        s->max_aspect.num = 16; // Default 16:9 maximum
+        s->max_aspect.num = 16;
         s->max_aspect.den = 9;
 
         s->repeat = 0;
@@ -1347,7 +1376,7 @@ bool HackTvLib::start()
         s->videocrypt = NULL;
         s->videocrypt2 = NULL;
         s->videocrypts = NULL;
-        s->eurocrypt = NULL;  // Also missing
+        s->eurocrypt = NULL;
         s->syster = 0;
         s->systeraudio = 0;
         s->acp = 0;
@@ -1365,12 +1394,12 @@ bool HackTvLib::start()
         s->mac_audio_quality = MAC_HIGH_QUALITY;
         s->mac_audio_companded = MAC_COMPANDED;
         s->mac_audio_protection = MAC_FIRST_LEVEL_PROTECTION;
-        s->sis = NULL;  // Also might be missing
-        s->swap_iq = 0;  // Missing
-        s->offset = 0;   // Missing
-        s->passthru = NULL;  // Missing
-        s->invert_video = 0;  // Missing
-        s->raw_bb_file = NULL;  // Missing
+        s->sis = NULL;
+        s->swap_iq = 0;
+        s->offset = 0;
+        s->passthru = NULL;
+        s->invert_video = 0;
+        s->raw_bb_file = NULL;
         s->frequency = 0;
         s->amp = 0;
         s->gain = 0;
@@ -1378,22 +1407,18 @@ bool HackTvLib::start()
         s->file_type = RF_INT16;
         s->raw_bb_blanking_level = 0;
         s->raw_bb_white_level = INT16_MAX;
-        s->secam_field_id = 0;  // Missing
-        s->list_modes = 0;  // Missing
-        s->json = 0;  // Missing
-        s->ffmt = NULL;  // Missing
-        s->fopts = NULL;  // Missing
+        s->secam_field_id = 0;
+        s->list_modes = 0;
+        s->json = 0;
+        s->ffmt = NULL;
+        s->fopts = NULL;
         s->audio_gain = 3.0;
-
-        m_rxTxMode = RX_MODE;
-        m_abort = false;
-        m_signal = 0;
     }
 
     log("HackTvLib starting.");
 
     if (!parseArguments()) {
-        cleanup();  // Hata durumunda temizle
+        log("Failed to parse arguments");
         return false;
     }
 
@@ -1405,9 +1430,13 @@ bool HackTvLib::start()
         getRxTxModeString(m_rxTxMode),
         s->output_type);
 
+    m_abort = false;
+    m_signal = 0;
+
+    // ========== RX MODE ==========
     if(m_rxTxMode == RX_MODE)
     {
-        log("Entering RX_MODE branch");
+        log("Starting in RX_MODE");
 
         if(strcmp(s->output_type, "hackrf") == 0)
         {
@@ -1422,10 +1451,12 @@ bool HackTvLib::start()
 
             if(hackRfDevice->start(rf_mode::RX) != RF_OK)
             {
-                log("Could not open HackRF ib RX. Please check the device.");
+                log("Could not open HackRF in RX. Please check the device.");
+                delete hackRfDevice;
+                hackRfDevice = nullptr;
                 return false;
             }
-            log("HackTvLib started at RX mode with HackRf.");
+            log("HackTvLib started in RX mode with HackRF.");
             return true;
         }
         else if(strcmp(s->output_type, "rtlsdr") == 0)
@@ -1434,21 +1465,32 @@ bool HackTvLib::start()
             rtlSdrDevice->setDataCallback([this](const int8_t* data, size_t len) {
                 this->dataReceived(data, len);
             });
+
             if (rtlSdrDevice->initialize(s->samplerate, s->frequency)) {
                 rtlSdrDevice->start();
-                log("HackTvLib started at RX mode with SdrRtl.");
+                log("HackTvLib started in RX mode with RTL-SDR.");
                 return true;
             }
             else
             {
-                log("Could not open RtlSdr RX. Please check the device.");
+                log("Could not open RTL-SDR in RX. Please check the device.");
+                delete rtlSdrDevice;
+                rtlSdrDevice = nullptr;
                 return false;
             }
         }
+
+        log("Unknown RX device type");
+        return false;
     }
 
-    if(micEnabled && m_rxTxMode == TX_MODE)
+    // ========== TX MODE ==========
+
+    // TX Mode with Microphone
+    if(micEnabled)
     {
+        log("Starting in TX mode with microphone");
+
         hackRfDevice = new HackRfDevice();
         hackRfDevice->setSampleRate(s->samplerate);
         hackRfDevice->setFrequency(s->frequency);
@@ -1457,36 +1499,42 @@ bool HackTvLib::start()
         if(hackRfDevice->start(rf_mode::TX) != RF_OK)
         {
             log("Could not open HackRF in TX. Please check the device.");
+            delete hackRfDevice;
+            hackRfDevice = nullptr;
             return false;
         }
 
-        log("HackTvLib started at TX mode. Mic Enabled.");
+        log("HackTvLib started in TX mode with microphone.");
         return true;
     }
 
-    if(m_rxTxMode != RX_MODE && optind >= m_argv.size())
+    // TX Mode with Video/File
+    if(optind >= m_argv.size())
     {
-        log("No input specified.");
+        log("No input specified for TX mode.");
         return false;
     }
 
-    if (m_thread.joinable()) {
+    if(!setVideo())
+    {
+        log("Failed to set video configuration");
         return false;
     }
-
-    if(m_rxTxMode != RX_MODE && !setVideo())
-        return false;
 
     if(!openDevice())
+    {
+        log("Failed to open device");
         return false;
+    }
 
-    if(m_rxTxMode != RX_MODE && !initAv())
+    if(!initAv())
+    {
+        log("Failed to initialize AV");
         return false;
+    }
 
-    m_abort = false;
-    m_signal = 0;
     m_thread = std::thread(&HackTvLib::rfTxLoop, this);
-    log("HackTvLib started at TX mode.");
+    log("HackTvLib started in TX mode with video/file.");
 
     return true;
 }

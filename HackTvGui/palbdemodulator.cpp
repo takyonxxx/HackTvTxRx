@@ -93,12 +93,6 @@ void PALBDemodulator::calculateLineParameters()
 
     // Reserve line buffer
     lineBuffer.resize(samplesPerLine * 2);
-
-    qDebug() << "Line parameters updated:"
-             << "Effective SR:" << effectiveSampleRate
-             << "Points/Line:" << pointsPerLine
-             << "Samples/Line:" << samplesPerLine
-             << "Fractional:" << fractionalOffset;
 }
 
 void PALBDemodulator::initializeFilters()
@@ -111,8 +105,6 @@ void PALBDemodulator::initializeFilters()
         if (effectiveSampleRate > 10e6) {
             numTaps = 33;  // Reduce for high sample rates
         }
-
-        qDebug() << "Designing filters with" << numTaps << "taps for SR:" << effectiveSampleRate;
 
         // Design lowpass filter for video (5.5 MHz cutoff)
         float videoCutoff = std::min(5.5e6, effectiveSampleRate * 0.4);
@@ -137,8 +129,6 @@ void PALBDemodulator::initializeFilters()
 
         realFilterState.clear();
         realFilterState.resize(numTaps, 0.0f);
-
-        qDebug() << "Filters initialized successfully";
     }
     catch (const std::exception& e) {
         qCritical() << "Failed to initialize filters:" << e.what();

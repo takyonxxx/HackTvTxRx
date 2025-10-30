@@ -15,10 +15,11 @@
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
+    tvDisplay(nullptr),
+    logBrowser(nullptr),
     m_hackTvLib(nullptr),
     palbDemodulator(nullptr),
-    palFrameBuffer(nullptr),
-    tvDisplay(nullptr),
+    palFrameBuffer(nullptr),   
     m_threadPool(nullptr),
     m_frequency(DEFAULT_FREQUENCY),
     m_sampleRate(DEFAULT_SAMPLE_RATE),
@@ -47,6 +48,7 @@ MainWindow::MainWindow(QWidget *parent)
     }
 
     tvDisplay = new TVDisplay(this);
+    logBrowser = new QTextBrowser(this);
     audioOutput = std::make_unique<AudioOutput>();
     // Set audio volume if available
     if (audioOutput) {
@@ -112,6 +114,8 @@ MainWindow::MainWindow(QWidget *parent)
     QTimer::singleShot(500, this, [this]() {
         initializeHackTvLib();
     });
+
+    logBrowser->append("Sdr device initialized.");
 }
 
 MainWindow::~MainWindow()
@@ -188,8 +192,6 @@ void MainWindow::setupUi()
 
     labelStyle = "QLabel { background-color: #ad6d0a ; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }";
 
-    setMinimumSize(QSize(1024, 768));
-
     QWidget *centralWidget = new QWidget(this);
     mainLayout = new QVBoxLayout(centralWidget);
 
@@ -218,6 +220,7 @@ void MainWindow::setupUi()
     //rxtxCombo->setCurrentIndex(0);
     onRxTxTypeChanged(0);
     setCurrentSampleRate(DEFAULT_SAMPLE_RATE);
+    showMaximized();
 }
 
 void MainWindow::setCurrentSampleRate(int sampleRate)
@@ -243,9 +246,7 @@ void MainWindow::setCurrentSampleRate(int sampleRate)
 }
 
 void MainWindow::initializeHackTvLib() {
-    try {
-        qDebug() << "Creating HackTvLib instance...";
-
+    try {     
         // Create instance
         m_hackTvLib = std::make_unique<HackTvLib>();
 
@@ -253,24 +254,6 @@ void MainWindow::initializeHackTvLib() {
             qDebug() << "Failed to create HackTvLib instance";
             return;
         }
-
-        // Set callbacks with safety checks
-        m_hackTvLib->setLogCallback([this](const std::string& msg) {
-            // Add safety check for shutdown
-            if (!m_shuttingDown.load()) {
-                handleLog(msg);
-            }
-        });
-
-        m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
-            // Add safety checks
-            if (!m_shuttingDown.load() && data && len > 0) {
-                handleReceivedData(data, len);
-            }
-        });
-
-        // Set mic disabled
-        m_hackTvLib->setMicEnabled(false);
 
         qDebug() << "HackTvLib initialized successfully";
 
@@ -515,7 +498,7 @@ void MainWindow::addVideoControls()
 {
     QGroupBox* videoGroup = new QGroupBox("Video Controls");
     QGridLayout* videoLayout = new QGridLayout(videoGroup);
-    videoLayout->setSpacing(10);
+    videoLayout->setSpacing(3);
 
     // Labels in first row
     QLabel* brightLabel = new QLabel("Brightness:");
@@ -526,17 +509,14 @@ void MainWindow::addVideoControls()
     QSlider* brightSlider = new QSlider(Qt::Horizontal);
     brightSlider->setRange(-50, 50);
     brightSlider->setValue(20);
-    brightSlider->setMinimumWidth(80);
 
     QSlider* contrastSlider = new QSlider(Qt::Horizontal);
     contrastSlider->setRange(50, 200);
     contrastSlider->setValue(130);
-    contrastSlider->setMinimumWidth(80);
 
     QSlider* gammaSlider = new QSlider(Qt::Horizontal);
     gammaSlider->setRange(50, 150);
     gammaSlider->setValue(80);
-    gammaSlider->setMinimumWidth(80);
 
     // Values in third row
     QLabel* brightValue = new QLabel("20");
@@ -548,7 +528,11 @@ void MainWindow::addVideoControls()
     QLabel* gammaValue = new QLabel("0.8");
     gammaValue->setAlignment(Qt::AlignCenter);
 
-    // Add to grid - 3x3 layout
+    // Invert checkbox in fourth row
+    QCheckBox* invertCheckBox = new QCheckBox("Invert Video ");
+    invertCheckBox->setChecked(true);
+
+    // Controls on the left (columns 0, 1, 2)
     videoLayout->addWidget(brightLabel, 0, 0, Qt::AlignCenter);
     videoLayout->addWidget(contrastLabel, 0, 1, Qt::AlignCenter);
     videoLayout->addWidget(gammaLabel, 0, 2, Qt::AlignCenter);
@@ -560,6 +544,19 @@ void MainWindow::addVideoControls()
     videoLayout->addWidget(brightValue, 2, 0, Qt::AlignCenter);
     videoLayout->addWidget(contrastValue, 2, 1, Qt::AlignCenter);
     videoLayout->addWidget(gammaValue, 2, 2, Qt::AlignCenter);
+
+    videoLayout->addWidget(invertCheckBox, 1, 3, Qt::AlignCenter);
+
+    const int PAL_HEIGHT = 576;
+    const int PAL_WIDTH = 625;
+
+    tvDisplay->setMinimumHeight(PAL_HEIGHT / 2);
+    tvDisplay->setMinimumWidth(PAL_WIDTH / 2);
+    videoLayout->addWidget(tvDisplay, 0, 4, 4, 1);  // row=0, col=4, rowSpan=4, colSpan=1
+
+    logBrowser->setMinimumHeight(PAL_HEIGHT / 2);
+    logBrowser->setMinimumWidth(PAL_WIDTH / 2);
+    videoLayout->addWidget(logBrowser, 0, 5, 4, 1);
 
     // Connect signals
     connect(brightSlider, &QSlider::valueChanged, [this, brightValue](int value) {
@@ -583,6 +580,12 @@ void MainWindow::addVideoControls()
         gammaValue->setText(QString::number(m_videoGamma, 'f', 2));
         if (palbDemodulator) {
             palbDemodulator->setVideoGamma(m_videoGamma);
+        }
+    });
+
+    connect(invertCheckBox, &QCheckBox::toggled, [this](bool checked) {
+        if (palbDemodulator) {
+            palbDemodulator->setInvertVideo(checked);
         }
     });
 
@@ -863,18 +866,6 @@ void MainWindow::addinputTypeGroup()
 
     mainLayout->addWidget(inputTypeGroup);
     mainLayout->addWidget(modeGroup);
-
-    logBrowser = new QTextBrowser(this);
-
-    QGroupBox *logGroup = new QGroupBox("Info", this);
-    QHBoxLayout *logLayout = new QHBoxLayout(logGroup);
-    logLayout->addWidget(logBrowser);    
-    tvDisplay->setMinimumHeight(350);
-    logLayout->addWidget(tvDisplay);
-    logLayout->setStretchFactor(logBrowser, 1);  // Changed from 1 to 2
-    logLayout->setStretchFactor(tvDisplay, 1);   // Changed from 2 to 1
-    mainLayout->addWidget(logGroup);
-    logGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     QHBoxLayout *buttonLayout = new QHBoxLayout();
     executeButton = new QPushButton("Start", this);
@@ -1251,7 +1242,6 @@ void MainWindow::executeCommand()
     if (executeButton->text() == "Start")
     {
         palDemodulationInProgress.storeRelease(0);
-
         QStringList args = buildCommand();
 
         if(mode == "rx")
@@ -1265,14 +1255,12 @@ void MainWindow::executeCommand()
         cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
         cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
 
-        // Convert QStringList to std::vector<std::string>
         std::vector<std::string> stdArgs;
         stdArgs.reserve(args.size());
         for (const QString& arg : args) {
             stdArgs.push_back(arg.toStdString());
         }
 
-        // CHECK: Is m_hackTvLib null?
         if (!m_hackTvLib) {
             qDebug() << "ERROR: m_hackTvLib is null!";
             logBrowser->append("HackTvLib not initialized!");
@@ -1281,6 +1269,21 @@ void MainWindow::executeCommand()
 
         m_hackTvLib->setArguments(stdArgs);
         m_hackTvLib->setAmplitude(tx_amplitude);
+
+        // Callback'leri set et
+        m_hackTvLib->setLogCallback([this](const std::string& msg) {
+            if (!m_shuttingDown.load()) {
+                handleLog(msg);
+            }
+        });
+
+        m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
+            if (!m_shuttingDown.load() && data && len > 0) {
+                handleReceivedData(data, len);
+            }
+        });
+
+        // Start denemesi
         if(!m_hackTvLib->start()) {
             logBrowser->append("Failed to start HackTvLib.");
             return;
@@ -1296,8 +1299,9 @@ void MainWindow::executeCommand()
         try
         {
             palDemodulationInProgress.storeRelease(0);
-
             m_isProcessing.store(false);
+
+            m_hackTvLib->clearCallbacks();
 
             if(m_hackTvLib->stop())
                 executeButton->setText("Start");

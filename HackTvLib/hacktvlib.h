@@ -1,6 +1,5 @@
 #ifndef HACKTVLIB_H
 #define HACKTVLIB_H
-
 #include <QStringList>
 #include <functional>
 #include <string>
@@ -102,8 +101,14 @@ public:
 
     bool start();
     bool stop();
+
     void setLogCallback(LogCallback callback);
     void setReceivedDataCallback(DataCallback callback);
+
+    void clearCallbacks();                    // Tüm callback'leri temizle
+    void resetLogCallback();                  // Sadece log callback'i temizle
+    void resetReceivedDataCallback();         // Sadece data callback'i temizle
+
     bool setArguments(const std::vector<std::string>& args);
     void setMicEnabled(bool newMicEnabled);
     void setFrequency(uint64_t frequency_hz);
@@ -126,6 +131,7 @@ private slots:
 private:
     LogCallback m_logCallback;
     DataCallback m_dataCallback;
+
     std::thread m_thread;
     std::mutex m_mutex;
     std::atomic<bool> m_abort;
@@ -140,7 +146,9 @@ private:
     bool setVideo();
     bool initAv();
     bool parseArguments();
+
     bool micEnabled = false;
+
     void log(const char* format, ...);
     void cleanupArgv();
     void rfTxLoop();

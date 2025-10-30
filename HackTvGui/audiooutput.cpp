@@ -15,8 +15,6 @@ AudioOutput::AudioOutput(QObject *parent)
     moveToThread(&audioWriterThread);
     connect(&audioWriterThread, &QThread::started, this, &AudioOutput::audioWriterLoop);
     audioWriterThread.start();
-
-    qDebug() << "AudioOutput initialized with circular buffer, capacity:" << RESERVE_SIZE;
 }
 
 AudioOutput::~AudioOutput()

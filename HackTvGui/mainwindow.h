@@ -98,8 +98,7 @@ private:
     QPushButton *chooseFileButton, *executeButton, *exitButton;
     QSlider *txAmplitudeSlider, *txFilterSizeSlider, *txModulationIndexSlider, *txInterpolationSlider;
     QDoubleSpinBox *txAmplitudeSpinBox, *txFilterSizeSpinBox, *txModulationIndexSpinBox, *txInterpolationSpinBox;
-    QSpinBox *txAmpSpinBox;;
-    QTextBrowser *logBrowser;
+    QSpinBox *txAmpSpinBox;
     QLabel *volumeLabel, *volumeLevelLabel, *lnaLabel, *lnaLevelLabel, *vgaLabel, *vgaLevelLabel,
         *rxAmpLabel, *rxAmpLevelLabel;
     QSlider *volumeSlider, *lnaSlider, *vgaSlider, *txAmpSlider, *rxAmpSlider;
@@ -115,11 +114,12 @@ private:
     QGroupBox *outputGroup, *inputTypeGroup, *modeGroup, *rxGroup;
 
     // Member variables
+    TVDisplay *tvDisplay;
+    QTextBrowser *logBrowser;
     std::unique_ptr<HackTvLib> m_hackTvLib;
     std::unique_ptr<AudioOutput> audioOutput;
     PALBDemodulator *palbDemodulator;
-    FrameBuffer* palFrameBuffer;
-    TVDisplay *tvDisplay;
+    FrameBuffer* palFrameBuffer;    
 
     QThreadPool* m_threadPool;
     QTimer *logTimer;

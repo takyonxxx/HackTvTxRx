@@ -21,6 +21,9 @@ public:
     bool stop();
     void setLogCallback(LogCallback callback);
     void setReceivedDataCallback(DataCallback callback);
+    void clearCallbacks();
+    void resetLogCallback();
+    void resetReceivedDataCallback();
     bool setArguments(const std::vector<std::string>& args);
     void setMicEnabled(bool newMicEnabled);
     void setFrequency(uint64_t frequency_hz);
