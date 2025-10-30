@@ -119,7 +119,14 @@ MainWindow::MainWindow(QWidget *parent)
 }
 
 MainWindow::~MainWindow()
-{ 
+{
+    m_shuttingDown.store(true);
+
+    if (m_hackTvLib) {
+        m_hackTvLib->clearCallbacks();
+        m_hackTvLib->stop();
+        // Qt otomatik siler (parent-child)
+    }
 }
 
 void MainWindow::setupUi()
@@ -197,7 +204,9 @@ void MainWindow::setCurrentSampleRate(int sampleRate)
 
 void MainWindow::initializeHackTvLib()
 {
-    m_hackTvLib = std::make_unique<HackTvLib>();
+    // m_hackTvLib = std::make_unique<HackTvLib>();
+
+    m_hackTvLib = new HackTvLib(this);
 
     if (!m_hackTvLib) {
         qDebug() << "Failed to create HackTvLib instance";
@@ -1181,7 +1190,6 @@ void MainWindow::executeCommand()
 {
     if (executeButton->text() == "Start")
     {
-
         if (!m_hackTvLib) {
             qDebug() << "ERROR: m_hackTvLib is null!";
             logBrowser->append("HackTvLib not initialized!");
@@ -1211,20 +1219,29 @@ void MainWindow::executeCommand()
         m_hackTvLib->setArguments(stdArgs);
         m_hackTvLib->setAmplitude(tx_amplitude);
 
-        // Callback'leri set et
+        // Thread-safe callbacks
         m_hackTvLib->setLogCallback([this](const std::string& msg) {
-            if (!m_shuttingDown.load()) {
-                handleLog(msg);
+            if (!m_shuttingDown.load() && this && m_hackTvLib) {
+                QMetaObject::invokeMethod(this, [this, msg]() {
+                    if (this && !m_shuttingDown.load()) {
+                        pendingLogs.append(QString::fromStdString(msg));
+                    }
+                }, Qt::QueuedConnection);
             }
         });
 
         m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
-            if (!m_shuttingDown.load() && data && len > 0) {
-                handleReceivedData(data, len);
+            if (!m_shuttingDown.load() && this && m_hackTvLib && data && len == 262144) {
+                // Copy data to avoid dangling pointer
+                QByteArray dataCopy(reinterpret_cast<const char*>(data), len);
+                QMetaObject::invokeMethod(this, [this, dataCopy]() {
+                    if (this && !m_shuttingDown.load()) {
+                        handleReceivedData(reinterpret_cast<const int8_t*>(dataCopy.data()), dataCopy.size());
+                    }
+                }, Qt::QueuedConnection);
             }
         });
 
-        // Start denemesi
         if(!m_hackTvLib->start()) {
             logBrowser->append("Failed to start HackTvLib.");
             return;
@@ -1237,7 +1254,6 @@ void MainWindow::executeCommand()
     }
     else if (executeButton->text() == "Stop")
     {
-
         if (palFrameBuffer) {
             palFrameBuffer->clear();
         }
@@ -1245,13 +1261,14 @@ void MainWindow::executeCommand()
         palDemodulationInProgress.storeRelease(0);
         m_isProcessing.store(false);
 
-        m_hackTvLib->clearCallbacks();
+        if (m_hackTvLib) {
+            m_hackTvLib->clearCallbacks();
 
-        if(m_hackTvLib->stop())
-            executeButton->setText("Start");
-        else
-            logBrowser->append("Failed to stop HackTvLib.");
-
+            if(m_hackTvLib->stop())
+                executeButton->setText("Start");
+            else
+                logBrowser->append("Failed to stop HackTvLib.");
+        }
     }
 }
 
@@ -1583,6 +1600,13 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 void MainWindow::exitApp()
 {
+    m_shuttingDown.store(true);
+
+    if (m_hackTvLib) {
+        m_hackTvLib->clearCallbacks();
+        m_hackTvLib->stop();
+        // Qt otomatik siler (parent-child)
+    }
 
  try {
 

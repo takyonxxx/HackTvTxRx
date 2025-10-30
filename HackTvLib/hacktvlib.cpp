@@ -217,6 +217,8 @@ void HackTvLib::setFrequency(uint64_t frequency_hz)
 
 void HackTvLib::setSampleRate(uint32_t sample_rate)
 {
+    if (!s) return;
+
     if(strcmp(s->output_type, "hackrf") == 0)
     {
         if (hackRfDevice) {
