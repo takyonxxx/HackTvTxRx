@@ -111,67 +111,15 @@ MainWindow::MainWindow(QWidget *parent)
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
     logTimer->start(500);
 
+    logBrowser->append("Sdr device initialized.");
+
     QTimer::singleShot(500, this, [this]() {
         initializeHackTvLib();
     });
-
-    logBrowser->append("Sdr device initialized.");
 }
 
 MainWindow::~MainWindow()
-{
-    // Prevent destructor from running during shutdown
-    if (m_shuttingDown.load()) {
-        return;
-    }
-
-    m_shuttingDown.store(true);
-
-    try {
-        qDebug() << "MainWindow destructor starting...";
-
-        if (palFrameBuffer) {
-            delete palFrameBuffer;
-            palFrameBuffer = nullptr;
-        }
-
-        if (palbDemodulator) {
-            delete palbDemodulator;
-            palbDemodulator = nullptr;
-        }
-
-        // Stop timers first
-        if (logTimer) {
-            logTimer->stop();
-        }
-
-        // Stop processing
-        m_isProcessing.store(false);
-
-        // Wait briefly for threads
-        if (m_threadPool) {
-            m_threadPool->waitForDone(500);
-        }
-
-        // Clean up in reverse order of creation
-        fmDemodulator.reset();
-        rationalResampler.reset();
-        lowPassFilter.reset();
-        audioOutput.reset();
-        m_hackTvLib.reset();
-
-        // Thread pool last
-        if (m_threadPool) {
-            delete m_threadPool;
-            m_threadPool = nullptr;
-        }
-
-        qDebug() << "MainWindow destructor completed";
-
-    } catch (...) {
-        // Don't throw from destructor
-        qDebug() << "Exception in destructor - ignored";
-    }
+{ 
 }
 
 void MainWindow::setupUi()
@@ -191,6 +139,8 @@ void MainWindow::setupUi()
                   "}";
 
     labelStyle = "QLabel { background-color: #ad6d0a ; color: white; border-radius: 5px; font-weight: bold; padding: 2px; }";
+
+    setWindowTitle("HackTvRxTx");
 
     QWidget *centralWidget = new QWidget(this);
     mainLayout = new QVBoxLayout(centralWidget);
@@ -220,7 +170,7 @@ void MainWindow::setupUi()
     //rxtxCombo->setCurrentIndex(0);
     onRxTxTypeChanged(0);
     setCurrentSampleRate(DEFAULT_SAMPLE_RATE);
-    showMaximized();
+    //showMaximized();
 }
 
 void MainWindow::setCurrentSampleRate(int sampleRate)
@@ -245,25 +195,16 @@ void MainWindow::setCurrentSampleRate(int sampleRate)
     }
 }
 
-void MainWindow::initializeHackTvLib() {
-    try {     
-        // Create instance
-        m_hackTvLib = std::make_unique<HackTvLib>();
+void MainWindow::initializeHackTvLib()
+{
+    m_hackTvLib = std::make_unique<HackTvLib>();
 
-        if (!m_hackTvLib) {
-            qDebug() << "Failed to create HackTvLib instance";
-            return;
-        }
-
-        qDebug() << "HackTvLib initialized successfully";
-
-    } catch (const std::exception& e) {
-        qDebug() << QString("HackTvLib initialization failed: %1").arg(e.what());
-        m_hackTvLib.reset();  // Clean up on failure
-    } catch (...) {
-        qDebug() << "HackTvLib initialization failed with unknown exception";
-        m_hackTvLib.reset();  // Clean up on failure
+    if (!m_hackTvLib) {
+        qDebug() << "Failed to create HackTvLib instance";
+        return;
     }
+
+    qDebug() << "HackTvLib initialized successfully";
 }
 
 void MainWindow::handleReceivedData(const int8_t *data, size_t len)
@@ -540,23 +481,26 @@ void MainWindow::addVideoControls()
     videoLayout->addWidget(brightSlider, 1, 0);
     videoLayout->addWidget(contrastSlider, 1, 1);
     videoLayout->addWidget(gammaSlider, 1, 2);
+    videoLayout->addWidget(invertCheckBox, 1, 3);
 
     videoLayout->addWidget(brightValue, 2, 0, Qt::AlignCenter);
     videoLayout->addWidget(contrastValue, 2, 1, Qt::AlignCenter);
     videoLayout->addWidget(gammaValue, 2, 2, Qt::AlignCenter);
 
-    videoLayout->addWidget(invertCheckBox, 1, 3, Qt::AlignCenter);
+    brightSlider->setFixedWidth(120);
+    contrastSlider->setFixedWidth(120);
+    gammaSlider->setFixedWidth(120);
 
+    // gammaValue'nun altında: logBrowser (sol) ve invertCheckBox (sağ) yan yana (row 3, columns 0-3)
     const int PAL_HEIGHT = 576;
     const int PAL_WIDTH = 625;
 
-    tvDisplay->setMinimumHeight(PAL_HEIGHT / 2);
-    tvDisplay->setMinimumWidth(PAL_WIDTH / 2);
-    videoLayout->addWidget(tvDisplay, 0, 4, 4, 1);  // row=0, col=4, rowSpan=4, colSpan=1
+    videoLayout->addWidget(logBrowser, 3, 0, 1, 4);
 
-    logBrowser->setMinimumHeight(PAL_HEIGHT / 2);
-    logBrowser->setMinimumWidth(PAL_WIDTH / 2);
-    videoLayout->addWidget(logBrowser, 0, 5, 4, 1);
+    // En sağda: tvDisplay tek başına (column 4)
+    tvDisplay->setMinimumHeight(3 * PAL_HEIGHT / 5);
+    tvDisplay->setMinimumWidth(3 * PAL_WIDTH / 5);
+    videoLayout->addWidget(tvDisplay, 0, 4, 4, 1);  // row=0, col=4, rowSpan=4, colSpan=1
 
     // Connect signals
     connect(brightSlider, &QSlider::valueChanged, [this, brightValue](int value) {
@@ -1235,12 +1179,15 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
 
 void MainWindow::executeCommand()
 {
-    if (palFrameBuffer) {
-        palFrameBuffer->clear();
-    }
-
     if (executeButton->text() == "Start")
     {
+
+        if (!m_hackTvLib) {
+            qDebug() << "ERROR: m_hackTvLib is null!";
+            logBrowser->append("HackTvLib not initialized!");
+            return;
+        }
+
         palDemodulationInProgress.storeRelease(0);
         QStringList args = buildCommand();
 
@@ -1259,12 +1206,6 @@ void MainWindow::executeCommand()
         stdArgs.reserve(args.size());
         for (const QString& arg : args) {
             stdArgs.push_back(arg.toStdString());
-        }
-
-        if (!m_hackTvLib) {
-            qDebug() << "ERROR: m_hackTvLib is null!";
-            logBrowser->append("HackTvLib not initialized!");
-            return;
         }
 
         m_hackTvLib->setArguments(stdArgs);
@@ -1296,21 +1237,21 @@ void MainWindow::executeCommand()
     }
     else if (executeButton->text() == "Stop")
     {
-        try
-        {
-            palDemodulationInProgress.storeRelease(0);
-            m_isProcessing.store(false);
 
-            m_hackTvLib->clearCallbacks();
+        if (palFrameBuffer) {
+            palFrameBuffer->clear();
+        }
 
-            if(m_hackTvLib->stop())
-                executeButton->setText("Start");
-            else
-                logBrowser->append("Failed to stop HackTvLib.");
-        }
-        catch (const std::exception& e) {
-            QMessageBox::critical(this, "Error", QString("HackTvLib error: %1").arg(e.what()));
-        }
+        palDemodulationInProgress.storeRelease(0);
+        m_isProcessing.store(false);
+
+        m_hackTvLib->clearCallbacks();
+
+        if(m_hackTvLib->stop())
+            executeButton->setText("Start");
+        else
+            logBrowser->append("Failed to stop HackTvLib.");
+
     }
 }
 
@@ -1636,83 +1577,43 @@ void MainWindow::onChannelChanged(int index)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    qDebug() << "Window close event received";
-
-    // Call safe shutdown instead of default close
     event->ignore(); // Prevent default close
-
-    // Do safe shutdown
     exitApp();
 }
 
 void MainWindow::exitApp()
 {
-    // Prevent multiple exit calls
-    if (m_shuttingDown.exchange(true)) {
-        return;
-    }
 
-    saveSettings();
-
-    try {
-
-        palDemodulationInProgress = 0;
-        audioDemodulationInProgress = 0;
-
-        // 1. Stop all timers first
-        if (logTimer) {
-            logTimer->stop();
-        }
-
-        // 2. Stop processing
-        if (m_isProcessing.load()) {
-            m_isProcessing.store(false);
-        }
-
-        // 3. Wait for threads to finish
-        if (m_threadPool) {
-            m_threadPool->waitForDone(500); // Reduced timeout
-        }
-
-        if (m_hackTvLib) {
-            m_hackTvLib.reset();
-        }
-
-        audioOutput.reset();
-        fmDemodulator.reset();
-        rationalResampler.reset();
-        lowPassFilter.reset();
-
-        qDebug() << "Exiting...";
+ try {
 
 #ifdef Q_OS_WIN
-        DWORD currentPID = GetCurrentProcessId();
-        HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, currentPID);
-        if (hProcess != NULL)
-        {
-            TerminateProcess(hProcess, 0);
-            CloseHandle(hProcess);
-        }
-#else \ \
+    DWORD currentPID = GetCurrentProcessId();
+    HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, currentPID);
+    if (hProcess != NULL)
+    {
+        TerminateProcess(hProcess, 0);
+        CloseHandle(hProcess);
+    }
+#else
     // FIXED: Use Qt's proper shutdown instead of exit(0)
-        QApplication::quit();
+    QApplication::quit();
 #endif
 
-    } catch (const std::exception& e) {
-        qDebug() << "Exception in exitApp:" << e.what();
+} catch (const std::exception& e) {
+    qDebug() << "Exception in exitApp:" << e.what();
 #ifdef Q_OS_WIN
-        // Force exit on Windows if there's an exception
-        std::exit(1);
-#else \ \
+    // Force exit on Windows if there's an exception
+    std::exit(1);
+#else
     // Use Qt quit on Linux even if there's an exception
-        QApplication::quit();
+    QApplication::quit();
 #endif
 
-    } catch (const std::exception& e) {
-        qDebug() << "Exception during shutdown:" << e.what();
-        std::exit(0);
-    } catch (...) {
-        qDebug() << "Unknown exception during shutdown";
-        std::exit(0);
-    }
+} catch (const std::exception& e) {
+    qDebug() << "Exception during shutdown:" << e.what();
+    std::exit(0);
+} catch (...) {
+    qDebug() << "Unknown exception during shutdown";
+    std::exit(0);
+}
 }

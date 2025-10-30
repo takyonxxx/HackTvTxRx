@@ -1,5 +1,17 @@
 #ifndef HACKTVLIB_H
 #define HACKTVLIB_H
+
+// Basit export macro (hacktvlib_global.h'a gerek yok)
+#ifdef _WIN32
+#ifdef HACKTVLIB_LIBRARY
+#define HACKTVLIB_EXPORT __declspec(dllexport)
+#else
+#define HACKTVLIB_EXPORT __declspec(dllimport)
+#endif
+#else
+#define HACKTVLIB_EXPORT  // Linux için boş
+#endif
+
 #include <QStringList>
 #include <functional>
 #include <string>
@@ -90,7 +102,7 @@ typedef struct {
     rf_t rf;
 } hacktv_t;
 
-class HackTvLib
+class HACKTVLIB_EXPORT HackTvLib
 {
 public:
     using LogCallback = std::function<void(const std::string&)>;

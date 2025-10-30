@@ -1,17 +1,15 @@
-QT += core multimedia
+QT += core
 
 TEMPLATE = lib
-CONFIG += c++17 shared
+CONFIG += shared c++17
 
 DEFINES += HACKTVLIB_LIBRARY
-DEFINES += _USE_MATH_DEFINES
-DEFINES += HAVE_HACKRF
 
-win32 {
-    DEFINES += _WIN32
-    DEFINES += _WIN32_WINNT=0x0601
-    DEFINES += WINVER=0x0601
-    DEFINES += __USE_MINGW_ANSI_STDIO=1
+win32-g++ {
+
+    QMAKE_LFLAGS += -Wl,-e,_DllMainCRTStartup
+    QMAKE_LFLAGS -= -mdll
+    QMAKE_LFLAGS += -shared
 
     MSYS2_PATH = C:/msys64/mingw64
 
@@ -209,7 +207,6 @@ SOURCES += \
     rtlsdrdevice.cpp
 
 HEADERS += \
-    HackTvLib_global.h \
     audioinput.h \
     constants.h \
     hackrfdevice.h \

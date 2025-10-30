@@ -15,7 +15,6 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvRe
 {
     return DllEntryPoint(hinstDLL, fdwReason, lpvReserved);
 }
-
 #endif
 
 #include "hacktvlib.h"
@@ -313,18 +312,12 @@ bool HackTvLib::openDevice()
 {
     if(strcmp(s->output_type, "hackrf") == 0)
     {
-#ifdef HAVE_HACKRF
         if(rf_hackrf_open(m_rxTxMode, &s->rf, s->output, s->vid.sample_rate, s->frequency, s->amp) != RF_OK)
         {
             vid_free(&s->vid);
             log("Could not open HackRF. Please check the device.");
             return false;
         }
-#else
-        fprintf(stderr, "HackRF support is not available in this build of hacktv.\n");
-        vid_free(&s->vid);
-        return false;
-#endif
     }
     else if(strcmp(s->output_type, "file") == 0)
     {

@@ -117,6 +117,7 @@ private:
     TVDisplay *tvDisplay;
     QTextBrowser *logBrowser;
     std::unique_ptr<HackTvLib> m_hackTvLib;
+    //HackTvLib* m_hackTvLib;
     std::unique_ptr<AudioOutput> audioOutput;
     PALBDemodulator *palbDemodulator;
     FrameBuffer* palFrameBuffer;    

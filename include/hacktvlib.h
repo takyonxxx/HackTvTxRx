@@ -1,6 +1,14 @@
 #ifndef HACKTVLIB_H
 #define HACKTVLIB_H
-
+#ifdef _WIN32
+    #ifdef HACKTVLIB_LIBRARY
+        #define HACKTVLIB_EXPORT __declspec(dllexport)
+    #else
+        #define HACKTVLIB_EXPORT __declspec(dllimport)
+    #endif
+#else
+    #define HACKTVLIB_EXPORT  // Linux için boş
+#endif
 #include <QStringList>
 #include <functional>
 #include <string>
@@ -10,7 +18,8 @@
 #include <vector>
 #include <mutex>
 
-class HackTvLib{
+class HACKTVLIB_EXPORT HackTvLib 
+{
 public:
     using LogCallback = std::function<void(const std::string&)>;
     using DataCallback = std::function<void(const int8_t*, size_t)>;
