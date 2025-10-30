@@ -144,7 +144,7 @@ private:
     LogCallback m_logCallback;
     DataCallback m_dataCallback;
 
-    std::thread m_thread;
+    std::thread m_txThread;
     std::mutex m_mutex;
     std::atomic<bool> m_abort;
     std::atomic<int> m_signal;
