@@ -1,14 +1,17 @@
 #ifndef HACKTVLIB_H
 #define HACKTVLIB_H
+
 #ifdef _WIN32
-    #ifdef HACKTVLIB_LIBRARY
-        #define HACKTVLIB_EXPORT __declspec(dllexport)
-    #else
-        #define HACKTVLIB_EXPORT __declspec(dllimport)
-    #endif
+#ifdef HACKTVLIB_LIBRARY
+#define HACKTVLIB_EXPORT __declspec(dllexport)
 #else
-    #define HACKTVLIB_EXPORT  // Linux için boş
+#define HACKTVLIB_EXPORT __declspec(dllimport)
 #endif
+#else
+#define HACKTVLIB_EXPORT  // Linux için boş
+#endif
+
+#include <QObject>
 #include <QStringList>
 #include <functional>
 #include <string>
@@ -18,21 +21,26 @@
 #include <vector>
 #include <mutex>
 
-class HACKTVLIB_EXPORT HackTvLib 
+class HACKTVLIB_EXPORT HackTvLib : public QObject
 {
+    Q_OBJECT  // MOC için gerekli!
+
 public:
     using LogCallback = std::function<void(const std::string&)>;
     using DataCallback = std::function<void(const int8_t*, size_t)>;
 
-    HackTvLib();
+    explicit HackTvLib(QObject *parent = nullptr);
     ~HackTvLib();
+
     bool start();
     bool stop();
+
     void setLogCallback(LogCallback callback);
     void setReceivedDataCallback(DataCallback callback);
     void clearCallbacks();
     void resetLogCallback();
     void resetReceivedDataCallback();
+
     bool setArguments(const std::vector<std::string>& args);
     void setMicEnabled(bool newMicEnabled);
     void setFrequency(uint64_t frequency_hz);
@@ -47,22 +55,34 @@ public:
     void setTxAmpGain(unsigned int tx_amp_gain);
     void setRxAmpGain(unsigned int rx_amp_gain);
 
+signals:
+    // Qt signals - callback'lere alternatif olarak kullanılabilir
+    void logMessage(const QString &message);
+    void dataReceivedSignal(const QByteArray &data);
+    void statusChanged(bool running);
+    void errorOccurred(const QString &error);
+
 private slots:
     void emitReceivedData(const int8_t *data, size_t data_len);
     void dataReceived(const int8_t* data, size_t data_len);
+
 private:
     LogCallback m_logCallback;
     DataCallback m_dataCallback;
+
     std::thread m_thread;
     std::mutex m_mutex;
     std::atomic<bool> m_abort;
     std::atomic<int> m_signal;
     std::vector<char*> m_argv;
+
     bool openDevice();
     bool setVideo();
     bool initAv();
     bool parseArguments();
-    bool micEnabled = false;
+
+    bool micEnabled;
+
     void log(const char* format, ...);
     void cleanupArgv();
     void rfTxLoop();

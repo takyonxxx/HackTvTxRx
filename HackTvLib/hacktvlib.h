@@ -12,6 +12,7 @@
 #define HACKTVLIB_EXPORT  // Linux için boş
 #endif
 
+#include <QObject>
 #include <QStringList>
 #include <functional>
 #include <string>
@@ -102,14 +103,16 @@ typedef struct {
     rf_t rf;
 } hacktv_t;
 
-class HACKTVLIB_EXPORT HackTvLib
+class HACKTVLIB_EXPORT HackTvLib : public QObject
 {
+    Q_OBJECT  // ← Bu macro MOC için gerekli!
+
 public:
+    explicit HackTvLib(QObject *parent = nullptr);
+    ~HackTvLib();
+
     using LogCallback = std::function<void(const std::string&)>;
     using DataCallback = std::function<void(const int8_t*, size_t)>;
-
-    HackTvLib();
-    ~HackTvLib();
 
     bool start();
     bool stop();

@@ -121,8 +121,16 @@ static void print_usage(void)
         );
 }
 
-HackTvLib::HackTvLib()
-    : m_txThread(), m_abort(false), m_signal(0), s(nullptr), m_rxTxMode(RX_MODE), micEnabled(false), hackRfDevice(nullptr), rtlSdrDevice(nullptr)
+HackTvLib::HackTvLib(QObject *parent)
+    : QObject(parent)
+    , m_txThread()
+    , m_abort(false)
+    , m_signal(0)
+    , s(nullptr)
+    , m_rxTxMode(RX_MODE)
+    , micEnabled(false)
+    , hackRfDevice(nullptr)
+    , rtlSdrDevice(nullptr)
 {
 
 }

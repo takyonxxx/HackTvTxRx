@@ -113,7 +113,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     logBrowser->append("Sdr device initialized.");
 
-    QTimer::singleShot(500, this, [this]() {
+    QTimer::singleShot(1000, this, [this]() {
         initializeHackTvLib();
     });
 }
