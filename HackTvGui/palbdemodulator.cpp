@@ -363,9 +363,33 @@ std::vector<float> PALBDemodulator::amDemodulate(
 
     std::vector<float> demod(signal.size());
 
-    // Basic envelope detection - this is correct!
+    // Basic envelope detection
     for (size_t i = 0; i < signal.size(); i++) {
         demod[i] = std::abs(signal[i]);
+    }
+
+    // CRITICAL: Apply AM-specific scaling and level shift
+    // This is what SDRangel does - automatic amplitude scaling
+
+    // Find the sync tip (minimum) and peak white (maximum)
+    auto minmax = std::minmax_element(demod.begin(), demod.end());
+    float syncTip = *minmax.first;
+    float peakWhite = *minmax.second;
+
+    // Apply scale factor (like SDRangel's AM scale control)
+    float range = (peakWhite - syncTip) * amScaleFactor;
+
+    // Normalize with proper black level positioning
+    for (size_t i = 0; i < signal.size(); i++) {
+        // Shift and scale to 0-1 range
+        demod[i] = (demod[i] - syncTip) / range;
+
+        // Apply level shift to position black level at ~0.3
+        demod[i] = demod[i] + amLevelShift;
+
+        // Ensure black level is around 0.3 (PAL standard)
+        if (demod[i] < 0.0f) demod[i] = 0.0f;
+        if (demod[i] > 1.0f) demod[i] = 1.0f;
     }
 
     return demod;
