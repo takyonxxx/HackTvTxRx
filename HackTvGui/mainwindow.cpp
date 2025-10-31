@@ -56,49 +56,60 @@ MainWindow::MainWindow(QWidget *parent)
     }
 
     // PAL-B/G System Constants
-    const int PAL_TOTAL_LINES = 625;
+    // PAL-B/G System Constants (Turkey standard)
     const int PAL_VISIBLE_LINES = 576;
     const int PAL_VBI_LINES_PER_FIELD = 25;
-    const double PAL_LINE_DURATION = 64e-6;
-    const double PAL_FRAME_DURATION = 0.05;
+    const int PAL_PIXELS_PER_LINE = 720;
+    const double PAL_LINE_DURATION = 64e-6;    // 64 microseconds
+    const double PAL_FRAME_DURATION = 0.04;    // 25 Hz frame rate
 
     // Initialize with correct parameters
     palbDemodulator = new PALBDemodulator(m_sampleRate);
-    palFrameBuffer = new FrameBuffer(m_sampleRate, PAL_FRAME_DURATION); // 0.02s per field
+    palFrameBuffer = new FrameBuffer(m_sampleRate, PAL_FRAME_DURATION); // 0.04s per frame
 
-    // If receiving from 478 MHz, set carrier offset
-    // Assuming your SDR is tuned to 479.25 MHz (vision carrier)
-    palbDemodulator->setVideoCarrier(0.0);  // Already at baseband
-    palbDemodulator->setAudioCarrier(5.5e6); // Audio 5.5 MHz above video
+    // Carrier frequencies (if already at baseband)
+    palbDemodulator->setVideoCarrier(0.0);     // Already at baseband
+    palbDemodulator->setAudioCarrier(5.5e6);   // Audio 5.5 MHz above video
 
-    // PAL-B/G timing
-    palbDemodulator->setPixelsPerLine(PAL_TOTAL_LINES);
-    palbDemodulator->setVisibleLines(PAL_VISIBLE_LINES);
-    palbDemodulator->setVBILines(PAL_VBI_LINES_PER_FIELD);
-    palbDemodulator->setLineDuration(PAL_LINE_DURATION);
+    // PAL-B/G video parameters
+    palbDemodulator->setPixelsPerLine(PAL_PIXELS_PER_LINE);  // 720
+    palbDemodulator->setVisibleLines(PAL_VISIBLE_LINES);     // 576
+    palbDemodulator->setVBILines(PAL_VBI_LINES_PER_FIELD);   // 25
+    palbDemodulator->setLineDuration(PAL_LINE_DURATION);      // 64 µs
 
-    // Horizontal timing (10.5 μs from sync start to active video)
-    palbDemodulator->setHorizontalOffset(0.164); // (4.7+5.8)/64 ≈ 0.164
+    // Horizontal timing (sync + back porch before active video)
+    // Sync: 4.7 µs, Back porch: 5.7 µs, Total: 10.4 µs
+    palbDemodulator->setHorizontalOffset(10.4e-6 / 64e-6);  // ≈ 0.1625
 
     // AM demodulation for analog TV
     palbDemodulator->setDemodMode(PALBDemodulator::DEMOD_AM);
 
+    // Vestigial sideband filter for broadcast TV
+    palbDemodulator->setVSBFilterEnabled(true);
+    palbDemodulator->setVSBLowerCutoff(0.75e6);  // Standard VSB rolloff
+    palbDemodulator->setVSBUpperCutoff(5.5e6);   // Up to audio carrier
+
     // Processing
     palbDemodulator->setDecimationFactor(2);
-    palbDemodulator->setDeinterlace(false);
+    palbDemodulator->setDeinterlace(false);  // Enable if needed for better quality
 
     // AGC for AM video
-    palbDemodulator->setAGCAttack(0.001f);
-    palbDemodulator->setAGCDecay(0.0001f);
+    palbDemodulator->setAGCAttack(0.01f);
+    palbDemodulator->setAGCDecay(0.001f);
 
     // Sync detection
     palbDemodulator->setVSyncThreshold(0.15f);
 
-    // Video levels (adjust based on signal)
+    // Video adjustments
     palbDemodulator->setVideoBrightness(0.0f);
     palbDemodulator->setVideoContrast(1.0f);
     palbDemodulator->setVideoGamma(1.0f);
-    palbDemodulator->setInvertVideo(true);
+
+    // AM-specific settings
+    palbDemodulator->setInvertVideo(false);     // May need to toggle based on signal
+    palbDemodulator->setAMScaleFactor(1.0f);    // Start at 1.0, adjust if needed
+    palbDemodulator->setAMLevelShift(0.35f);    // Fine-tune black level
+    palbDemodulator->setBlackLevel(0.6f);       // Standard PAL black level (30%)
 
     m_threadPool = new QThreadPool(this);
     if (m_threadPool) {
@@ -480,8 +491,7 @@ void MainWindow::addVideoControls()
     gammaValue->setAlignment(Qt::AlignCenter);
 
     // Invert checkbox in fourth row
-    invertCheckBox = new QCheckBox("Invert Video ");
-    invertCheckBox->setChecked(true);
+    invertCheckBox = new QCheckBox("Invert Video ");    
 
     // Controls on the left (columns 0, 1, 2)
     videoLayout->addWidget(brightLabel, 0, 0, Qt::AlignCenter);
@@ -544,6 +554,7 @@ void MainWindow::addVideoControls()
     });
 
     mainLayout->addWidget(videoGroup);
+    invertCheckBox->setChecked(false);
 }
 
 void MainWindow::addOutputGroup()

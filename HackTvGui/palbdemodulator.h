@@ -16,9 +16,6 @@
 // ============================================================================
 // THREAD-SAFE FRAME BUFFER
 // ============================================================================
-// ============================================================================
-// THREAD-SAFE FRAME BUFFER
-// ============================================================================
 class FrameBuffer
 {
 public:
@@ -52,17 +49,14 @@ public:
 
         const qsizetype MAX_BUFFER_SIZE = 10000000;
 
-        // Reserve capacity to prevent reallocation
         if (m_buffer.capacity() < MAX_BUFFER_SIZE) {
             m_buffer.reserve(MAX_BUFFER_SIZE);
         }
 
-        // Efficient batch append
         qsizetype oldSize = m_buffer.size();
         m_buffer.resize(oldSize + newData.size());
         std::copy(newData.begin(), newData.end(), m_buffer.begin() + oldSize);
 
-        // Trim old data if exceeded
         if (m_buffer.size() > MAX_BUFFER_SIZE) {
             qsizetype excess = m_buffer.size() - MAX_BUFFER_SIZE;
             m_buffer.remove(0, excess);
@@ -83,17 +77,13 @@ public:
             return std::vector<std::complex<float>>();
         }
 
-        // Extract frame
         std::vector<std::complex<float>> frame(m_targetSize);
         std::copy(m_buffer.begin(), m_buffer.begin() + m_targetSize, frame.begin());
-
-        // Remove extracted samples
         m_buffer.remove(0, m_targetSize);
 
         return frame;
     }
 
-    // Get half frame for audio processing (with overlap)
     std::vector<std::complex<float>> getHalfFrame()
     {
         QMutexLocker lock(&m_mutex);
@@ -104,18 +94,15 @@ public:
             return std::vector<std::complex<float>>();
         }
 
-        // Extract half frame
         std::vector<std::complex<float>> frame(halfSize);
         std::copy(m_buffer.begin(), m_buffer.begin() + halfSize, frame.begin());
 
-        // Remove only 1/4 of the frame to maintain overlap for better audio continuity
         qsizetype removeSize = halfSize / 2;
         m_buffer.remove(0, removeSize);
 
         return frame;
     }
 
-    // Get specific amount of samples for audio (non-destructive peek)
     std::vector<std::complex<float>> peekSamples(qsizetype numSamples) const
     {
         QMutexLocker lock(&m_mutex);
@@ -130,7 +117,6 @@ public:
         return samples;
     }
 
-    // Get and remove specific amount of samples
     std::vector<std::complex<float>> getSamples(qsizetype numSamples)
     {
         QMutexLocker lock(&m_mutex);
@@ -141,8 +127,6 @@ public:
 
         std::vector<std::complex<float>> samples(numSamples);
         std::copy(m_buffer.begin(), m_buffer.begin() + numSamples, samples.begin());
-
-        // Remove extracted samples
         m_buffer.remove(0, numSamples);
 
         return samples;
@@ -225,15 +209,18 @@ public:
         bool valid = false;
         int fieldNumber = 0;
     };
-    // Add to PALBDemodulator
+
     enum DemodMode {
         DEMOD_FM,
         DEMOD_AM
     };
 
 public:
+    // Demodulation mode control
     void setDemodMode(DemodMode mode) { demodMode = mode; }
+    DemodMode getDemodMode() const { return demodMode; }
     void setInvertVideo(bool invert) { invertVideo = invert; }
+    bool getInvertVideo() const { return invertVideo; }
 
     // Main demodulation functions
     DemodulatedFrame demodulate(const std::vector<std::complex<float>>& samples);
@@ -291,15 +278,33 @@ public:
     float getVideoContrast() const { return m_contrast; }
     float getVideoGamma() const { return m_gamma; }
 
+    // AM-specific controls
     void setAMScaleFactor(float factor) {
         amScaleFactor = clamp(factor, 0.5f, 2.0f);
     }
+    float getAMScaleFactor() const { return amScaleFactor; }
+
     void setAMLevelShift(float shift) {
         amLevelShift = clamp(shift, -0.5f, 0.5f);
     }
+    float getAMLevelShift() const { return amLevelShift; }
+
     void setBlackLevel(float level) {
         blackLevelTarget = clamp(level, 0.2f, 0.4f);
     }
+    float getBlackLevel() const { return blackLevelTarget; }
+
+    // Vestigial sideband filter controls
+    void setVSBFilterEnabled(bool enable) { vsbFilterEnabled = enable; }
+    bool getVSBFilterEnabled() const { return vsbFilterEnabled; }
+    void setVSBUpperCutoff(double freq) { vsbUpperCutoff = freq; }
+    double getVSBUpperCutoff() const { return vsbUpperCutoff; }
+    void setVSBLowerCutoff(double freq) { vsbLowerCutoff = freq; }
+    double getVSBLowerCutoff() const { return vsbLowerCutoff; }
+
+    // Carrier tracking for AM
+    void setCarrierTrackingEnabled(bool enable) { carrierTrackingEnabled = enable; }
+    bool getCarrierTrackingEnabled() const { return carrierTrackingEnabled; }
 
     // Reset to defaults
     void resetToDefaults();
@@ -308,44 +313,48 @@ private:
     // ========================================================================
     // PAL-B/G STANDARD CONSTANTS
     // ========================================================================
-    static constexpr double PAL_LINE_DURATION = 64e-6;         // 64 μs
-    static constexpr double PAL_LINE_FREQUENCY = 15625.0;      // 15.625 kHz
-    static constexpr double PAL_H_SYNC_DURATION = 4.7e-6;      // 4.7 μs
-    static constexpr double PAL_BACK_PORCH = 5.7e-6;           // 5.7 μs
-    static constexpr double PAL_FRONT_PORCH = 1.65e-6;         // 1.65 μs
-    static constexpr double PAL_ACTIVE_VIDEO = 51.95e-6;       // 51.95 μs
-    static constexpr double PAL_VSYNC_DURATION = 160e-6;       // 2.5 lines
+    static constexpr double PAL_LINE_DURATION = 64e-6;
+    static constexpr double PAL_LINE_FREQUENCY = 15625.0;
+    static constexpr double PAL_H_SYNC_DURATION = 4.7e-6;
+    static constexpr double PAL_BACK_PORCH = 5.7e-6;
+    static constexpr double PAL_FRONT_PORCH = 1.65e-6;
+    static constexpr double PAL_ACTIVE_VIDEO = 51.95e-6;
+    static constexpr double PAL_VSYNC_DURATION = 160e-6;
 
     static constexpr int PAL_TOTAL_LINES = 625;
     static constexpr int PAL_VISIBLE_LINES = 576;
     static constexpr int PAL_VBI_LINES_PER_FIELD = 25;
-    static constexpr double PAL_FIELD_RATE = 50.0;             // 50 Hz
-    static constexpr double PAL_FRAME_RATE = 25.0;             // 25 fps
+    static constexpr double PAL_FIELD_RATE = 50.0;
+    static constexpr double PAL_FRAME_RATE = 25.0;
 
-    static constexpr double AUDIO_CARRIER_OFFSET = 5.5e6;      // 5.5 MHz from video
-    static constexpr double COLOR_SUBCARRIER = 4.43361875e6;   // 4.433619 MHz
+    static constexpr double AUDIO_CARRIER_OFFSET = 5.5e6;
+    static constexpr double COLOR_SUBCARRIER = 4.43361875e6;
 
-    // Video signal levels (0-1 scale)
-    static constexpr float SYNC_LEVEL = 0.0f;      // Sync tip level
-    static constexpr float BLANKING_LEVEL = 0.3f;  // Blanking/black level
-    static constexpr float BLACK_LEVEL = 0.3f;     // Black level
-    static constexpr float WHITE_LEVEL = 1.0f;     // Peak white level
+    static constexpr float SYNC_LEVEL = 0.0f;
+    static constexpr float BLANKING_LEVEL = 0.3f;
+    static constexpr float BLACK_LEVEL = 0.3f;
+    static constexpr float WHITE_LEVEL = 1.0f;
 
+    // ========================================================================
+    // MEMBER VARIABLES
+    // ========================================================================
+
+    // Demodulation mode
     DemodMode demodMode = DEMOD_FM;
     bool invertVideo = false;
 
-    // ========================================================================
-    // CONFIGURABLE PARAMETERS
-    // ========================================================================
+    // Sample rates
     double sampleRate;
-    double effectiveSampleRate;     // After decimation
-    double videoCarrier = 0.0;      // 0 for baseband
+    double effectiveSampleRate;
+
+    // Carrier frequencies
+    double videoCarrier = 0.0;
     double audioCarrier = AUDIO_CARRIER_OFFSET;
-    double fmDeviation = 6.0e6;     // 6 MHz for UHF PAL
+    double fmDeviation = 6.0e6;
 
     // Timing
     double lineDuration = PAL_LINE_DURATION;
-    double horizontalOffset = 0.148;  // ~9.5μs/64μs
+    double horizontalOffset = 0.148;
     double lineFrequency = PAL_LINE_FREQUENCY;
 
     // Image dimensions
@@ -365,13 +374,31 @@ private:
     float vSyncThreshold = 0.15f;
 
     // Video adjustments
-    float m_brightness = 0.0f;  // -0.5 to +0.5
-    float m_contrast = 1.0f;    // 0.5 to 2.0
-    float m_gamma = 1.0f;       // 0.5 to 1.5
+    float m_brightness = 0.0f;
+    float m_contrast = 1.0f;
+    float m_gamma = 1.0f;
+
+    // AM-specific parameters
+    float amScaleFactor = 1.0f;
+    float amLevelShift = 0.0f;
+    float blackLevelTarget = 0.3f;
+    float dcTrackingSpeed = 0.001f;
+    float syncTipEstimate = 0.0f;
+
+    // Vestigial sideband filter parameters
+    bool vsbFilterEnabled = true;
+    double vsbUpperCutoff = 5.5e6;
+    double vsbLowerCutoff = 0.75e6;
+
+    // Carrier tracking
+    bool carrierTrackingEnabled = false;
+    float carrierPhase = 0.0f;
+    float carrierFreq = 0.0f;
+    float carrierLoopAlpha = 0.001f;
 
     // Interlacing
     bool enableDeinterlace = false;
-    int currentField = 0;  // 0 = even, 1 = odd
+    int currentField = 0;
 
     // AGC state
     float agcLevel = 1.0f;
@@ -398,11 +425,6 @@ private:
     std::vector<float> lineBuffer;
     size_t lineBufferIndex = 0;
 
-    float amScaleFactor = 1.0f;      // Range correction factor (0.5 to 2.0)
-    float amLevelShift = 0.0f;       // Level shift (-0.5 to +0.5)
-    float blackLevelTarget = 0.3f;   // Target black level (0.2 to 0.4)
-    float dcTrackingSpeed = 0.001f;  // DC removal time constant
-
     // ========================================================================
     // SIGNAL PROCESSING FUNCTIONS
     // ========================================================================
@@ -423,9 +445,22 @@ private:
     std::vector<float> fmDemodulateDifferential(
         const std::vector<std::complex<float>>& signal);
 
-    // AM Demodulation
+    // AM Demodulation with improvements
     std::vector<float> amDemodulate(
         const std::vector<std::complex<float>>& signal);
+
+    std::vector<float> restoreDCForAM(
+        const std::vector<float>& signal);
+
+    std::vector<std::complex<float>> applyVestigialSidebandFilter(
+        const std::vector<std::complex<float>>& signal);
+
+    std::vector<std::complex<float>> trackCarrierAM(
+        const std::vector<std::complex<float>>& signal);
+
+    std::vector<std::complex<float>> complexLowPassFilterWithCoeffs(
+        const std::vector<std::complex<float>>& signal,
+        const std::vector<float>& coeffs);
 
     // Filtering
     std::vector<float> designLowPassFIR(
@@ -513,6 +548,10 @@ private:
     float clamp(float value, float min, float max);
     uint8_t floatToUint8(float value);
     float unwrapPhase(float phase, float lastPhase);
+
+    // FFT helpers (simplified - you may want to use a proper FFT library)
+    std::vector<std::complex<float>> fft(const std::vector<std::complex<float>>& signal);
+    std::vector<std::complex<float>> ifft(const std::vector<std::complex<float>>& spectrum);
 };
 
 #endif // PALBDEMODULATOR_H
