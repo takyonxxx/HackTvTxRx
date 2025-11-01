@@ -26,6 +26,7 @@
 #include "audiooutput.h"
 #include "modulator.h"
 #include "tv_display.h"
+#include "tvdisplayadapter.h"
 #include "palbdemodulator.h"
 
 class MainWindow : public QMainWindow
@@ -89,6 +90,7 @@ private:
     float m_videoBrightness = 0.2f;  // 0.0 normal, pozitif daha parlak
     float m_videoContrast = 1.3f;    // 1.0 normal, >1.0 daha kontrastlı
     float m_videoGamma = 0.8f;       // <1.0 daha parlak, >1.0 daha karanlık
+    float m_videoSync = 0.15f;       // <1.0
 
     QVBoxLayout *mainLayout;
 
@@ -97,12 +99,15 @@ private:
     QLabel* brightLabel;
     QLabel* contrastLabel;
     QLabel* gammaLabel;
+    QLabel* syncLabel;
     QSlider* brightSlider;
     QSlider* contrastSlider;
     QSlider* gammaSlider;
+    QSlider* syncSlider;
     QLabel* brightValue;
     QLabel* contrastValue;
     QLabel* gammaValue ;
+    QLabel* syncValue ;
 
     // Invert checkbox in fourth row
     QCheckBox* invertCheckBox;
@@ -129,6 +134,7 @@ private:
 
     // Member variables
     TVDisplay *tvDisplay;
+    TVDisplayAdapter *m_tvAdapter;
     QTextBrowser *logBrowser;
     //std::unique_ptr<HackTvLib> m_hackTvLib;
     HackTvLib* m_hackTvLib;

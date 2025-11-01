@@ -5,6 +5,7 @@
 #include <QImage>
 #include <QList>
 #include <QMutex>
+#include <QRecursiveMutex>
 #include <QMutexLocker>
 #include <vector>
 #include <array>
@@ -12,6 +13,9 @@
 #include <deque>
 #include <QDebug>
 #include <cmath>
+
+// Forward declarations for DATV-style integration
+class TVScreen;
 
 // ============================================================================
 // THREAD-SAFE FRAME BUFFER
@@ -215,11 +219,27 @@ public:
         DEMOD_AM
     };
 
-public:
+    void setTVScreen(TVScreen *tvScreen) {
+        QMutexLocker lock(&m_mutex);
+        m_tvScreen = tvScreen;
+    }
+
+    TVScreen* getTVScreen() const { return m_tvScreen; }
+
+    // Rendering control
+    void renderToTVScreen();
+    bool isTVScreenAvailable() const { return m_tvScreen != nullptr; }
+
     // Demodulation mode control
-    void setDemodMode(DemodMode mode) { demodMode = mode; }
+    void setDemodMode(DemodMode mode) {
+        QMutexLocker lock(&m_mutex);
+        demodMode = mode;
+    }
     DemodMode getDemodMode() const { return demodMode; }
-    void setInvertVideo(bool invert) { invertVideo = invert; }
+    void setInvertVideo(bool invert) {
+        QMutexLocker lock(&m_mutex);
+        invertVideo = invert;
+    }
     bool getInvertVideo() const { return invertVideo; }
 
     // Main demodulation functions
@@ -233,78 +253,145 @@ public:
     double getEffectiveSampleRate() const { return effectiveSampleRate; }
 
     // Carrier frequencies
-    void setVideoCarrier(double freq) { videoCarrier = freq; }
+    void setVideoCarrier(double freq) {
+        QMutexLocker lock(&m_mutex);
+        videoCarrier = freq;
+    }
     double getVideoCarrier() const { return videoCarrier; }
-    void setAudioCarrier(double freq) { audioCarrier = freq; }
+    void setAudioCarrier(double freq) {
+        QMutexLocker lock(&m_mutex);
+        audioCarrier = freq;
+    }
     double getAudioCarrier() const { return audioCarrier; }
 
     // Timing parameters
-    void setHorizontalOffset(double offset) { horizontalOffset = offset; }
+    void setHorizontalOffset(double offset) {
+        QMutexLocker lock(&m_mutex);
+        horizontalOffset = offset;
+    }
     double getHorizontalOffset() const { return horizontalOffset; }
-    void setLineDuration(double duration) { lineDuration = duration; }
+    void setLineDuration(double duration) {
+        QMutexLocker lock(&m_mutex);
+        lineDuration = duration;
+        calculateLineParameters();
+    }
     double getLineDuration() const { return lineDuration; }
 
     // Image parameters
     void setPixelsPerLine(int pixels);
     int getPixelsPerLine() const { return pixelsPerLine; }
-    void setVisibleLines(int lines) { visibleLines = lines; }
+    void setVisibleLines(int lines) {
+        QMutexLocker lock(&m_mutex);
+        visibleLines = lines;
+    }
     int getVisibleLines() const { return visibleLines; }
-    void setVBILines(int lines) { vbiLines = lines; }
+    void setVBILines(int lines) {
+        QMutexLocker lock(&m_mutex);
+        vbiLines = lines;
+    }
     int getVBILines() const { return vbiLines; }
 
     // Processing parameters
     void setDecimationFactor(int factor);
     int getDecimationFactor() const { return decimationFactor; }
-    void setAGCAttack(float rate) { agcAttackRate = rate; }
-    void setAGCDecay(float rate) { agcDecayRate = rate; }
+    void setAGCAttack(float rate) {
+        QMutexLocker lock(&m_mutex);
+        agcAttackRate = rate;
+    }
+    void setAGCDecay(float rate) {
+        QMutexLocker lock(&m_mutex);
+        agcDecayRate = rate;
+    }
     float getAGCAttack() const { return agcAttackRate; }
     float getAGCDecay() const { return agcDecayRate; }
-    void setVSyncThreshold(float threshold) { vSyncThreshold = threshold; }
+    void setVSyncThreshold(float threshold) {
+        QMutexLocker lock(&m_mutex);
+        vSyncThreshold = threshold;
+    }
     float getVSyncThreshold() const { return vSyncThreshold; }
 
     // FM deviation
-    void setFMDeviation(double deviation) { fmDeviation = deviation; }
+    void setFMDeviation(double deviation) {
+        QMutexLocker lock(&m_mutex);
+        fmDeviation = deviation;
+    }
     double getFMDeviation() const { return fmDeviation; }
 
     // Interlacing control
-    void setDeinterlace(bool enable) { enableDeinterlace = enable; }
+    void setDeinterlace(bool enable) {
+        QMutexLocker lock(&m_mutex);
+        enableDeinterlace = enable;
+    }
     bool getDeinterlace() const { return enableDeinterlace; }
 
     // Video adjustment setters/getters
-    void setVideoBrightness(float brightness) { m_brightness = brightness; }
-    void setVideoContrast(float contrast) { m_contrast = contrast; }
-    void setVideoGamma(float gamma) { m_gamma = gamma; }
+    void setVideoBrightness(float brightness) {
+        QMutexLocker lock(&m_mutex);
+        m_brightness = brightness;
+    }
+    void setVideoContrast(float contrast) {
+        QMutexLocker lock(&m_mutex);
+        m_contrast = contrast;
+    }
+    void setVideoGamma(float gamma) {
+        QMutexLocker lock(&m_mutex);
+        m_gamma = gamma;
+    }
     float getVideoBrightness() const { return m_brightness; }
     float getVideoContrast() const { return m_contrast; }
     float getVideoGamma() const { return m_gamma; }
 
     // AM-specific controls
     void setAMScaleFactor(float factor) {
+        QMutexLocker lock(&m_mutex);
         amScaleFactor = clamp(factor, 0.5f, 2.0f);
     }
     float getAMScaleFactor() const { return amScaleFactor; }
 
     void setAMLevelShift(float shift) {
+        QMutexLocker lock(&m_mutex);
         amLevelShift = clamp(shift, -0.5f, 0.5f);
     }
     float getAMLevelShift() const { return amLevelShift; }
 
     void setBlackLevel(float level) {
+        QMutexLocker lock(&m_mutex);
         blackLevelTarget = clamp(level, 0.2f, 0.4f);
     }
     float getBlackLevel() const { return blackLevelTarget; }
 
     // Vestigial sideband filter controls
-    void setVSBFilterEnabled(bool enable) { vsbFilterEnabled = enable; }
+    void setVSBFilterEnabled(bool enable) {
+        QMutexLocker lock(&m_mutex);
+        vsbFilterEnabled = enable;
+    }
     bool getVSBFilterEnabled() const { return vsbFilterEnabled; }
-    void setVSBUpperCutoff(double freq) { vsbUpperCutoff = freq; }
+    void setVSBUpperCutoff(double freq) {
+        QMutexLocker lock(&m_mutex);
+        vsbUpperCutoff = freq;
+    }
     double getVSBUpperCutoff() const { return vsbUpperCutoff; }
-    void setVSBLowerCutoff(double freq) { vsbLowerCutoff = freq; }
+    void setVSBLowerCutoff(double freq) {
+        QMutexLocker lock(&m_mutex);
+        vsbLowerCutoff = freq;
+    }
     double getVSBLowerCutoff() const { return vsbLowerCutoff; }
 
     // Carrier tracking for AM
-    void setCarrierTrackingEnabled(bool enable) { carrierTrackingEnabled = enable; }
+    void setCarrierTrackingEnabled(bool enable) {
+        QMutexLocker lock(&m_mutex);
+        carrierTrackingEnabled = enable;
+    }
     bool getCarrierTrackingEnabled() const { return carrierTrackingEnabled; }
+
+    // Sync status (DATV-style)
+    bool isLineSynced() const { return m_lineSynced; }
+    bool isFrameSynced() const { return vSyncLocked; }
+    int getCurrentLine() const { return m_currentLine; }
+    float getSyncLevel() const { return m_syncLevel; }
+
+    // Signal quality
+    double getMagSq() const { return m_magSqAverage; }
 
     // Reset to defaults
     void resetToDefaults();
@@ -338,6 +425,17 @@ private:
     // ========================================================================
     // MEMBER VARIABLES
     // ========================================================================
+
+    // DATV-style TVScreen integration
+    TVScreen *m_tvScreen;
+    QImage m_lastFrame;
+    bool m_lineSynced;
+    int m_currentLine;
+    float m_syncLevel;
+    double m_magSqAverage;
+
+    // Thread safety (DATV-style)
+    mutable QRecursiveMutex m_mutex;
 
     // Demodulation mode
     DemodMode demodMode = DEMOD_FM;

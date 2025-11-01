@@ -51,12 +51,15 @@ public:
     }
 
     void updateDisplay(const QImage& image) {
+
         if (image.isNull()) {
+            qWarning() << "TVDisplay: Received null image!";
             imageLabel->clear();
             return;
         }
 
         QSize displaySize = blueScreen->size();
+
         QPixmap scaledPixmap = QPixmap::fromImage(image).scaled(
             displaySize,
             Qt::KeepAspectRatio,
@@ -69,6 +72,7 @@ public:
 
         QPainter painter(&roundedPixmap);
         painter.setRenderHint(QPainter::Antialiasing);
+
         QPainterPath path;
         path.addRoundedRect(roundedPixmap.rect(), 10, 10);
         painter.setClipPath(path);

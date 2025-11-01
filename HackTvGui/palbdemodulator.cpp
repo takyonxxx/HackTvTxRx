@@ -1,4 +1,5 @@
 #include "PALBDemodulator.h"
+#include "tvscreen.h"
 #include <algorithm>
 #include <numeric>
 #include <QPainter>
@@ -8,11 +9,21 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+// For TVScreen compatibility
+#ifndef SDR_RX_SCALED
+#define SDR_RX_SCALED 32768.0
+#endif
+
 // ============================================================================
 // CONSTRUCTOR / DESTRUCTOR
 // ============================================================================
 PALBDemodulator::PALBDemodulator(double _sampleRate, QObject *parent)
     : QObject(parent)
+    , m_tvScreen(nullptr)
+    , m_lineSynced(false)
+    , m_currentLine(0)
+    , m_syncLevel(0.0f)
+    , m_magSqAverage(0.0)
     , sampleRate(_sampleRate)
     , effectiveSampleRate(_sampleRate)
 {
@@ -31,10 +42,48 @@ PALBDemodulator::~PALBDemodulator()
 }
 
 // ============================================================================
+// TVSCREEN RENDERING (DATV-STYLE)
+// ============================================================================
+
+void PALBDemodulator::renderToTVScreen()
+{
+    QMutexLocker lock(&m_mutex);
+
+    if (!m_tvScreen) {
+        qWarning() << "renderToTVScreen: m_tvScreen is null";
+        return;
+    }
+
+    if (m_lastFrame.isNull()) {
+        qWarning() << "renderToTVScreen: m_lastFrame is null";
+        return;
+    }
+
+    int height = std::min(m_lastFrame.height(), visibleLines);
+    int width = m_lastFrame.width();
+
+    // Render frame to TVScreen line by line (DATV-style)
+    for (int y = 0; y < height; y++) {
+        m_tvScreen->selectRow(y);
+
+        for (int x = 0; x < width; x++) {
+            QRgb pixel = m_lastFrame.pixel(x, y);
+            int r = qRed(pixel);
+            int g = qGreen(pixel);
+            int b = qBlue(pixel);
+            m_tvScreen->setDataColor(x, r, g, b);
+        }
+    }
+    m_tvScreen->renderImage(0);
+}
+
+// ============================================================================
 // INITIALIZATION
 // ============================================================================
 void PALBDemodulator::resetToDefaults()
 {
+    QMutexLocker lock(&m_mutex);
+
     videoCarrier = 0.0;
     fmDeviation = 6.0e6;
 
@@ -61,6 +110,11 @@ void PALBDemodulator::resetToDefaults()
     vSyncLocked = false;
     lastPhase = 0.0f;
 
+    m_lineSynced = false;
+    m_currentLine = 0;
+    m_syncLevel = 0.0f;
+    m_magSqAverage = 0.0;
+
     // AM-specific defaults
     amScaleFactor = 1.0f;
     amLevelShift = 0.0f;
@@ -82,6 +136,7 @@ void PALBDemodulator::resetToDefaults()
 
 void PALBDemodulator::setSampleRate(double rate)
 {
+    QMutexLocker lock(&m_mutex);
     sampleRate = rate;
     effectiveSampleRate = rate / decimationFactor;
     calculateLineParameters();
@@ -90,12 +145,14 @@ void PALBDemodulator::setSampleRate(double rate)
 
 void PALBDemodulator::setPixelsPerLine(int pixels)
 {
+    QMutexLocker lock(&m_mutex);
     pixelsPerLine = pixels;
     calculateLineParameters();
 }
 
 void PALBDemodulator::setDecimationFactor(int factor)
 {
+    QMutexLocker lock(&m_mutex);
     decimationFactor = std::max(1, factor);
     effectiveSampleRate = sampleRate / decimationFactor;
     calculateLineParameters();
@@ -156,6 +213,8 @@ void PALBDemodulator::initializeFilters()
 PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
     const std::vector<std::complex<float>>& samples)
 {
+    QMutexLocker lock(&m_mutex);
+
     DemodulatedFrame frame;
 
     if (samples.empty()) {
@@ -164,6 +223,11 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
     }
 
     frame.image = demodulateVideoOnly(samples);
+
+    // Store last frame for TVScreen rendering
+    if (!frame.image.isNull()) {
+        m_lastFrame = frame.image;
+    }
 
     if (audioCarrier > 0) {
         frame.audio = demodulateAudioFM(samples);
@@ -174,6 +238,8 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
 
     return frame;
 }
+
+// PALBDemodulator.cpp - demodulateVideoOnly - ORİJİNAL signal conditioning'e geri dön
 
 QImage PALBDemodulator::demodulateVideoOnly(
     const std::vector<std::complex<float>>& samples)
@@ -220,17 +286,14 @@ QImage PALBDemodulator::demodulateVideoOnly(
         if (demodulated.empty()) {
             qDebug() << "ERROR: Demodulation returned empty";
             return QImage();
-        }
-
-        // 4. Video lowpass filter
-        demodulated = lowPassFilter(demodulated, 5.5e6);
+        }       
 
         if (demodulated.empty()) {
             qDebug() << "ERROR: Lowpass filter returned empty";
             return QImage();
         }
 
-        // 5. Apply signal conditioning based on mode
+        // 5. Apply signal conditioning based on mode - ORİJİNAL
         if (demodMode == DEMOD_AM) {
             // AM-specific DC restoration
             demodulated = restoreDCForAM(demodulated);
@@ -246,6 +309,18 @@ QImage PALBDemodulator::demodulateVideoOnly(
         int fieldType = 0;
         bool syncFound = detectVerticalSync(demodulated, vsyncPos, fieldType);
 
+        if (syncFound) {
+            vSyncLocked = true;
+            m_lineSynced = true;
+            m_syncLevel = demodulated[vsyncPos];
+            vSyncCounter = 0;
+        } else {
+            if (vSyncCounter++ > 10) {
+                vSyncLocked = false;
+                m_lineSynced = false;
+            }
+        }
+
         // 7. Skip VBI if sync found
         if (syncFound && vsyncPos + vbiLines * samplesPerLine < demodulated.size()) {
             std::vector<float> videoOnly(
@@ -254,6 +329,9 @@ QImage PALBDemodulator::demodulateVideoOnly(
                 );
             demodulated = videoOnly;
         }
+
+        // Video lowpass filter
+        demodulated = lowPassFilter(demodulated, 5.5e6);
 
         // 8. Timing recovery
         demodulated = timingRecovery(demodulated);
@@ -268,6 +346,9 @@ QImage PALBDemodulator::demodulateVideoOnly(
             demodulated = deinterlaceFields(demodulated);
         }
 
+        // Update current line count
+        m_currentLine = (demodulated.size() / pixelsPerLine) % PAL_TOTAL_LINES;
+
         // 10. Convert to image
         QImage image = convertToImage(demodulated, m_brightness, m_contrast);
 
@@ -281,14 +362,13 @@ QImage PALBDemodulator::demodulateVideoOnly(
             image = applyGammaCorrection(image, m_gamma);
         }
 
+        // CRITICAL: Store frame for TVScreen rendering
+        m_lastFrame = image;
+
         return image;
     }
     catch (const std::exception& e) {
         qCritical() << "EXCEPTION in demodulateVideoOnly:" << e.what();
-        return QImage();
-    }
-    catch (...) {
-        qCritical() << "UNKNOWN EXCEPTION in demodulateVideoOnly";
         return QImage();
     }
 }
@@ -296,6 +376,8 @@ QImage PALBDemodulator::demodulateVideoOnly(
 std::vector<float> PALBDemodulator::demodulateAudioOnly(
     const std::vector<std::complex<float>>& samples)
 {
+    QMutexLocker lock(&m_mutex);
+
     if (samples.empty() || audioCarrier <= 0) {
         return std::vector<float>();
     }
@@ -360,8 +442,9 @@ std::vector<float> PALBDemodulator::fmDemodulateDifferential(
 }
 
 // ============================================================================
-// IMPROVED AM DEMODULATION
+// AM DEMODULATION
 // ============================================================================
+
 std::vector<float> PALBDemodulator::amDemodulate(
     const std::vector<std::complex<float>>& signal)
 {
@@ -451,22 +534,11 @@ std::vector<std::complex<float>> PALBDemodulator::applyVestigialSidebandFilter(
 {
     if (signal.empty()) return signal;
 
-    // For now, use frequency domain filtering
-    // In production, you might want to use a more efficient FIR filter
-
-    std::vector<std::complex<float>> filtered = signal;
-
-    // Simple VSB filter using FIR approach
-    // Create asymmetric filter coefficients
     const int numTaps = 65;
     std::vector<float> vsbCoeffs(numTaps);
 
-    // Design filter with vestigial sideband characteristic
-    // Full response from -0.75 MHz to +5.5 MHz
-    // Gradual rolloff below -0.75 MHz
-
-    float fc1 = vsbLowerCutoff / effectiveSampleRate; // Lower cutoff
-    float fc2 = vsbUpperCutoff / effectiveSampleRate; // Upper cutoff
+    float fc1 = vsbLowerCutoff / effectiveSampleRate;
+    float fc2 = vsbUpperCutoff / effectiveSampleRate;
 
     int center = numTaps / 2;
 
@@ -475,27 +547,21 @@ std::vector<std::complex<float>> PALBDemodulator::applyVestigialSidebandFilter(
             vsbCoeffs[i] = 2.0f * (fc2 + fc1);
         } else {
             float n = i - center;
-            // Asymmetric filter response
             float h1 = std::sin(2.0f * M_PI * fc2 * n) / (M_PI * n);
             float h2 = std::sin(2.0f * M_PI * fc1 * n) / (M_PI * n);
-            vsbCoeffs[i] = h1 + h2 * 0.5f; // Partial lower sideband
+            vsbCoeffs[i] = h1 + h2 * 0.5f;
         }
 
-        // Apply window
         float window = 0.54f - 0.46f * std::cos(2.0f * M_PI * i / (numTaps - 1));
         vsbCoeffs[i] *= window;
     }
 
-    // Normalize
     float sum = std::accumulate(vsbCoeffs.begin(), vsbCoeffs.end(), 0.0f);
     if (sum != 0) {
         for (auto& c : vsbCoeffs) c /= sum;
     }
 
-    // Apply filter
-    filtered = complexLowPassFilterWithCoeffs(signal, vsbCoeffs);
-
-    return filtered;
+    return complexLowPassFilterWithCoeffs(signal, vsbCoeffs);
 }
 
 std::vector<std::complex<float>> PALBDemodulator::trackCarrierAM(
@@ -505,21 +571,15 @@ std::vector<std::complex<float>> PALBDemodulator::trackCarrierAM(
 
     std::vector<std::complex<float>> tracked(signal.size());
 
-    // Simple PLL for carrier tracking
     for (size_t i = 0; i < signal.size(); i++) {
-        // Mix with local oscillator
         std::complex<float> lo(cos(carrierPhase), sin(carrierPhase));
         tracked[i] = signal[i] * std::conj(lo);
 
-        // Phase detector (using imaginary part as error for AM carrier)
-        // For AM, we want to minimize the imaginary part
         float error = std::atan2(tracked[i].imag(), tracked[i].real());
 
-        // Loop filter
         carrierFreq += carrierLoopAlpha * error;
         carrierPhase += carrierFreq;
 
-        // Wrap phase
         while (carrierPhase > M_PI) carrierPhase -= 2.0f * M_PI;
         while (carrierPhase < -M_PI) carrierPhase += 2.0f * M_PI;
     }
@@ -527,7 +587,6 @@ std::vector<std::complex<float>> PALBDemodulator::trackCarrierAM(
     return tracked;
 }
 
-// Helper function for VSB filter
 std::vector<std::complex<float>> PALBDemodulator::complexLowPassFilterWithCoeffs(
     const std::vector<std::complex<float>>& signal,
     const std::vector<float>& coeffs)
@@ -894,6 +953,7 @@ std::vector<float> PALBDemodulator::normalizeSignal(
 // ============================================================================
 // SYNCHRONIZATION
 // ============================================================================
+
 bool PALBDemodulator::detectVerticalSync(
     const std::vector<float>& signal,
     size_t& syncStart,
@@ -901,31 +961,49 @@ bool PALBDemodulator::detectVerticalSync(
 {
     const float SYNC_THRESHOLD = vSyncThreshold;
     const int vsyncSamples = static_cast<int>(PAL_VSYNC_DURATION * effectiveSampleRate);
-    const int minVSyncWidth = vsyncSamples * 0.5;
+    const int minVSyncWidth = vsyncSamples * 0.3; // 0.5'den 0.3'e düşür - daha toleranslı
 
+    // İki geçişli algoritma: önce uzun sync pulse'ları ara
     int syncCount = 0;
     size_t bestSyncPos = 0;
     int maxSyncCount = 0;
+    bool inSync = false;
 
     for (size_t i = 0; i < signal.size(); i++) {
         if (signal[i] < SYNC_THRESHOLD) {
-            syncCount++;
+            if (!inSync) {
+                // Yeni sync pulse başlangıcı
+                inSync = true;
+                syncCount = 1;
+            } else {
+                syncCount++;
+            }
 
             if (syncCount > maxSyncCount) {
                 maxSyncCount = syncCount;
                 bestSyncPos = i - syncCount + 1;
             }
         } else {
+            if (inSync && syncCount >= minVSyncWidth) {
+                // Vertical sync bulundu!
+                syncStart = bestSyncPos;
+                fieldType = (bestSyncPos % (samplesPerLine * 2)) > samplesPerLine ? 1 : 0;
+                lastVSyncPosition = bestSyncPos;
+                vSyncCounter = 0;
+                return true;
+            }
+            inSync = false;
             syncCount = 0;
         }
+    }
 
-        if (maxSyncCount >= minVSyncWidth) {
-            syncStart = bestSyncPos;
-            fieldType = (bestSyncPos % (samplesPerLine * 2)) > samplesPerLine ? 1 : 0;
-            lastVSyncPosition = bestSyncPos;
-            qDebug() << "VSync detected at" << bestSyncPos << "width:" << maxSyncCount;
-            return true;
-        }
+    // Eğer en uzun sync pulse yeterince uzunsa onu kabul et
+    if (maxSyncCount >= minVSyncWidth) {
+        syncStart = bestSyncPos;
+        fieldType = (bestSyncPos % (samplesPerLine * 2)) > samplesPerLine ? 1 : 0;
+        lastVSyncPosition = bestSyncPos;
+        vSyncCounter = 0;
+        return true;
     }
 
     return false;
@@ -1271,19 +1349,14 @@ float PALBDemodulator::unwrapPhase(float phase, float lastPhase)
     return delta;
 }
 
-// Simplified FFT implementations - replace with proper FFT library in production
 std::vector<std::complex<float>> PALBDemodulator::fft(
     const std::vector<std::complex<float>>& signal)
 {
-    // This is a placeholder - use a proper FFT library like FFTW or kissfft
-    // For now, just return the signal unchanged
     return signal;
 }
 
 std::vector<std::complex<float>> PALBDemodulator::ifft(
     const std::vector<std::complex<float>>& spectrum)
 {
-    // This is a placeholder - use a proper FFT library like FFTW or kissfft
-    // For now, just return the spectrum unchanged
     return spectrum;
 }

@@ -16,6 +16,7 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
     tvDisplay(nullptr),
+    m_tvAdapter(nullptr),
     logBrowser(nullptr),
     m_hackTvLib(nullptr),
     palbDemodulator(nullptr),
@@ -48,6 +49,7 @@ MainWindow::MainWindow(QWidget *parent)
     }
 
     tvDisplay = new TVDisplay(this);
+    m_tvAdapter = new TVDisplayAdapter(tvDisplay);
     logBrowser = new QTextBrowser(this);
     audioOutput = std::make_unique<AudioOutput>();
     // Set audio volume if available
@@ -55,61 +57,52 @@ MainWindow::MainWindow(QWidget *parent)
         audioOutput->setVolume(m_volumeLevel);
     }
 
-    // PAL-B/G System Constants
-    // PAL-B/G System Constants (Turkey standard)
-    const int PAL_VISIBLE_LINES = 576;
-    const int PAL_VBI_LINES_PER_FIELD = 25;
-    const int PAL_PIXELS_PER_LINE = 720;
-    const double PAL_LINE_DURATION = 64e-6;    // 64 microseconds
-    const double PAL_FRAME_DURATION = 0.04;    // 25 Hz frame rate
-
-    // Initialize with correct parameters
     palbDemodulator = new PALBDemodulator(m_sampleRate);
-    palFrameBuffer = new FrameBuffer(m_sampleRate, PAL_FRAME_DURATION); // 0.04s per frame
+    palFrameBuffer = new FrameBuffer(m_sampleRate, 0.04); // 25 fps
 
-    // Carrier frequencies (if already at baseband)
-    palbDemodulator->setVideoCarrier(0.0);     // Already at baseband
-    palbDemodulator->setAudioCarrier(5.5e6);   // Audio 5.5 MHz above video
+    m_tvAdapter = new TVDisplayAdapter(tvDisplay);
+    palbDemodulator->setTVScreen(m_tvAdapter);
 
-    // PAL-B/G video parameters
-    palbDemodulator->setPixelsPerLine(PAL_PIXELS_PER_LINE);  // 720
-    palbDemodulator->setVisibleLines(PAL_VISIBLE_LINES);     // 576
-    palbDemodulator->setVBILines(PAL_VBI_LINES_PER_FIELD);   // 25
-    palbDemodulator->setLineDuration(PAL_LINE_DURATION);      // 64 µs
+    // Carrier frequencies
+    palbDemodulator->setVideoCarrier(0.0);
+    palbDemodulator->setAudioCarrier(5.5e6);
 
-    // Horizontal timing (sync + back porch before active video)
-    // Sync: 4.7 µs, Back porch: 5.7 µs, Total: 10.4 µs
-    palbDemodulator->setHorizontalOffset(10.4e-6 / 64e-6);  // ≈ 0.1625
+    // PAL-B/G parameters
+    palbDemodulator->setPixelsPerLine(720);
+    palbDemodulator->setVisibleLines(576);
+    palbDemodulator->setVBILines(25);
+    palbDemodulator->setLineDuration(64e-6);
+    palbDemodulator->setHorizontalOffset(0.1625);
 
-    // AM demodulation for analog TV
+    // AM demodulation
     palbDemodulator->setDemodMode(PALBDemodulator::DEMOD_AM);
 
-    // Vestigial sideband filter for broadcast TV
+    // VSB filter
     palbDemodulator->setVSBFilterEnabled(true);
-    palbDemodulator->setVSBLowerCutoff(0.75e6);  // Standard VSB rolloff
-    palbDemodulator->setVSBUpperCutoff(5.5e6);   // Up to audio carrier
+    palbDemodulator->setVSBLowerCutoff(0.75e6);
+    palbDemodulator->setVSBUpperCutoff(5.5e6);
 
     // Processing
     palbDemodulator->setDecimationFactor(2);
-    palbDemodulator->setDeinterlace(false);  // Enable if needed for better quality
+    palbDemodulator->setDeinterlace(true);
 
-    // AGC for AM video
-    palbDemodulator->setAGCAttack(0.01f);
-    palbDemodulator->setAGCDecay(0.001f);
+    // AGC - ORİJİNAL
+    palbDemodulator->setAGCAttack(0.001f);
+    palbDemodulator->setAGCDecay(0.0001f);
 
-    // Sync detection
+    // Sync - ORİJİNAL
     palbDemodulator->setVSyncThreshold(0.15f);
 
-    // Video adjustments
+    // Video adjustments - ORİJİNAL
     palbDemodulator->setVideoBrightness(0.0f);
     palbDemodulator->setVideoContrast(1.0f);
     palbDemodulator->setVideoGamma(1.0f);
 
-    // AM-specific settings
-    palbDemodulator->setInvertVideo(false);     // May need to toggle based on signal
-    palbDemodulator->setAMScaleFactor(1.0f);    // Start at 1.0, adjust if needed
-    palbDemodulator->setAMLevelShift(0.35f);    // Fine-tune black level
-    palbDemodulator->setBlackLevel(0.6f);       // Standard PAL black level (30%)
+    // AM-specific - ORİJİNAL
+    palbDemodulator->setInvertVideo(false);
+    palbDemodulator->setAMScaleFactor(1.0f);
+    palbDemodulator->setAMLevelShift(0.0f);
+    palbDemodulator->setBlackLevel(0.5f);
 
     m_threadPool = new QThreadPool(this);
     if (m_threadPool) {
@@ -136,7 +129,15 @@ MainWindow::~MainWindow()
     if (m_hackTvLib) {
         m_hackTvLib->clearCallbacks();
         m_hackTvLib->stop();
-        // Qt otomatik siler (parent-child)
+    }
+
+    if (palbDemodulator) {
+        palbDemodulator->setTVScreen(nullptr); // Clear reference first
+    }
+
+    if (m_tvAdapter) {
+        delete m_tvAdapter;
+        m_tvAdapter = nullptr;
     }
 }
 
@@ -291,57 +292,43 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
         return;
     }
 
-    // ========================================================================
-    // PAL-B TV DEMODÜLASYONU
-    // ========================================================================
+    // PAL-B TV DEMODULATION
     if (m_frequency >= PAL_BAND_LOW && m_frequency <= PAL_BAND_HIGH)
     {
         if (!palbDemodulator || !palFrameBuffer || !audioOutput || samples.size() > 10000000) {
-            if (samples.size() > 10000000) {
-                qWarning() << "Sample buffer too large:" << samples.size() << "- skipping";
-            }
             return;
         }
 
         palFrameBuffer->addBuffer(samples);
 
-        // --- 1. SES İŞLEME ---
+        // AUDIO PROCESSING - her 1/4 frame
         qsizetype quarterFrameSize = palFrameBuffer->targetSize() / 4;
-
         if (palFrameBuffer->size() >= quarterFrameSize) {
             int expectedAudio = 0;
-            // Ses işlemi meşgul değilse ve kilit alınabilirse...
             if (audioDemodulationInProgress.testAndSetAcquire(expectedAudio, 1)) {
                 auto audioSamples = palFrameBuffer->getSamples(quarterFrameSize);
-
                 if (!audioSamples.empty() && audioSamples.size() < 5000000) {
                     auto audioPtr = std::make_shared<std::vector<std::complex<float>>>(
                         std::move(audioSamples)
                         );
-                    // Asenkron görevi başlat
                     startPalAudioProcessing(audioPtr);
                 } else {
-                    // İşlemeyeceksek kilidi hemen bırak
                     audioDemodulationInProgress.storeRelease(0);
                 }
             }
         }
 
-        // --- 2. VİDEO İŞLEME ---
+        // VIDEO PROCESSING - tam frame (40ms = 1 PAL frame)
         if (palFrameBuffer->isFrameReady()) {
             int expectedVideo = 0;
-            // Video işlemi meşgul değilse ve kilit alınabilirse...
             if (palDemodulationInProgress.testAndSetAcquire(expectedVideo, 1)) {
                 auto fullFrame = palFrameBuffer->getFrame();
-
                 if (!fullFrame.empty() && fullFrame.size() < 10000000) {
                     auto framePtr = std::make_shared<std::vector<std::complex<float>>>(
                         std::move(fullFrame)
                         );
-                    // Asenkron görevi başlat
                     startPalVideoProcessing(framePtr);
                 } else {
-                    // İşlemeyeceksek kilidi hemen bırak
                     palDemodulationInProgress.storeRelease(0);
                 }
             }
@@ -380,11 +367,12 @@ void MainWindow::startPalAudioProcessing(std::shared_ptr<std::vector<std::comple
     });
 }
 
-// --- startPalVideoProcessing Uygulaması ---
+// mainwindow.cpp - startPalVideoProcessing metodunu debug ile güncelle
+
 void MainWindow::startPalVideoProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr)
 {
     QtConcurrent::run(m_threadPool, [this, framePtr]() {
-        AtomicGuard guard(palDemodulationInProgress); // CRITICAL: Kilit ilk açılmalı
+        AtomicGuard guard(palDemodulationInProgress);
 
         try {
             if (framePtr->size() > 10000000) {
@@ -392,20 +380,36 @@ void MainWindow::startPalVideoProcessing(std::shared_ptr<std::vector<std::comple
                 return;
             }
 
+            // Demodulate video
             auto image = palbDemodulator->demodulateVideoOnly(*framePtr);
 
             if (!image.isNull()) {
-                // UI Güncelleme ve ölçekleme mantığı
-                QImage displayImage = image;
-                if (image.width() > 1024 || image.height() > 768) {
-                    displayImage = image.scaled(1024, 768, Qt::KeepAspectRatio, Qt::FastTransformation);
-                }
 
-                QMetaObject::invokeMethod(this, [this, img = std::move(displayImage)]() {
+                // Use TVScreen interface (DATV-style - RECOMMENDED)
+                if (palbDemodulator->isTVScreenAvailable()) {
+
+                    // Render to TVScreen in main thread
+                    QMetaObject::invokeMethod(this, [this]() {
+                        if (this && palbDemodulator && m_tvAdapter) {
+                            palbDemodulator->renderToTVScreen();
+                        }
+                    }, Qt::QueuedConnection);
+                }
+                else {
+                    // Fallback: Direct QImage update
+                    QImage displayImage = image;
+                    if (image.width() > 1024 || image.height() > 768) {
+                        displayImage = image.scaled(1024, 768, Qt::KeepAspectRatio, Qt::FastTransformation);
+                    }
+
+                    QMetaObject::invokeMethod(this, [this, img = std::move(displayImage)]() {
                         if (this) {
                             updateDisplay(img);
                         }
                     }, Qt::QueuedConnection);
+                }
+            } else {
+                qWarning() << "✗ Demodulation returned null image";
             }
         }
         catch (const std::exception& e) {
@@ -466,6 +470,7 @@ void MainWindow::addVideoControls()
     brightLabel = new QLabel("Brightness:");
     contrastLabel = new QLabel("Contrast:");
     gammaLabel = new QLabel("Gamma:");
+    syncLabel = new QLabel("Sync:");
 
     // Sliders in second row
     brightSlider = new QSlider(Qt::Horizontal);
@@ -480,6 +485,10 @@ void MainWindow::addVideoControls()
     gammaSlider->setRange(50, 150);
     gammaSlider->setValue(80);
 
+    syncSlider = new QSlider(Qt::Horizontal);
+    syncSlider->setRange(0, 100);
+    syncSlider->setValue(15);
+
     // Values in third row
     brightValue = new QLabel("20");
     brightValue->setAlignment(Qt::AlignCenter);
@@ -490,6 +499,9 @@ void MainWindow::addVideoControls()
     gammaValue = new QLabel("0.8");
     gammaValue->setAlignment(Qt::AlignCenter);
 
+    syncValue = new QLabel("0.15");
+    syncValue->setAlignment(Qt::AlignCenter);
+
     // Invert checkbox in fourth row
     invertCheckBox = new QCheckBox("Invert Video ");    
 
@@ -497,19 +509,23 @@ void MainWindow::addVideoControls()
     videoLayout->addWidget(brightLabel, 0, 0, Qt::AlignCenter);
     videoLayout->addWidget(contrastLabel, 0, 1, Qt::AlignCenter);
     videoLayout->addWidget(gammaLabel, 0, 2, Qt::AlignCenter);
+    videoLayout->addWidget(syncLabel, 0, 3, Qt::AlignCenter);
 
     videoLayout->addWidget(brightSlider, 1, 0);
     videoLayout->addWidget(contrastSlider, 1, 1);
     videoLayout->addWidget(gammaSlider, 1, 2);
-    videoLayout->addWidget(invertCheckBox, 1, 3);
+    videoLayout->addWidget(syncSlider, 1, 3);
+    videoLayout->addWidget(invertCheckBox, 1, 4);
 
     videoLayout->addWidget(brightValue, 2, 0, Qt::AlignCenter);
     videoLayout->addWidget(contrastValue, 2, 1, Qt::AlignCenter);
     videoLayout->addWidget(gammaValue, 2, 2, Qt::AlignCenter);
+    videoLayout->addWidget(syncValue, 2, 3, Qt::AlignCenter);
 
-    brightSlider->setFixedWidth(120);
-    contrastSlider->setFixedWidth(120);
-    gammaSlider->setFixedWidth(120);
+    brightSlider->setFixedWidth(100);
+    contrastSlider->setFixedWidth(100);
+    gammaSlider->setFixedWidth(100);
+    syncSlider->setFixedWidth(100);
 
     // gammaValue'nun altında: logBrowser (sol) ve invertCheckBox (sağ) yan yana (row 3, columns 0-3)
     const int PAL_HEIGHT = 576;
@@ -520,7 +536,7 @@ void MainWindow::addVideoControls()
     // En sağda: tvDisplay tek başına (column 4)
     tvDisplay->setMinimumHeight(3 * PAL_HEIGHT / 5);
     tvDisplay->setMinimumWidth(3 * PAL_WIDTH / 5);
-    videoLayout->addWidget(tvDisplay, 0, 4, 4, 1);  // row=0, col=4, rowSpan=4, colSpan=1
+    videoLayout->addWidget(tvDisplay, 0, 5, 5, 1);  // row=0, col=4, rowSpan=4, colSpan=1
 
     // Connect signals
     connect(brightSlider, &QSlider::valueChanged, [this](int value) {
@@ -544,6 +560,14 @@ void MainWindow::addVideoControls()
         gammaValue->setText(QString::number(m_videoGamma, 'f', 2));
         if (palbDemodulator) {
             palbDemodulator->setVideoGamma(m_videoGamma);
+        }
+    });
+
+    connect(syncSlider, &QSlider::valueChanged, [this](int value) {
+        m_videoSync = value / 100.0f;
+        syncValue->setText(QString::number(m_videoSync, 'f', 2));
+        if (palbDemodulator) {
+            palbDemodulator->setVSyncThreshold(m_videoSync);
         }
     });
 
@@ -1165,8 +1189,8 @@ void MainWindow::handleSamples(const std::vector<std::complex<float>>& samples)
 
 void MainWindow::updateDisplay(const QImage& image)
 {
-    // Thread-safe: QImage'i kopyala
-    if (!image.isNull()) {
+    // Direct QImage update (fallback when not using TVScreen)
+    if (!image.isNull() && tvDisplay) {
         QImage safeCopy = image.copy();
         tvDisplay->updateDisplay(safeCopy);
     }

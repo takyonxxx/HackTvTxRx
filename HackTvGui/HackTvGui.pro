@@ -106,7 +106,9 @@ HEADERS += \
     meter.h \
     modulator.h \
     palbdemodulator.h \
-    tv_display.h
+    tv_display.h \
+    tvdisplayadapter.h \
+    tvscreen.h
 
 FORMS += \
     mainwindow.ui
