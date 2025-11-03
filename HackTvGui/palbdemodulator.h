@@ -603,11 +603,6 @@ private:
         size_t& syncStart,
         int& fieldType);
 
-    bool detectHorizontalSync(
-        const std::vector<float>& signal,
-        size_t startPos,
-        size_t& syncPos);
-
     std::vector<float> removeVBI(
         const std::vector<float>& signal);
 
