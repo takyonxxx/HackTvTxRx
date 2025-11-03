@@ -81,7 +81,7 @@ MainWindow::MainWindow(QWidget *parent)
     palbDemodulator->setDemodMode(PALBDemodulator::DEMOD_AM);
 
     // VSB filter is critical for AM
-    palbDemodulator->setVSBFilterEnabled(true);
+    palbDemodulator->setVSBFilterEnabled(false);
     palbDemodulator->setVSBLowerCutoff(0.75e6);
     palbDemodulator->setVSBUpperCutoff(5.5e6);
 

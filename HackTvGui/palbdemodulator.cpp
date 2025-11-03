@@ -159,26 +159,29 @@ void PALBDemodulator::setDecimationFactor(int factor)
     initializeFilters();
 }
 
+// PALBDemodulator.cpp - Add to calculateLineParameters():
 void PALBDemodulator::calculateLineParameters()
 {
     effectiveSampleRate = sampleRate / decimationFactor;
+    lineFrequency = PAL_LINE_FREQUENCY;  // Make sure this is 15625 Hz
     pointsPerLine = effectiveSampleRate / lineFrequency;
     samplesPerLine = static_cast<int>(pointsPerLine);
     fractionalOffset = pointsPerLine - samplesPerLine;
 
     lineBuffer.resize(samplesPerLine * 2);
 
-    // Calculate expected frame size for sanity checks
     expectedFrameSamples = samplesPerLine * PAL_TOTAL_LINES;
-
-    // AGC buffer = 2 complete frames (SDRangel approach)
     amAgcBufferSize = expectedFrameSamples * 2;
 
-    qDebug() << "PAL Parameters:"
-             << "Effective rate:" << effectiveSampleRate
-             << "Samples/line:" << samplesPerLine
-             << "Expected frame:" << expectedFrameSamples
-             << "AGC buffer:" << amAgcBufferSize;
+    qDebug() << "=== Line Parameters ===";
+    qDebug() << "Sample rate:" << sampleRate;
+    qDebug() << "Decimation:" << decimationFactor;
+    qDebug() << "Effective rate:" << effectiveSampleRate;
+    qDebug() << "Line frequency:" << lineFrequency << "Hz";
+    qDebug() << "Samples per line:" << samplesPerLine;
+    qDebug() << "Expected frame:" << expectedFrameSamples;
+    qDebug() << "Expected V-sync width:" << (PAL_VSYNC_DURATION * effectiveSampleRate) << "samples";
+    qDebug() << "Expected H-sync width:" << (PAL_H_SYNC_DURATION * effectiveSampleRate) << "samples";
 }
 
 void PALBDemodulator::initializeFilters()
@@ -251,14 +254,22 @@ PALBDemodulator::DemodulatedFrame PALBDemodulator::demodulate(
     return frame;
 }
 
-// PALBDemodulator.cpp - demodulateVideoOnly - ORİJİNAL signal conditioning'e geri dön
-
+// PALBDemodulator.cpp - Complete demodulateVideoOnly with diagnostics:
 QImage PALBDemodulator::demodulateVideoOnly(
     const std::vector<std::complex<float>>& samples)
 {
     if (samples.empty()) {
         qDebug() << "ERROR: Empty samples";
         return QImage();
+    }
+
+    // DIAGNOSTIC: Track call frequency and sample counts
+    static int callCounter = 0;
+    if (++callCounter % 25 == 0) {
+        qDebug() << "=== Frame" << callCounter << "===";
+        qDebug() << "Input samples:" << samples.size()
+                 << "Expected frame:" << expectedFrameSamples
+                 << "Ratio:" << (samples.size() / (float)expectedFrameSamples);
     }
 
     try {
@@ -270,9 +281,26 @@ QImage PALBDemodulator::demodulateVideoOnly(
             shifted = samples;
         }
 
-        // 2a. Apply vestigial sideband filter for AM
+        // DIAGNOSTIC: Check IQ signal strength
+        static int iqCheckCounter = 0;
+        if (++iqCheckCounter % 25 == 0) {
+            float iqMagSum = 0.0f;
+            for (size_t i = 0; i < std::min(size_t(1000), shifted.size()); i++) {
+                iqMagSum += std::abs(shifted[i]);
+            }
+            float avgIQMag = iqMagSum / std::min(size_t(1000), shifted.size());
+            qDebug() << "IQ signal strength: avg magnitude" << avgIQMag;
+        }
+
+        // 2a. Apply vestigial sideband filter for AM (optional)
         if (demodMode == DEMOD_AM && vsbFilterEnabled) {
+            size_t beforeVSB = shifted.size();
             shifted = applyVestigialSidebandFilter(shifted);
+
+            static int vsbDiagCounter = 0;
+            if (++vsbDiagCounter % 25 == 0) {
+                qDebug() << "VSB filter: input" << beforeVSB << "output" << shifted.size();
+            }
         }
 
         // 2b. Apply carrier tracking for AM (optional)
@@ -282,15 +310,25 @@ QImage PALBDemodulator::demodulateVideoOnly(
 
         // 2c. Pre-filter and decimate if needed
         if (decimationFactor > 1) {
+            size_t beforeSize = shifted.size();
             shifted = complexLowPassFilter(shifted, effectiveSampleRate * 0.45f);
+            size_t afterFilterSize = shifted.size();
             shifted = decimateComplex(shifted, decimationFactor);
+            size_t afterDecimSize = shifted.size();
+
+            static int decimDiagCounter = 0;
+            if (++decimDiagCounter % 25 == 0) {
+                qDebug() << "Decimation: input" << beforeSize
+                         << "-> filter" << afterFilterSize
+                         << "-> decim" << afterDecimSize
+                         << "(factor" << decimationFactor << ")";
+            }
         }
 
         // 3. Demodulation
         std::vector<float> demodulated;
         if (demodMode == DEMOD_AM) {
             demodulated = amDemodulate(shifted);
-            // AM demodulate now handles proper scaling internally
         } else {
             demodulated = fmDemodulateAtan2(shifted);
         }
@@ -298,24 +336,33 @@ QImage PALBDemodulator::demodulateVideoOnly(
         if (demodulated.empty()) {
             qDebug() << "ERROR: Demodulation returned empty";
             return QImage();
-        }       
-
-        if (demodulated.empty()) {
-            qDebug() << "ERROR: Lowpass filter returned empty";
-            return QImage();
         }
 
-        // 5. Apply signal conditioning based on mode - ORİJİNAL
+        static int demodDiagCounter = 0;
+        if (++demodDiagCounter % 25 == 0) {
+            qDebug() << "After demodulation:" << demodulated.size() << "samples";
+        }
+
+        // 4. Apply signal conditioning based on mode
         if (demodMode == DEMOD_AM) {
-            // AM: demodulate already positioned sync at 0.0
-            // Just apply inversion if needed
+            // AM: Just apply inversion if needed
             demodulated = restoreDCForAM(demodulated);
 
-            // Log signal levels for diagnostic
-            static int frameCounter = 0;
-            if (++frameCounter % 25 == 0) {
+            // DIAGNOSTIC: Check signal after conditioning
+            static int condDiagCounter = 0;
+            if (++condDiagCounter % 25 == 0) {
                 auto mm = std::minmax_element(demodulated.begin(), demodulated.end());
-                qDebug() << "After AM conditioning: min" << *mm.first << "max" << *mm.second;
+
+                // Count sync samples
+                int syncSamples = 0;
+                for (float v : demodulated) {
+                    if (v < 0.20f) syncSamples++;
+                }
+                float syncPercentage = (syncSamples * 100.0f) / demodulated.size();
+
+                qDebug() << "After AM conditioning: min" << *mm.first
+                         << "max" << *mm.second
+                         << "sync%" << syncPercentage;
             }
         } else {
             // FM signal conditioning
@@ -324,7 +371,7 @@ QImage PALBDemodulator::demodulateVideoOnly(
             demodulated = normalizeSignal(demodulated);
         }
 
-        // 6. Detect vertical sync
+        // 5. Detect vertical sync
         size_t vsyncPos = 0;
         int fieldType = 0;
         bool syncFound = detectVerticalSync(demodulated, vsyncPos, fieldType);
@@ -341,20 +388,33 @@ QImage PALBDemodulator::demodulateVideoOnly(
             }
         }
 
-        // 7. Skip VBI if sync found
+        // 6. Skip VBI if sync found
         if (syncFound && vsyncPos + vbiLines * samplesPerLine < demodulated.size()) {
             std::vector<float> videoOnly(
                 demodulated.begin() + vsyncPos + vbiLines * samplesPerLine,
                 demodulated.end()
                 );
             demodulated = videoOnly;
+
+            static int vbiDiagCounter = 0;
+            if (++vbiDiagCounter % 25 == 0) {
+                qDebug() << "After VBI removal:" << demodulated.size() << "samples";
+            }
         }
 
-        // Video lowpass filter
-        demodulated = lowPassFilter(demodulated, 5.5e6);
+        // 7. Video lowpass filter (optional - may smooth sync pulses)
+        // TEMPORARILY COMMENTED OUT FOR TESTING
+        // demodulated = lowPassFilter(demodulated, 5.5e6);
 
         // 8. Timing recovery
+        size_t beforeTiming = demodulated.size();
         demodulated = timingRecovery(demodulated);
+
+        static int timingDiagCounter = 0;
+        if (++timingDiagCounter % 25 == 0) {
+            qDebug() << "After timing recovery:" << demodulated.size()
+                     << "samples (from" << beforeTiming << ")";
+        }
 
         if (demodulated.empty()) {
             qDebug() << "ERROR: Timing recovery returned empty";
@@ -375,6 +435,11 @@ QImage PALBDemodulator::demodulateVideoOnly(
         if (image.isNull()) {
             qDebug() << "ERROR: convertToImage returned null";
             return QImage();
+        }
+
+        static int imageDiagCounter = 0;
+        if (++imageDiagCounter % 25 == 0) {
+            qDebug() << "Created image:" << image.width() << "x" << image.height();
         }
 
         // 11. Apply gamma correction
@@ -465,6 +530,7 @@ std::vector<float> PALBDemodulator::fmDemodulateDifferential(
 // AM DEMODULATION
 // ============================================================================
 
+// PALBDemodulator.cpp - Enhanced AM demodulate with raw signal analysis:
 std::vector<float> PALBDemodulator::amDemodulate(
     const std::vector<std::complex<float>>& signal)
 {
@@ -472,66 +538,65 @@ std::vector<float> PALBDemodulator::amDemodulate(
 
     std::vector<float> demod(signal.size());
 
-    // Step 1: Pure magnitude extraction (envelope detection)
+    // Step 1: Magnitude extraction
     for (size_t i = 0; i < signal.size(); i++) {
         float I = signal[i].real();
         float Q = signal[i].imag();
         demod[i] = std::sqrt(I * I + Q * Q);
     }
 
-    // Step 2: Find actual min/max of THIS frame
+    // DIAGNOSTIC: Check RAW magnitude distribution
+    frameCount++;
+    if (frameCount % 25 == 0) {
+        auto mm = std::minmax_element(demod.begin(), demod.end());
+        float rawMin = *mm.first;
+        float rawMax = *mm.second;
+
+        // Calculate histogram of raw values
+        int bins[10] = {0};
+        for (float v : demod) {
+            int bin = static_cast<int>((v - rawMin) / (rawMax - rawMin + 0.001f) * 9.99f);
+            bin = std::max(0, std::min(9, bin));
+            bins[bin]++;
+        }
+
+        qDebug() << "RAW magnitude: min" << rawMin << "max" << rawMax
+                 << "range" << (rawMax - rawMin);
+
+        QString histogram = "Distribution: ";
+        for (int i = 0; i < 10; i++) {
+            histogram += QString("[%1]=%2% ").arg(i).arg(bins[i] * 100.0f / demod.size(), 0, 'f', 1);
+        }
+        qDebug() << histogram;
+
+        // Check if signal has any dynamics
+        float stdDev = 0.0f;
+        float mean = std::accumulate(demod.begin(), demod.end(), 0.0f) / demod.size();
+        for (float v : demod) {
+            stdDev += (v - mean) * (v - mean);
+        }
+        stdDev = std::sqrt(stdDev / demod.size());
+
+        qDebug() << "Signal stats: mean" << mean << "stddev" << stdDev
+                 << "SNR" << (mean / (stdDev + 0.001f));
+    }
+
+    // Step 2: Find min/max
     auto minmax = std::minmax_element(demod.begin(), demod.end());
     float syncTip = *minmax.first;
     float peakWhite = *minmax.second;
     float range = peakWhite - syncTip;
 
     if (range < 0.001f) {
+        qWarning() << "WARNING: No signal dynamics! Range =" << range;
         range = 1.0f;
     }
 
-    // Step 3: Normalize so sync is at 0.0, white is at ~0.7, then scale to 0-1
-    // This is the CRITICAL step - position sync at 0.0 FIRST
+    // Step 3: Normalize
     for (size_t i = 0; i < demod.size(); i++) {
-        // Shift so sync tip is at 0.0
         demod[i] = (demod[i] - syncTip) / range;
-
-        // Apply scale factor (SDRangel's AM scale control)
         demod[i] = demod[i] * amScaleFactor;
-
-        // Hard clamp
         demod[i] = clamp(demod[i], 0.0f, 1.0f);
-    }
-
-    // Step 4: Update AGC history for stability tracking (not for scaling)
-    for (size_t i = 0; i < std::min(demod.size(), size_t(1000)); i++) {
-        amAgcHistory.push_back(demod[i]);
-        if (amAgcHistory.size() > amAgcBufferSize) {
-            amAgcHistory.pop_front();
-        }
-    }
-
-    // Step 5: Track sync level (should now be near 0.0)
-    syncLevelHistory.push_back(syncTip / (peakWhite + 0.001f));
-    if (syncLevelHistory.size() > syncHistorySize) {
-        syncLevelHistory.erase(syncLevelHistory.begin());
-    }
-
-    std::vector<float> sorted = syncLevelHistory;
-    std::sort(sorted.begin(), sorted.end());
-    syncLevelEstimate = sorted[sorted.size() / 2];
-
-    // Log every 25 frames
-    frameCount++;
-    if (frameCount % 25 == 0) {
-        // Find actual sync level in normalized signal
-        float actualSyncLevel = *std::min_element(demod.begin(), demod.end());
-        float actualPeakLevel = *std::max_element(demod.begin(), demod.end());
-
-        qDebug() << "AM Demod:"
-                 << "Raw range:" << range
-                 << "Normalized sync:" << actualSyncLevel  // Should be ~0.0
-                 << "Normalized peak:" << actualPeakLevel   // Should be ~1.0
-                 << "Scale factor:" << amScaleFactor;
     }
 
     return demod;
@@ -1008,36 +1073,25 @@ std::vector<float> PALBDemodulator::normalizeSignal(
 // SYNCHRONIZATION
 // ============================================================================
 
+// PALBDemodulator.cpp - Pattern-based V-Sync detection:
 bool PALBDemodulator::detectVerticalSync(
     const std::vector<float>& signal,
     size_t& syncStart,
     int& fieldType)
 {
-    // Sync should now be at 0.0-0.15 range
-    const float SYNC_THRESHOLD = 0.20f; // Fixed threshold, not multiplied
+    const float SYNC_THRESHOLD = 0.20f;
 
-    // Expected V-sync duration for PAL (160μs)
-    const int expectedVSyncSamples = static_cast<int>(PAL_VSYNC_DURATION * effectiveSampleRate);
-    const int minVSyncWidth = expectedVSyncSamples * 2 / 3;  // At least 2/3 of expected
-    const int maxVSyncWidth = expectedVSyncSamples * 4;      // At most 4x expected
-
-    qDebug() << "V-Sync search: threshold" << SYNC_THRESHOLD
-             << "expected width" << expectedVSyncSamples
-             << "range" << minVSyncWidth << "-" << maxVSyncWidth;
-
-    // Find all long sync pulses
+    // Collect all sync pulses
     struct SyncPulse {
         size_t position;
         int width;
-        float minLevel;
     };
 
-    std::vector<SyncPulse> candidates;
+    std::vector<SyncPulse> allPulses;
 
     int syncCount = 0;
     size_t pulseStart = 0;
     bool inSync = false;
-    float minLevelInPulse = 1.0f;
 
     for (size_t i = 0; i < signal.size(); i++) {
         if (signal[i] < SYNC_THRESHOLD) {
@@ -1045,66 +1099,90 @@ bool PALBDemodulator::detectVerticalSync(
                 inSync = true;
                 pulseStart = i;
                 syncCount = 1;
-                minLevelInPulse = signal[i];
             } else {
                 syncCount++;
-                minLevelInPulse = std::min(minLevelInPulse, signal[i]);
             }
         } else {
-            if (inSync && syncCount >= minVSyncWidth && syncCount <= maxVSyncWidth) {
+            if (inSync && syncCount > 20) {  // Minimum pulse width
                 SyncPulse pulse;
                 pulse.position = pulseStart;
                 pulse.width = syncCount;
-                pulse.minLevel = minLevelInPulse;
-                candidates.push_back(pulse);
-
-                qDebug() << "  Candidate: pos" << pulseStart
-                         << "width" << syncCount
-                         << "level" << minLevelInPulse;
+                allPulses.push_back(pulse);
             }
             inSync = false;
             syncCount = 0;
-            minLevelInPulse = 1.0f;
         }
     }
 
-    if (candidates.empty()) {
-        qDebug() << "  No V-Sync candidates found";
+    if (allPulses.size() < 10) {
+        qDebug() << "Too few pulses:" << allPulses.size();
         return false;
     }
 
-    // Pick the first valid candidate (prefer early in frame)
-    SyncPulse* bestPulse = &candidates[0];
+    // Calculate median pulse width and spacing
+    std::vector<int> widths;
+    std::vector<int> spacings;
 
-    // If we have timing info, prefer the one closest to expected position
-    if (lastValidVSyncPos > 0 && expectedFrameSamples > 0 && candidates.size() > 1) {
-        size_t expectedPos = (lastValidVSyncPos + expectedFrameSamples) % (expectedFrameSamples * 2);
-        size_t bestDiff = std::abs(static_cast<long long>(candidates[0].position - expectedPos));
-
-        for (size_t i = 1; i < candidates.size(); i++) {
-            size_t diff = std::abs(static_cast<long long>(candidates[i].position - expectedPos));
-            if (diff < bestDiff) {
-                bestDiff = diff;
-                bestPulse = &candidates[i];
-            }
+    for (size_t i = 0; i < allPulses.size(); i++) {
+        widths.push_back(allPulses[i].width);
+        if (i > 0) {
+            int spacing = allPulses[i].position - allPulses[i-1].position;
+            spacings.push_back(spacing);
         }
     }
 
-    syncStart = bestPulse->position;
-    fieldType = (syncStart / samplesPerLine) % 2;
+    std::sort(widths.begin(), widths.end());
+    std::sort(spacings.begin(), spacings.end());
 
-    lastValidVSyncPos = syncStart;
-    lastVSyncPosition = syncStart;
-    vSyncCounter = 0;
-    stableFrameCount++;
+    int medianWidth = widths[widths.size() / 2];
+    int medianSpacing = spacings[spacings.size() / 2];
 
-    qDebug() << "✓ V-Sync FOUND: pos" << syncStart
-             << "width" << bestPulse->width
-             << "level" << bestPulse->minLevel
-             << "field" << fieldType
-             << "line" << (syncStart / samplesPerLine);
+    qDebug() << "Pulse stats: count" << allPulses.size()
+             << "median width" << medianWidth
+             << "median spacing" << medianSpacing
+             << "expected line spacing" << samplesPerLine;
 
-    return true;
+    // PAL V-sync pattern detection:
+    // Look for a region with WIDER than normal pulses occurring close together
+    // V-sync pulses are roughly 2x normal H-sync width
+
+    int vsyncWidthThreshold = medianWidth * 1.5f;  // 1.5x median = likely V-sync
+    int vsyncRegionSamples = 5 * samplesPerLine;   // V-sync spans ~5 lines
+
+    // Search for clusters of wide pulses
+    for (size_t i = 0; i < allPulses.size() - 5; i++) {
+        // Count wide pulses in next vsyncRegionSamples
+        int widePulseCount = 0;
+        size_t regionStart = allPulses[i].position;
+        size_t regionEnd = regionStart + vsyncRegionSamples;
+
+        for (size_t j = i; j < allPulses.size() && allPulses[j].position < regionEnd; j++) {
+            if (allPulses[j].width > vsyncWidthThreshold) {
+                widePulseCount++;
+            }
+        }
+
+        // V-sync region should have at least 3-4 wide pulses
+        if (widePulseCount >= 3) {
+            syncStart = allPulses[i].position;
+            fieldType = (syncStart / samplesPerLine) % 2;
+
+            lastValidVSyncPos = syncStart;
+            lastVSyncPosition = syncStart;
+            vSyncCounter = 0;
+            stableFrameCount++;
+
+            qDebug() << "✓ V-Sync FOUND (pattern): pos" << syncStart
+                     << "wide pulses" << widePulseCount
+                     << "field" << fieldType
+                     << "line" << (syncStart / samplesPerLine);
+
+            return true;
+        }
+    }
+
+    qDebug() << "✗ No V-Sync pattern found";
+    return false;
 }
 
 bool PALBDemodulator::detectHorizontalSync(
