@@ -325,6 +325,35 @@ QImage PALBDemodulator::demodulateVideoOnly(
             }
         }
 
+        if (callCounter == 50) {  // Test once at frame 50
+            qDebug() << "=== TESTING AM vs FM ===";
+
+            // Test AM
+            auto testAM = amDemodulate(shifted);
+            int amSyncCount = 0;
+            for (float v : testAM) {
+                if (v < 0.15f) amSyncCount++;
+            }
+            float amSyncPct = (amSyncCount * 100.0f) / testAM.size();
+
+            // Test FM
+            auto testFM = fmDemodulateAtan2(shifted);
+            testFM = removeDCOffset(testFM);
+            testFM = normalizeSignal(testFM);
+            int fmSyncCount = 0;
+            for (float v : testFM) {
+                if (v < 0.15f) fmSyncCount++;
+            }
+            float fmSyncPct = (fmSyncCount * 100.0f) / testFM.size();
+
+            qDebug() << "AM sync%:" << amSyncPct << "FM sync%:" << fmSyncPct;
+            qDebug() << "Expected: ~15% for correct modulation";
+
+            if (fmSyncPct > 10.0f && fmSyncPct < 20.0f) {
+                qWarning() << "*** FM gives better sync! Your signal might be FM, not AM! ***";
+            }
+        }
+
         // 3. Demodulation
         std::vector<float> demodulated;
         if (demodMode == DEMOD_AM) {
@@ -530,7 +559,7 @@ std::vector<float> PALBDemodulator::fmDemodulateDifferential(
 // AM DEMODULATION
 // ============================================================================
 
-// PALBDemodulator.cpp - Enhanced AM demodulate with raw signal analysis:
+// PALBDemodulator.cpp - Percentile-based AM demodulation (SDRangel approach):
 std::vector<float> PALBDemodulator::amDemodulate(
     const std::vector<std::complex<float>>& signal)
 {
@@ -545,58 +574,74 @@ std::vector<float> PALBDemodulator::amDemodulate(
         demod[i] = std::sqrt(I * I + Q * Q);
     }
 
-    // DIAGNOSTIC: Check RAW magnitude distribution
+    // Step 2: Use percentiles to find sync tip and peak white
+    // Sort a sample of the data to find percentiles
+    std::vector<float> sorted;
+
+    // Sample every 10th point to speed up (still gives 32k samples)
+    for (size_t i = 0; i < demod.size(); i += 10) {
+        sorted.push_back(demod[i]);
+    }
+    std::sort(sorted.begin(), sorted.end());
+
+    // Sync tip: 5th percentile (below this is noise/overshoot)
+    size_t p5_idx = sorted.size() * 0.05f;
+    float syncTipLevel = sorted[p5_idx];
+
+    // Blanking level: 20th percentile
+    size_t p20_idx = sorted.size() * 0.20f;
+    float blankingLevel = sorted[p20_idx];
+
+    // Peak white: 95th percentile (above this is overshoot)
+    size_t p95_idx = sorted.size() * 0.95f;
+    float peakWhiteLevel = sorted[p95_idx];
+
+    // Video range from sync tip to peak white
+    float videoRange = peakWhiteLevel - syncTipLevel;
+
+    if (videoRange < 0.01f) {
+        qWarning() << "No video range!";
+        videoRange = 1.0f;
+        syncTipLevel = *std::min_element(demod.begin(), demod.end());
+    }
+
     frameCount++;
     if (frameCount % 25 == 0) {
-        auto mm = std::minmax_element(demod.begin(), demod.end());
-        float rawMin = *mm.first;
-        float rawMax = *mm.second;
-
-        // Calculate histogram of raw values
-        int bins[10] = {0};
-        for (float v : demod) {
-            int bin = static_cast<int>((v - rawMin) / (rawMax - rawMin + 0.001f) * 9.99f);
-            bin = std::max(0, std::min(9, bin));
-            bins[bin]++;
-        }
-
-        qDebug() << "RAW magnitude: min" << rawMin << "max" << rawMax
-                 << "range" << (rawMax - rawMin);
-
-        QString histogram = "Distribution: ";
-        for (int i = 0; i < 10; i++) {
-            histogram += QString("[%1]=%2% ").arg(i).arg(bins[i] * 100.0f / demod.size(), 0, 'f', 1);
-        }
-        qDebug() << histogram;
-
-        // Check if signal has any dynamics
-        float stdDev = 0.0f;
-        float mean = std::accumulate(demod.begin(), demod.end(), 0.0f) / demod.size();
-        for (float v : demod) {
-            stdDev += (v - mean) * (v - mean);
-        }
-        stdDev = std::sqrt(stdDev / demod.size());
-
-        qDebug() << "Signal stats: mean" << mean << "stddev" << stdDev
-                 << "SNR" << (mean / (stdDev + 0.001f));
+        qDebug() << "AM Percentile analysis:";
+        qDebug() << "  P5 (sync tip):" << syncTipLevel;
+        qDebug() << "  P20 (blanking):" << blankingLevel;
+        qDebug() << "  P95 (peak white):" << peakWhiteLevel;
+        qDebug() << "  Video range:" << videoRange;
+        qDebug() << "  Blanking/sync ratio:" << ((blankingLevel - syncTipLevel) / videoRange);
     }
 
-    // Step 2: Find min/max
-    auto minmax = std::minmax_element(demod.begin(), demod.end());
-    float syncTip = *minmax.first;
-    float peakWhite = *minmax.second;
-    float range = peakWhite - syncTip;
-
-    if (range < 0.001f) {
-        qWarning() << "WARNING: No signal dynamics! Range =" << range;
-        range = 1.0f;
-    }
-
-    // Step 3: Normalize
+    // Step 3: Normalize with sync tip at 0.0
     for (size_t i = 0; i < demod.size(); i++) {
-        demod[i] = (demod[i] - syncTip) / range;
+        demod[i] = (demod[i] - syncTipLevel) / videoRange;
         demod[i] = demod[i] * amScaleFactor;
         demod[i] = clamp(demod[i], 0.0f, 1.0f);
+    }
+
+    // Step 4: Verify normalization
+    if (frameCount % 25 == 0) {
+        int syncCount = 0;
+        int blankCount = 0;
+        int videoCount = 0;
+
+        for (float v : demod) {
+            if (v < 0.15f) syncCount++;
+            else if (v < 0.35f) blankCount++;
+            else videoCount++;
+        }
+
+        qDebug() << "  After normalization:";
+        qDebug() << "    Sync (<0.15):" << (syncCount * 100.0f / demod.size()) << "%";
+        qDebug() << "    Blank (0.15-0.35):" << (blankCount * 100.0f / demod.size()) << "%";
+        qDebug() << "    Video (>0.35):" << (videoCount * 100.0f / demod.size()) << "%";
+
+        // Find actual min/max after normalization
+        auto mm = std::minmax_element(demod.begin(), demod.end());
+        qDebug() << "    Actual range:" << *mm.first << "to" << *mm.second;
     }
 
     return demod;
