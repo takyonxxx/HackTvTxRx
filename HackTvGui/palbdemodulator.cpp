@@ -931,115 +931,91 @@ bool PALBDemodulator::detectVerticalSync(
     size_t& syncStart,
     int& fieldType)
 {
-    const float SYNC_THRESHOLD = vSyncThreshold * 1.5f;
+    // Configuration constants
+    constexpr float SYNC_THRESHOLD_MULTIPLIER = 1.5f;
+    constexpr int MIN_PULSE_WIDTH = 10;        // ~1.25μs minimum pulse width
+    constexpr int MIN_PULSE_COUNT = 100;       // Minimum pulses to analyze
+    constexpr float VSYNC_WIDTH_RATIO = 2.0f;  // V-sync pulses are ~2x wider
+    constexpr int VSYNC_SEARCH_LINES = 5;      // Search window in lines
+    constexpr int MIN_WIDE_PULSES = 2;         // Minimum wide pulses for V-sync
 
-    // STEP 1: Morphological closing to connect nearby sync pulses
-    // This widens narrow pulses that should be continuous
-    std::vector<float> closed = signal;
-    const int closeWindow = 5; // Connect pulses within 5 samples
+    const float syncThreshold = vSyncThreshold * SYNC_THRESHOLD_MULTIPLIER;
 
-    for (size_t i = 0; i < signal.size(); i++) {
-        bool hasSyncNearby = false;
-        for (int j = -closeWindow; j <= closeWindow; j++) {
-            int idx = i + j;
-            if (idx >= 0 && idx < static_cast<int>(signal.size())) {
-                if (signal[idx] < SYNC_THRESHOLD) {
-                    hasSyncNearby = true;
-                    break;
-                }
-            }
-        }
-        if (hasSyncNearby) {
-            closed[i] = std::min(closed[i], SYNC_THRESHOLD - 0.01f);
-        }
-    }
-
-    // STEP 2: Collect pulses from closed signal
+    // Collect sync pulses in single pass
     struct SyncPulse {
         size_t position;
         int width;
     };
 
-    std::vector<SyncPulse> allPulses;
+    std::vector<SyncPulse> pulses;
+    pulses.reserve(1000);
 
-    int syncCount = 0;
-    size_t pulseStart = 0;
     bool inSync = false;
+    size_t pulseStart = 0;
+    int pulseWidth = 0;
 
-    for (size_t i = 0; i < closed.size(); i++) {
-        if (closed[i] < SYNC_THRESHOLD) {
+    for (size_t i = 0; i < signal.size(); i++) {
+        if (signal[i] < syncThreshold) {
             if (!inSync) {
                 inSync = true;
                 pulseStart = i;
-                syncCount = 1;
+                pulseWidth = 1;
             } else {
-                syncCount++;
+                pulseWidth++;
             }
-        } else {
-            if (inSync && syncCount > 10) {  // Minimum 10 samples = 1.25μs
-                SyncPulse pulse;
-                pulse.position = pulseStart;
-                pulse.width = syncCount;
-                allPulses.push_back(pulse);
+        } else if (inSync) {
+            if (pulseWidth >= MIN_PULSE_WIDTH) {
+                pulses.push_back({pulseStart, pulseWidth});
             }
             inSync = false;
-            syncCount = 0;
+            pulseWidth = 0;
         }
     }
 
-    if (frameCount % 25 == 0) {
-        if (allPulses.size() > 0) {
-            std::vector<int> widths;
-            for (auto& p : allPulses) {
-                widths.push_back(p.width);
-            }
-            std::sort(widths.begin(), widths.end());
-        }
-    }
-
-    if (allPulses.size() < 100) {
+    if (pulses.size() < MIN_PULSE_COUNT) {
         return false;
     }
 
-    // STEP 3: Find line sync pattern
-    std::vector<int> widths, spacings;
-    for (size_t i = 0; i < allPulses.size(); i++) {
-        widths.push_back(allPulses[i].width);
-        if (i > 0) {
-            spacings.push_back(allPulses[i].position - allPulses[i-1].position);
-        }
+    // Calculate median pulse width for threshold
+    std::vector<int> widths;
+    widths.reserve(pulses.size());
+    for (const auto& p : pulses) {
+        widths.push_back(p.width);
     }
 
-    std::sort(widths.begin(), widths.end());
-    std::sort(spacings.begin(), spacings.end());
-
+    std::nth_element(widths.begin(),
+                     widths.begin() + widths.size() / 2,
+                     widths.end());
     int medianWidth = widths[widths.size() / 2];
-    int medianSpacing = spacings[spacings.size() / 2];
+    int vsyncWidthThreshold = static_cast<int>(medianWidth * VSYNC_WIDTH_RATIO);
 
-    // STEP 4: Find V-sync (wider pulses grouped together)
-    int vsyncWidthThreshold = medianWidth * 1.5f;
-    int vsyncRegionSamples = 5 * samplesPerLine;
+    // Search for V-sync pattern: cluster of wide pulses
+    const size_t searchWindow = VSYNC_SEARCH_LINES * samplesPerLine;
 
-    for (size_t i = 0; i < allPulses.size() - 3; i++) {
+    for (size_t i = 0; i < pulses.size(); i++) {
+        if (pulses[i].width < vsyncWidthThreshold) {
+            continue;
+        }
+
+        // Count wide pulses within search window
         int widePulseCount = 0;
-        size_t regionStart = allPulses[i].position;
-        size_t regionEnd = regionStart + vsyncRegionSamples;
+        size_t regionEnd = pulses[i].position + searchWindow;
 
-        for (size_t j = i; j < allPulses.size() && allPulses[j].position < regionEnd; j++) {
-            if (allPulses[j].width > vsyncWidthThreshold) {
+        for (size_t j = i; j < pulses.size() && pulses[j].position < regionEnd; j++) {
+            if (pulses[j].width >= vsyncWidthThreshold) {
                 widePulseCount++;
             }
         }
 
-        if (widePulseCount >= 2) {
-            syncStart = allPulses[i].position;
+        if (widePulseCount >= MIN_WIDE_PULSES) {
+            syncStart = pulses[i].position;
             fieldType = (syncStart / samplesPerLine) % 2;
-
             lastValidVSyncPos = syncStart;
             vSyncCounter = 0;
             return true;
         }
     }
+
     return false;
 }
 
