@@ -167,6 +167,18 @@ void PALBDemodulator::calculateLineParameters()
     fractionalOffset = pointsPerLine - samplesPerLine;
 
     lineBuffer.resize(samplesPerLine * 2);
+
+    // Calculate expected frame size for sanity checks
+    expectedFrameSamples = samplesPerLine * PAL_TOTAL_LINES;
+
+    // AGC buffer = 2 complete frames (SDRangel approach)
+    amAgcBufferSize = expectedFrameSamples * 2;
+
+    qDebug() << "PAL Parameters:"
+             << "Effective rate:" << effectiveSampleRate
+             << "Samples/line:" << samplesPerLine
+             << "Expected frame:" << expectedFrameSamples
+             << "AGC buffer:" << amAgcBufferSize;
 }
 
 void PALBDemodulator::initializeFilters()
@@ -295,8 +307,16 @@ QImage PALBDemodulator::demodulateVideoOnly(
 
         // 5. Apply signal conditioning based on mode - ORİJİNAL
         if (demodMode == DEMOD_AM) {
-            // AM-specific DC restoration
+            // AM: demodulate already positioned sync at 0.0
+            // Just apply inversion if needed
             demodulated = restoreDCForAM(demodulated);
+
+            // Log signal levels for diagnostic
+            static int frameCounter = 0;
+            if (++frameCounter % 25 == 0) {
+                auto mm = std::minmax_element(demodulated.begin(), demodulated.end());
+                qDebug() << "After AM conditioning: min" << *mm.first << "max" << *mm.second;
+            }
         } else {
             // FM signal conditioning
             demodulated = applyAGC(demodulated);
@@ -452,34 +472,66 @@ std::vector<float> PALBDemodulator::amDemodulate(
 
     std::vector<float> demod(signal.size());
 
-    // Basic envelope detection
+    // Step 1: Pure magnitude extraction (envelope detection)
     for (size_t i = 0; i < signal.size(); i++) {
-        demod[i] = std::abs(signal[i]);
+        float I = signal[i].real();
+        float Q = signal[i].imag();
+        demod[i] = std::sqrt(I * I + Q * Q);
     }
 
-    // Find the sync tip (minimum) and peak white (maximum)
+    // Step 2: Find actual min/max of THIS frame
     auto minmax = std::minmax_element(demod.begin(), demod.end());
     float syncTip = *minmax.first;
     float peakWhite = *minmax.second;
-
-    // Apply scale factor (like SDRangel's AM scale control)
-    float range = (peakWhite - syncTip) * amScaleFactor;
+    float range = peakWhite - syncTip;
 
     if (range < 0.001f) {
-        // Prevent division by zero
         range = 1.0f;
     }
 
-    // Normalize with proper black level positioning
-    for (size_t i = 0; i < signal.size(); i++) {
-        // Shift and scale to 0-1 range
+    // Step 3: Normalize so sync is at 0.0, white is at ~0.7, then scale to 0-1
+    // This is the CRITICAL step - position sync at 0.0 FIRST
+    for (size_t i = 0; i < demod.size(); i++) {
+        // Shift so sync tip is at 0.0
         demod[i] = (demod[i] - syncTip) / range;
 
-        // Apply level shift to position black level at ~0.3
-        demod[i] = demod[i] + amLevelShift;
+        // Apply scale factor (SDRangel's AM scale control)
+        demod[i] = demod[i] * amScaleFactor;
 
-        // Clamp to valid range
+        // Hard clamp
         demod[i] = clamp(demod[i], 0.0f, 1.0f);
+    }
+
+    // Step 4: Update AGC history for stability tracking (not for scaling)
+    for (size_t i = 0; i < std::min(demod.size(), size_t(1000)); i++) {
+        amAgcHistory.push_back(demod[i]);
+        if (amAgcHistory.size() > amAgcBufferSize) {
+            amAgcHistory.pop_front();
+        }
+    }
+
+    // Step 5: Track sync level (should now be near 0.0)
+    syncLevelHistory.push_back(syncTip / (peakWhite + 0.001f));
+    if (syncLevelHistory.size() > syncHistorySize) {
+        syncLevelHistory.erase(syncLevelHistory.begin());
+    }
+
+    std::vector<float> sorted = syncLevelHistory;
+    std::sort(sorted.begin(), sorted.end());
+    syncLevelEstimate = sorted[sorted.size() / 2];
+
+    // Log every 25 frames
+    frameCount++;
+    if (frameCount % 25 == 0) {
+        // Find actual sync level in normalized signal
+        float actualSyncLevel = *std::min_element(demod.begin(), demod.end());
+        float actualPeakLevel = *std::max_element(demod.begin(), demod.end());
+
+        qDebug() << "AM Demod:"
+                 << "Raw range:" << range
+                 << "Normalized sync:" << actualSyncLevel  // Should be ~0.0
+                 << "Normalized peak:" << actualPeakLevel   // Should be ~1.0
+                 << "Scale factor:" << amScaleFactor;
     }
 
     return demod;
@@ -492,34 +544,36 @@ std::vector<float> PALBDemodulator::restoreDCForAM(
 
     std::vector<float> restored(signal.size());
 
-    // Track sync tip level with exponential averaging
+    // SDRangel approach: Simple DC offset removal to position sync at 0
+    // and apply proper video levels
+
+    // Find sync pulses and track their level
     for (size_t i = 0; i < signal.size(); i++) {
-        // Update sync tip estimate during sync pulses
+        // Track sync tip (should be at 0.0)
         if (signal[i] < 0.2f) { // Likely a sync pulse
-            syncTipEstimate = syncTipEstimate * (1.0f - dcTrackingSpeed) +
-                              signal[i] * dcTrackingSpeed;
+            syncLevelEstimate = syncLevelEstimate * 0.999f + signal[i] * 0.001f;
         }
 
-        // Restore DC by referencing to sync tip
-        restored[i] = signal[i] - syncTipEstimate;
+        // Shift signal so sync tip is at 0.0
+        float adjusted = signal[i] - syncLevelEstimate;
 
-        // Scale so that the range from sync (0) to white (0.7) becomes 0 to 1
-        // Black level should end up at approximately 0.3/0.7 = 0.43
-        restored[i] = restored[i] / (1.0f - blackLevelTarget);
+        // Scale so that:
+        // - Sync tip = 0.0 (0mV)
+        // - Blanking = 0.3 (300mV)
+        // - White = 1.0 (1000mV)
+        restored[i] = adjusted;
 
-        // Adjust to position black level correctly
+        // Apply black level adjustment
         if (restored[i] > blackLevelTarget) {
-            // Scale video portion (above black)
             float videoRange = 1.0f - blackLevelTarget;
             restored[i] = blackLevelTarget +
-                          (restored[i] - blackLevelTarget) * videoRange / 0.7f;
+                          (restored[i] - blackLevelTarget) / videoRange;
         }
 
-        // Clamp
         restored[i] = clamp(restored[i], 0.0f, 1.0f);
     }
 
-    // Apply inversion if needed for AM
+    // Apply video inversion if needed
     if (invertVideo) {
         for (auto& val : restored) {
             val = 1.0f - val;
@@ -959,54 +1013,98 @@ bool PALBDemodulator::detectVerticalSync(
     size_t& syncStart,
     int& fieldType)
 {
-    const float SYNC_THRESHOLD = vSyncThreshold;
-    const int vsyncSamples = static_cast<int>(PAL_VSYNC_DURATION * effectiveSampleRate);
-    const int minVSyncWidth = vsyncSamples * 0.3; // 0.5'den 0.3'e düşür - daha toleranslı
+    // Sync should now be at 0.0-0.15 range
+    const float SYNC_THRESHOLD = 0.20f; // Fixed threshold, not multiplied
 
-    // İki geçişli algoritma: önce uzun sync pulse'ları ara
+    // Expected V-sync duration for PAL (160μs)
+    const int expectedVSyncSamples = static_cast<int>(PAL_VSYNC_DURATION * effectiveSampleRate);
+    const int minVSyncWidth = expectedVSyncSamples * 2 / 3;  // At least 2/3 of expected
+    const int maxVSyncWidth = expectedVSyncSamples * 4;      // At most 4x expected
+
+    qDebug() << "V-Sync search: threshold" << SYNC_THRESHOLD
+             << "expected width" << expectedVSyncSamples
+             << "range" << minVSyncWidth << "-" << maxVSyncWidth;
+
+    // Find all long sync pulses
+    struct SyncPulse {
+        size_t position;
+        int width;
+        float minLevel;
+    };
+
+    std::vector<SyncPulse> candidates;
+
     int syncCount = 0;
-    size_t bestSyncPos = 0;
-    int maxSyncCount = 0;
+    size_t pulseStart = 0;
     bool inSync = false;
+    float minLevelInPulse = 1.0f;
 
     for (size_t i = 0; i < signal.size(); i++) {
         if (signal[i] < SYNC_THRESHOLD) {
             if (!inSync) {
-                // Yeni sync pulse başlangıcı
                 inSync = true;
+                pulseStart = i;
                 syncCount = 1;
+                minLevelInPulse = signal[i];
             } else {
                 syncCount++;
-            }
-
-            if (syncCount > maxSyncCount) {
-                maxSyncCount = syncCount;
-                bestSyncPos = i - syncCount + 1;
+                minLevelInPulse = std::min(minLevelInPulse, signal[i]);
             }
         } else {
-            if (inSync && syncCount >= minVSyncWidth) {
-                // Vertical sync bulundu!
-                syncStart = bestSyncPos;
-                fieldType = (bestSyncPos % (samplesPerLine * 2)) > samplesPerLine ? 1 : 0;
-                lastVSyncPosition = bestSyncPos;
-                vSyncCounter = 0;
-                return true;
+            if (inSync && syncCount >= minVSyncWidth && syncCount <= maxVSyncWidth) {
+                SyncPulse pulse;
+                pulse.position = pulseStart;
+                pulse.width = syncCount;
+                pulse.minLevel = minLevelInPulse;
+                candidates.push_back(pulse);
+
+                qDebug() << "  Candidate: pos" << pulseStart
+                         << "width" << syncCount
+                         << "level" << minLevelInPulse;
             }
             inSync = false;
             syncCount = 0;
+            minLevelInPulse = 1.0f;
         }
     }
 
-    // Eğer en uzun sync pulse yeterince uzunsa onu kabul et
-    if (maxSyncCount >= minVSyncWidth) {
-        syncStart = bestSyncPos;
-        fieldType = (bestSyncPos % (samplesPerLine * 2)) > samplesPerLine ? 1 : 0;
-        lastVSyncPosition = bestSyncPos;
-        vSyncCounter = 0;
-        return true;
+    if (candidates.empty()) {
+        qDebug() << "  No V-Sync candidates found";
+        return false;
     }
 
-    return false;
+    // Pick the first valid candidate (prefer early in frame)
+    SyncPulse* bestPulse = &candidates[0];
+
+    // If we have timing info, prefer the one closest to expected position
+    if (lastValidVSyncPos > 0 && expectedFrameSamples > 0 && candidates.size() > 1) {
+        size_t expectedPos = (lastValidVSyncPos + expectedFrameSamples) % (expectedFrameSamples * 2);
+        size_t bestDiff = std::abs(static_cast<long long>(candidates[0].position - expectedPos));
+
+        for (size_t i = 1; i < candidates.size(); i++) {
+            size_t diff = std::abs(static_cast<long long>(candidates[i].position - expectedPos));
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                bestPulse = &candidates[i];
+            }
+        }
+    }
+
+    syncStart = bestPulse->position;
+    fieldType = (syncStart / samplesPerLine) % 2;
+
+    lastValidVSyncPos = syncStart;
+    lastVSyncPosition = syncStart;
+    vSyncCounter = 0;
+    stableFrameCount++;
+
+    qDebug() << "✓ V-Sync FOUND: pos" << syncStart
+             << "width" << bestPulse->width
+             << "level" << bestPulse->minLevel
+             << "field" << fieldType
+             << "line" << (syncStart / samplesPerLine);
+
+    return true;
 }
 
 bool PALBDemodulator::detectHorizontalSync(
@@ -1063,86 +1161,62 @@ std::vector<float> PALBDemodulator::removeVBI(
 // ============================================================================
 // TIMING RECOVERY
 // ============================================================================
+
 std::vector<float> PALBDemodulator::timingRecovery(
     const std::vector<float>& signal)
 {
-    if (signal.empty()) {
-        qDebug() << "timingRecovery: empty input";
+    if (signal.empty() || samplesPerLine < 100) {
         return signal;
     }
 
-    if (signal.size() < samplesPerLine * 2) {
-        qDebug() << "timingRecovery: signal too small, returning as-is";
+    if (signal.size() < samplesPerLine * 10) {
+        qDebug() << "Signal too small for timing recovery";
         return signal;
     }
 
     std::vector<float> recovered;
-    recovered.reserve(signal.size());
+    int totalLines = signal.size() / samplesPerLine;
+    recovered.reserve(totalLines * pixelsPerLine);
 
-    size_t pos = 0;
+    // Use fixed timing with smooth interpolation
+    size_t pos = static_cast<size_t>(horizontalOffset * samplesPerLine);
     float fractionalPos = 0.0f;
+
     int linesProcessed = 0;
-    int syncFoundCount = 0;
-    bool useFallbackMode = false;
 
-    while (pos < signal.size() - samplesPerLine) {
-        size_t syncPos;
+    // Pre-calculate interpolation ratio
+    float sampleRatio = static_cast<float>(samplesPerLine) / pixelsPerLine;
 
-        bool syncFound = detectHorizontalSync(signal, pos, syncPos);
+    while (pos + samplesPerLine < signal.size() && linesProcessed < totalLines - 1) {
+        // Extract one line with linear interpolation
+        for (int pixel = 0; pixel < pixelsPerLine; pixel++) {
+            float srcPos = pos + pixel * sampleRatio;
+            size_t idx0 = static_cast<size_t>(srcPos);
+            size_t idx1 = idx0 + 1;
 
-        if (syncFound) {
-            syncFoundCount++;
-
-            size_t videoStart = syncPos + static_cast<size_t>(
-                                    (PAL_H_SYNC_DURATION + PAL_BACK_PORCH) * effectiveSampleRate
-                                    );
-
-            if (videoStart + pixelsPerLine < signal.size()) {
-                auto line = interpolateLine(signal, videoStart, pixelsPerLine);
-                recovered.insert(recovered.end(), line.begin(), line.end());
-                linesProcessed++;
+            if (idx1 < signal.size()) {
+                float frac = srcPos - idx0;
+                float value = signal[idx0] * (1.0f - frac) + signal[idx1] * frac;
+                recovered.push_back(value);
+            } else {
+                recovered.push_back(signal[idx0]);
             }
-
-            pos = syncPos + samplesPerLine;
-            fractionalPos += fractionalOffset;
-
-            if (fractionalPos >= 1.0f) {
-                pos += static_cast<size_t>(fractionalPos);
-                fractionalPos -= static_cast<int>(fractionalPos);
-            }
-        } else {
-            useFallbackMode = true;
-            break;
         }
 
-        if (linesProcessed > 10 && syncFoundCount < 5) {
-            useFallbackMode = true;
-            break;
+        // Advance to next line
+        pos += samplesPerLine;
+        fractionalPos += fractionalOffset;
+
+        if (fractionalPos >= 1.0f) {
+            pos += static_cast<size_t>(fractionalPos);
+            fractionalPos -= std::floor(fractionalPos);
         }
+
+        linesProcessed++;
     }
 
-    if (useFallbackMode || recovered.empty()) {
-        recovered.clear();
-        recovered.reserve(signal.size());
-
-        size_t skipSamples = static_cast<size_t>(horizontalOffset * samplesPerLine);
-        pos = skipSamples;
-
-        while (pos + pixelsPerLine < signal.size()) {
-            for (int i = 0; i < pixelsPerLine && pos + i < signal.size(); i++) {
-                recovered.push_back(signal[pos + i]);
-            }
-
-            pos += samplesPerLine;
-            fractionalPos += fractionalOffset;
-
-            if (fractionalPos >= 1.0f) {
-                pos += static_cast<size_t>(fractionalPos);
-                fractionalPos -= static_cast<int>(fractionalPos);
-            }
-
-            linesProcessed++;
-        }
+    if (linesProcessed > 0 && linesProcessed % 100 == 0) {
+        qDebug() << "Timing recovery: processed" << linesProcessed << "lines";
     }
 
     return recovered;

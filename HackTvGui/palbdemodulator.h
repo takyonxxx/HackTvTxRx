@@ -650,6 +650,27 @@ private:
     // FFT helpers (simplified - you may want to use a proper FFT library)
     std::vector<std::complex<float>> fft(const std::vector<std::complex<float>>& signal);
     std::vector<std::complex<float>> ifft(const std::vector<std::complex<float>>& spectrum);
+
+    std::deque<float> amAgcHistory;
+    size_t amAgcBufferSize = 0;
+    float amAgcAverage = 1.0f;
+
+    // Stable sync level tracking
+    float syncLevelEstimate = 0.0f;
+    float blackLevelEstimate = 0.3f;
+    int frameCount = 0;
+
+    float signalQuality = 0.0f;
+    float syncToVideoRatio = 0.0f;
+    int stableFrameCount = 0;
+
+    // Sync pulse filtering
+    std::vector<float> syncLevelHistory;
+    size_t syncHistorySize = 100;
+
+    // Expected timing (for sanity checks)
+    size_t expectedFrameSamples = 0;
+    size_t lastValidVSyncPos = 0;
 };
 
 #endif // PALBDEMODULATOR_H

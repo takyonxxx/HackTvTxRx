@@ -67,42 +67,45 @@ MainWindow::MainWindow(QWidget *parent)
     palbDemodulator->setVideoCarrier(0.0);
     palbDemodulator->setAudioCarrier(5.5e6);
 
-    // PAL-B/G parameters
+    // PAL-B/G parameters - critical timing
     palbDemodulator->setPixelsPerLine(720);
     palbDemodulator->setVisibleLines(576);
     palbDemodulator->setVBILines(25);
     palbDemodulator->setLineDuration(64e-6);
+
+    // Horizontal offset: (H-sync + back porch) / line duration
+    // = (4.7μs + 5.7μs) / 64μs = 0.1625
     palbDemodulator->setHorizontalOffset(0.1625);
 
-    // AM demodulation
+    // AM mode
     palbDemodulator->setDemodMode(PALBDemodulator::DEMOD_AM);
 
-    // VSB filter
+    // VSB filter is critical for AM
     palbDemodulator->setVSBFilterEnabled(true);
     palbDemodulator->setVSBLowerCutoff(0.75e6);
     palbDemodulator->setVSBUpperCutoff(5.5e6);
 
     // Processing
-    palbDemodulator->setDecimationFactor(2);
-    palbDemodulator->setDeinterlace(true);
+    palbDemodulator->setDecimationFactor(2); // 16MS/s -> 8MS/s
+    palbDemodulator->setDeinterlace(false);  // Start without deinterlacing
 
-    // AGC - ORİJİNAL
-    palbDemodulator->setAGCAttack(0.001f);
-    palbDemodulator->setAGCDecay(0.0001f);
+    // Very gentle AGC (SDRangel defaults)
+    palbDemodulator->setAGCAttack(0.00001f);   // Very slow attack
+    palbDemodulator->setAGCDecay(0.000001f);    // Very slow decay
 
-    // Sync - ORİJİNAL
+    // Sync threshold (150mV on 0-1V scale)
     palbDemodulator->setVSyncThreshold(0.15f);
 
-    // Video adjustments - ORİJİNAL
+    // Video adjustments - neutral
     palbDemodulator->setVideoBrightness(0.0f);
     palbDemodulator->setVideoContrast(1.0f);
     palbDemodulator->setVideoGamma(1.0f);
 
-    // AM-specific - ORİJİNAL
+    // AM-specific (SDRangel-style)
     palbDemodulator->setInvertVideo(false);
-    palbDemodulator->setAMScaleFactor(1.0f);
+    palbDemodulator->setAMScaleFactor(1.0f);   // Adjust if too dark/bright
     palbDemodulator->setAMLevelShift(0.0f);
-    palbDemodulator->setBlackLevel(0.5f);
+    palbDemodulator->setBlackLevel(0.3f);
 
     m_threadPool = new QThreadPool(this);
     if (m_threadPool) {
