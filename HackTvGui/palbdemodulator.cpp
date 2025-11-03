@@ -1118,15 +1118,15 @@ std::vector<float> PALBDemodulator::normalizeSignal(
 // SYNCHRONIZATION
 // ============================================================================
 
-// PALBDemodulator.cpp - Pattern-based V-Sync detection:
+// PALBDemodulator.cpp - More lenient pulse detection:
 bool PALBDemodulator::detectVerticalSync(
     const std::vector<float>& signal,
     size_t& syncStart,
     int& fieldType)
 {
-    const float SYNC_THRESHOLD = 0.20f;
+    const float SYNC_THRESHOLD = 0.25f;  // Raised from 0.20 to be more lenient
 
-    // Collect all sync pulses
+    // Collect all sync pulses with VERY low minimum width
     struct SyncPulse {
         size_t position;
         int width;
@@ -1148,7 +1148,7 @@ bool PALBDemodulator::detectVerticalSync(
                 syncCount++;
             }
         } else {
-            if (inSync && syncCount > 20) {  // Minimum pulse width
+            if (inSync && syncCount > 5) {  // Changed from 20 to 5 - very lenient
                 SyncPulse pulse;
                 pulse.position = pulseStart;
                 pulse.width = syncCount;
@@ -1159,8 +1159,32 @@ bool PALBDemodulator::detectVerticalSync(
         }
     }
 
+    // Add diagnostic to see what we found
+    if (frameCount % 25 == 0) {
+        qDebug() << "Pulse detection: threshold" << SYNC_THRESHOLD
+                 << "found" << allPulses.size() << "pulses";
+
+        if (allPulses.size() > 0) {
+            std::vector<int> widths;
+            for (auto& p : allPulses) {
+                widths.push_back(p.width);
+            }
+            std::sort(widths.begin(), widths.end());
+            qDebug() << "  Width range:" << widths.front() << "to" << widths.back()
+                     << "median:" << widths[widths.size()/2];
+
+            // Show first few pulses
+            for (size_t i = 0; i < std::min(size_t(5), allPulses.size()); i++) {
+                qDebug() << "    Pulse" << i << ": pos" << allPulses[i].position
+                         << "width" << allPulses[i].width;
+            }
+        }
+    }
+
     if (allPulses.size() < 10) {
-        qDebug() << "Too few pulses:" << allPulses.size();
+        if (frameCount % 25 == 0) {
+            qDebug() << "Too few pulses:" << allPulses.size();
+        }
         return false;
     }
 
@@ -1182,21 +1206,18 @@ bool PALBDemodulator::detectVerticalSync(
     int medianWidth = widths[widths.size() / 2];
     int medianSpacing = spacings[spacings.size() / 2];
 
-    qDebug() << "Pulse stats: count" << allPulses.size()
-             << "median width" << medianWidth
-             << "median spacing" << medianSpacing
-             << "expected line spacing" << samplesPerLine;
+    if (frameCount % 25 == 0) {
+        qDebug() << "Pulse stats: count" << allPulses.size()
+                 << "median width" << medianWidth
+                 << "median spacing" << medianSpacing
+                 << "expected line spacing" << samplesPerLine;
+    }
 
-    // PAL V-sync pattern detection:
-    // Look for a region with WIDER than normal pulses occurring close together
-    // V-sync pulses are roughly 2x normal H-sync width
+    // Look for V-sync pattern: wider than normal pulses
+    int vsyncWidthThreshold = medianWidth * 1.3f;  // Lowered from 1.5 to 1.3
+    int vsyncRegionSamples = 5 * samplesPerLine;
 
-    int vsyncWidthThreshold = medianWidth * 1.5f;  // 1.5x median = likely V-sync
-    int vsyncRegionSamples = 5 * samplesPerLine;   // V-sync spans ~5 lines
-
-    // Search for clusters of wide pulses
-    for (size_t i = 0; i < allPulses.size() - 5; i++) {
-        // Count wide pulses in next vsyncRegionSamples
+    for (size_t i = 0; i < allPulses.size() - 3; i++) {  // Changed from 5 to 3
         int widePulseCount = 0;
         size_t regionStart = allPulses[i].position;
         size_t regionEnd = regionStart + vsyncRegionSamples;
@@ -1207,8 +1228,7 @@ bool PALBDemodulator::detectVerticalSync(
             }
         }
 
-        // V-sync region should have at least 3-4 wide pulses
-        if (widePulseCount >= 3) {
+        if (widePulseCount >= 2) {  // Changed from 3 to 2 - more lenient
             syncStart = allPulses[i].position;
             fieldType = (syncStart / samplesPerLine) % 2;
 
@@ -1217,16 +1237,19 @@ bool PALBDemodulator::detectVerticalSync(
             vSyncCounter = 0;
             stableFrameCount++;
 
-            qDebug() << "✓ V-Sync FOUND (pattern): pos" << syncStart
-                     << "wide pulses" << widePulseCount
-                     << "field" << fieldType
-                     << "line" << (syncStart / samplesPerLine);
+            if (frameCount % 25 == 0) {
+                qDebug() << "✓ V-Sync FOUND: pos" << syncStart
+                         << "wide pulses" << widePulseCount
+                         << "field" << fieldType;
+            }
 
             return true;
         }
     }
 
-    qDebug() << "✗ No V-Sync pattern found";
+    if (frameCount % 25 == 0) {
+        qDebug() << "✗ No V-Sync pattern (threshold:" << vsyncWidthThreshold << ")";
+    }
     return false;
 }
 
