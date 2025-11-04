@@ -26,6 +26,8 @@ public:
     void setVideoOffset(float offset) { m_videoOffset = offset; }
     float getVideoGain() const { return m_videoGain; }
     float getVideoOffset() const { return m_videoOffset; }
+    void setVideoInvert(bool invert) { m_videoInvert = invert; }
+    bool getVideoInvert() const { return m_videoInvert; }
 
 signals:
     void frameReady(const QImage& frame);
@@ -42,11 +44,11 @@ private:
     static constexpr int VIDEO_WIDTH = 384;
     static constexpr int VIDEO_HEIGHT = 576;
 
-    // PLL-based sync
+    // PLL sync tracking
     int m_expectedSyncPosition;
     int m_samplesSinceSync;
     float m_syncConfidence;
-    static constexpr int SYNC_SEARCH_WINDOW = 50;  // Search ±50 samples
+    static constexpr int SYNC_SEARCH_WINDOW = 50;
     static constexpr int HSYNC_WIDTH = 30;
 
     // FIR filters
@@ -69,19 +71,20 @@ private:
     int m_currentLine;
     int m_samplesInCurrentLine;
 
-    // AGC with normalization
+    // AGC
     float m_agcGain;
     float m_peakLevel;
     float m_minLevel;
     float m_meanLevel;
 
-    // Rolling buffer for sync detection
+    // Sync detection buffer
     std::deque<float> m_sampleHistory;
     static constexpr int HISTORY_SIZE = 100;
 
     // Settings
     float m_videoGain;
     float m_videoOffset;
+    bool m_videoInvert;
 
     // Stats
     uint64_t m_totalSamples;

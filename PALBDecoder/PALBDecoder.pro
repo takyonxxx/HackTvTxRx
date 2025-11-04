@@ -43,3 +43,5 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 
 TARGET = PALBDecoder
 TEMPLATE = app
+
+#https://repo.radio/VE7UWU/sdrangel/src/commit/b2be9f6a0d4d4b161b190ca296fae6f0232c103d/plugins/channelrx/demodatv

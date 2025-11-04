@@ -4,6 +4,7 @@
 #include <QMessageBox>
 #include <QApplication>
 #include <QScreen>
+#include <QCheckBox>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -131,55 +132,9 @@ void MainWindow::setupControls()
     QVBoxLayout* mainLayout = qobject_cast<QVBoxLayout*>(centralWidget()->layout());
     if (!mainLayout) return;
 
-    // ========== FREQUENCY CONTROL (EN ÜSTTE) ==========
+    // ========== FREQUENCY CONTROL ==========
     QGroupBox* freqGroup = new QGroupBox("Frequency Control - UHF TV Band", this);
-    QHBoxLayout* freqMainLayout = new QHBoxLayout(freqGroup);
-
-    // Vertical slider (solda)
-    QVBoxLayout* sliderLayout = new QVBoxLayout();
-
-    QLabel* maxLabel = new QLabel("862 MHz", this);
-    maxLabel->setAlignment(Qt::AlignCenter);
-    maxLabel->setStyleSheet("font-weight: bold; color: #ff5555;");
-    sliderLayout->addWidget(maxLabel);
-
-    m_frequencySlider = new QSlider(Qt::Vertical, this);
-    m_frequencySlider->setRange(470, 862);  // 470-862 MHz
-    m_frequencySlider->setValue(478);       // Default: 478 MHz
-    m_frequencySlider->setTickPosition(QSlider::TicksLeft);
-    m_frequencySlider->setTickInterval(8);  // 8 MHz steps (TV channel spacing)
-    m_frequencySlider->setMinimumHeight(300);
-    m_frequencySlider->setStyleSheet(
-        "QSlider::groove:vertical {"
-        "    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #66cc66, stop:1 #ff6666);"
-        "    width: 20px;"
-        "    border-radius: 5px;"
-        "}"
-        "QSlider::handle:vertical {"
-        "    background: #3388ff;"
-        "    border: 2px solid #ffffff;"
-        "    height: 30px;"
-        "    margin: 0 -5px;"
-        "    border-radius: 8px;"
-        "}"
-        "QSlider::handle:vertical:hover {"
-        "    background: #5599ff;"
-        "}"
-        );
-    connect(m_frequencySlider, &QSlider::valueChanged,
-            this, &MainWindow::onFrequencySliderChanged);
-    sliderLayout->addWidget(m_frequencySlider, 1);
-
-    QLabel* minLabel = new QLabel("470 MHz", this);
-    minLabel->setAlignment(Qt::AlignCenter);
-    minLabel->setStyleSheet("font-weight: bold; color: #55ff55;");
-    sliderLayout->addWidget(minLabel);
-
-    freqMainLayout->addLayout(sliderLayout);
-
-    // Frequency info (sağda)
-    QVBoxLayout* freqInfoLayout = new QVBoxLayout();
-    freqInfoLayout->setSpacing(15);
+    QVBoxLayout* freqLayout = new QVBoxLayout(freqGroup);
 
     // Frequency spinbox
     QHBoxLayout* spinLayout = new QHBoxLayout();
@@ -195,83 +150,66 @@ void MainWindow::setupControls()
     connect(m_frequencySpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, &MainWindow::onFrequencySpinBoxChanged);
     spinLayout->addWidget(m_frequencySpinBox);
-    spinLayout->addStretch();
-    freqInfoLayout->addLayout(spinLayout);
 
     // Channel label
     m_channelLabel = new QLabel(this);
     m_channelLabel->setStyleSheet(
         "QLabel {"
-        "    font-size: 16pt;"
+        "    font-size: 14pt;"
         "    font-weight: bold;"
         "    color: #3388ff;"
-        "    padding: 10px;"
+        "    padding: 8px;"
         "    background-color: #f0f0f0;"
         "    border-radius: 5px;"
         "    border: 2px solid #3388ff;"
         "}"
         );
     m_channelLabel->setAlignment(Qt::AlignCenter);
+    m_channelLabel->setMinimumWidth(200);
     updateChannelLabel(m_currentFrequency);
-    freqInfoLayout->addWidget(m_channelLabel);
+    spinLayout->addWidget(m_channelLabel);
+    spinLayout->addStretch();
+    freqLayout->addLayout(spinLayout);
 
-    // Quick channel buttons
-    QLabel* quickLabel = new QLabel("<b>Quick Channels:</b>", this);
-    freqInfoLayout->addWidget(quickLabel);
+    // Horizontal slider with labels
+    QHBoxLayout* sliderLayout = new QHBoxLayout();
 
-    QGridLayout* channelGrid = new QGridLayout();
-    channelGrid->setSpacing(5);
+    QLabel* minLabel = new QLabel("470 MHz", this);
+    minLabel->setStyleSheet("font-weight: bold; color: #55ff55;");
+    sliderLayout->addWidget(minLabel);
 
-    struct ChannelPreset {
-        int channel;
-        const char* name;
-    };
+    m_frequencySlider = new QSlider(Qt::Horizontal, this);
+    m_frequencySlider->setRange(470, 862);  // 470-862 MHz
+    m_frequencySlider->setValue(478);       // Default: 478 MHz
+    m_frequencySlider->setTickPosition(QSlider::TicksBelow);
+    m_frequencySlider->setTickInterval(8);  // 8 MHz steps
+    m_frequencySlider->setMinimumWidth(400);
+    m_frequencySlider->setStyleSheet(
+        "QSlider::groove:horizontal {"
+        "    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #66cc66, stop:1 #ff6666);"
+        "    height: 10px;"
+        "    border-radius: 5px;"
+        "}"
+        "QSlider::handle:horizontal {"
+        "    background: #3388ff;"
+        "    border: 2px solid #ffffff;"
+        "    width: 20px;"
+        "    margin: -5px 0;"
+        "    border-radius: 10px;"
+        "}"
+        "QSlider::handle:horizontal:hover {"
+        "    background: #5599ff;"
+        "}"
+        );
+    connect(m_frequencySlider, &QSlider::valueChanged,
+            this, &MainWindow::onFrequencySliderChanged);
+    sliderLayout->addWidget(m_frequencySlider, 1);
 
-    std::vector<ChannelPreset> presets = {
-        {21, "Ch 21"},
-        {22, "Ch 22"},
-        {23, "Ch 23"},
-        {24, "Ch 24"},
-        {25, "Ch 25"},
-        {30, "Ch 30"},
-        {40, "Ch 40"},
-        {50, "Ch 50"},
-        {60, "Ch 60"}
-    };
+    QLabel* maxLabel = new QLabel("862 MHz", this);
+    maxLabel->setStyleSheet("font-weight: bold; color: #ff5555;");
+    sliderLayout->addWidget(maxLabel);
 
-    int row = 0, col = 0;
-    for (const auto& preset : presets) {
-        QPushButton* btn = new QPushButton(preset.name, this);
-        btn->setStyleSheet(
-            "QPushButton {"
-            "    background-color: #5588ff;"
-            "    color: white;"
-            "    padding: 8px;"
-            "    border-radius: 3px;"
-            "    font-weight: bold;"
-            "}"
-            "QPushButton:hover {"
-            "    background-color: #6699ff;"
-            "}"
-            );
-
-        connect(btn, &QPushButton::clicked, this, [this, preset]() {
-            uint64_t freq = 306000000ULL + (preset.channel * 8000000ULL);  // Formula: 306 + (channel * 8) MHz
-            m_frequencySpinBox->setValue(freq / 1000000.0);
-        });
-
-        channelGrid->addWidget(btn, row, col);
-        col++;
-        if (col >= 3) {
-            col = 0;
-            row++;
-        }
-    }
-
-    freqInfoLayout->addLayout(channelGrid);
-    freqInfoLayout->addStretch();
-
-    freqMainLayout->addLayout(freqInfoLayout, 1);
+    freqLayout->addLayout(sliderLayout);
 
     mainLayout->addWidget(freqGroup);
 
@@ -350,7 +288,7 @@ void MainWindow::setupControls()
     videoGainLayout->addWidget(new QLabel("Video Gain:", this));
     m_videoGainSlider = new QSlider(Qt::Horizontal, this);
     m_videoGainSlider->setRange(1, 100); // 0.1 to 10.0
-    m_videoGainSlider->setValue(20); // Default 2.0
+    m_videoGainSlider->setValue(15); // Default 1.5
     m_videoGainSlider->setTickPosition(QSlider::TicksBelow);
     m_videoGainSlider->setTickInterval(10);
     m_videoGainSpinBox = new QDoubleSpinBox(this);
@@ -385,19 +323,27 @@ void MainWindow::setupControls()
     videoOffsetLayout->addWidget(m_videoOffsetSpinBox);
     videoControlLayout->addLayout(videoOffsetLayout);
 
+    // Invert Video checkbox
+    QHBoxLayout* invertLayout = new QHBoxLayout();
+    m_invertVideoCheckBox = new QCheckBox("Invert Video (Negative)", this);
+    m_invertVideoCheckBox->setStyleSheet("QCheckBox { font-weight: bold; }");
+    connect(m_invertVideoCheckBox, &QCheckBox::stateChanged,
+            this, &MainWindow::onInvertVideoChanged);
+    invertLayout->addWidget(m_invertVideoCheckBox);
+    invertLayout->addStretch();
+    videoControlLayout->addLayout(invertLayout);
+
     mainLayout->addWidget(videoControlGroup);
 
     // Info label
     QLabel* infoLabel = new QLabel(
         "<b>PAL-B/G Decoder with HackRF</b><br>"
-        "• Frequency: 478 MHz<br>"
-        "• Sample Rate: 16 MHz<br>"
-        "• Line Frequency: 15625 Hz<br>"
-        "• Image: 384×576 pixels (Grayscale)<br><br>"
-        "<i>Adjust HackRF gains for signal strength, Video Gain/Offset for picture quality.</i>",
+        "• Sample Rate: 16 MHz | Line Freq: 15625 Hz<br>"
+        "• Image: 384×576 pixels (Grayscale)<br>"
+        "• 625 lines, 25 fps, AM demodulation<br><br>"
+        "<i>Adjust HackRF gains for signal strength, Video controls for picture quality.</i>",
         this);
     infoLabel->setWordWrap(true);
-    //infoLabel->setStyleSheet("QLabel { padding: 10px; background-color: #f0f0f0; border-radius: 5px; }");
     mainLayout->addWidget(infoLabel);
 }
 
@@ -443,6 +389,17 @@ void MainWindow::onFrequencySpinBoxChanged(double value)
     if (m_hackRfRunning && m_hackTvLib) {
         applyFrequencyChange();
     }
+}
+
+void MainWindow::onInvertVideoChanged(int state)
+{
+    bool invert = (state == Qt::Checked);
+
+    if (m_palDecoder) {
+        m_palDecoder->setVideoInvert(invert);
+    }
+
+    qDebug() << "Video invert:" << (invert ? "ON" : "OFF");
 }
 
 void MainWindow::updateChannelLabel(uint64_t frequency)
@@ -845,7 +802,6 @@ void MainWindow::onBufferStats(size_t available, uint64_t dropped)
 {
     // Log dropped frames
     if (dropped > m_lastDroppedFrames) {
-        qDebug() << "WARNING: Dropped" << (dropped - m_lastDroppedFrames) << "frames. Buffer size:" << available;
         m_lastDroppedFrames = dropped;
     }
 }

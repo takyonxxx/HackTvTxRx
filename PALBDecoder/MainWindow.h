@@ -48,6 +48,7 @@ private slots:
     void onFrequencySliderChanged(int value);
     void onFrequencySpinBoxChanged(double value);
     void updateChannelLabel(uint64_t frequency);
+    void onInvertVideoChanged(int state);
 
 private:
     void setupUI();
@@ -73,6 +74,7 @@ private:
     QSlider* m_rxAmpGainSlider;
     
     QPushButton* m_startStopButton;
+    QCheckBox* m_invertVideoCheckBox;
     
     // PAL Decoder
     std::unique_ptr<PALDecoder> m_palDecoder;

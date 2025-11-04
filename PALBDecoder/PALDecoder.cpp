@@ -2,7 +2,6 @@
 #include <QDebug>
 #include <algorithm>
 #include <cstring>
-#include <numeric>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -24,6 +23,7 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_meanLevel(0.0f)
     , m_videoGain(1.5f)
     , m_videoOffset(0.0f)
+    , m_videoInvert(false)
     , m_totalSamples(0)
     , m_frameCount(0)
     , m_linesProcessed(0)
@@ -117,16 +117,16 @@ float PALDecoder::dcBlock(float sample)
 
 float PALDecoder::normalizeAndAGC(float sample)
 {
-    // Fast AGC with proper normalization
     float absSample = std::abs(sample);
 
-    // Track levels
+    // Track peak
     if (absSample > m_peakLevel) {
         m_peakLevel = m_peakLevel * 0.95f + absSample * 0.05f;
     } else {
         m_peakLevel *= 0.9995f;
     }
 
+    // Track minimum
     if (sample < m_minLevel) {
         m_minLevel = m_minLevel * 0.95f + sample * 0.05f;
     } else {
@@ -150,15 +150,14 @@ float PALDecoder::normalizeAndAGC(float sample)
 
 bool PALDecoder::detectSyncPulse()
 {
-    if (m_sampleHistory.size() < HSYNC_WIDTH) {
+    if (m_sampleHistory.size() < HSYNC_WIDTH + 10) {
         return false;
     }
 
-    // More aggressive sync detection
-    // Look for pattern: sustained low, then rising
-    constexpr float SYNC_THRESHOLD = -0.3f; // Less strict
+    // Look for sync pulse: sustained low value (~30 samples)
+    constexpr float SYNC_THRESHOLD = -0.3f; // In normalized -1..+1 space
 
-    // Count low samples in sync pulse area
+    // Count low samples
     int lowCount = 0;
     for (int i = 0; i < HSYNC_WIDTH && i < static_cast<int>(m_sampleHistory.size()); i++) {
         if (m_sampleHistory[i] < SYNC_THRESHOLD) {
@@ -166,7 +165,7 @@ bool PALDecoder::detectSyncPulse()
         }
     }
 
-    // Also check that next samples are NOT low (end of sync pulse)
+    // Check for end of sync (rising edge)
     bool afterPulse = true;
     for (int i = HSYNC_WIDTH; i < HSYNC_WIDTH + 10 && i < static_cast<int>(m_sampleHistory.size()); i++) {
         if (m_sampleHistory[i] < SYNC_THRESHOLD) {
@@ -175,7 +174,7 @@ bool PALDecoder::detectSyncPulse()
         }
     }
 
-    // At least 50% low samples + clear end
+    // At least 50% of samples should be below threshold + clear end
     return (lowCount >= HSYNC_WIDTH / 2) && afterPulse;
 }
 
@@ -200,16 +199,16 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
     for (const auto& sample : samples) {
         m_totalSamples++;
 
-        // Stats
-        if (m_totalSamples % 10000000 == 0) {
-            float syncRate = m_linesProcessed > 0 ?
-                                 (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
-            qDebug() << (m_totalSamples / 1000000) << "M samples |"
-                     << m_frameCount << "frames |"
-                     << "Sync:" << QString::number(syncRate, 'f', 1) << "% |"
-                     << "Peak:" << QString::number(m_peakLevel, 'f', 2)
-                     << "Min:" << QString::number(m_minLevel, 'f', 2);
-        }
+        // // Stats every 10M samples
+        // if (m_totalSamples % 10000000 == 0) {
+        //     float syncRate = m_linesProcessed > 0 ?
+        //                          (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
+        //     qDebug() << (m_totalSamples / 1000000) << "M samples |"
+        //              << m_frameCount << "frames |"
+        //              << "Sync:" << QString::number(syncRate, 'f', 1) << "% |"
+        //              << "Peak:" << QString::number(m_peakLevel, 'f', 2)
+        //              << "Min:" << QString::number(m_minLevel, 'f', 2);
+        // }
 
         // Processing chain
         std::complex<float> filtered = applyVideoFilter(sample);
@@ -218,7 +217,7 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         float dcBlocked = dcBlock(magnitude);
         float normalized = normalizeAndAGC(dcBlocked);
 
-        // Decimation
+        // Decimation to 6 MHz
         m_resampleCounter++;
         if (m_resampleCounter >= m_resampleDecim) {
             m_resampleCounter = 0;
@@ -291,18 +290,24 @@ void PALDecoder::finalizeLine()
         int samplesToUse = std::min(static_cast<int>(m_lineBuffer.size()), VIDEO_WIDTH);
 
         for (int x = 0; x < samplesToUse; x++) {
-            // Already normalized to -1..+1, map to 0..1
+            // Map -1..1 to 0..1
             float value = (m_lineBuffer[x] + 1.0f) * 0.5f;
             value = value * m_videoGain + m_videoOffset;
             value = clipValue(value, 0.0f, 1.0f);
+
+            // Apply invert if enabled
+            if (m_videoInvert) {
+                value = 1.0f - value;  // Invert: 0 becomes 1, 1 becomes 0
+            }
 
             uint8_t pixel = static_cast<uint8_t>(value * 255.0f);
             m_frameBuffer[lineIndex * VIDEO_WIDTH + x] = pixel;
         }
 
-        // Fill rest with black
+        // Fill rest with black (or white if inverted)
+        uint8_t fillValue = m_videoInvert ? 255 : 0;
         for (int x = samplesToUse; x < VIDEO_WIDTH; x++) {
-            m_frameBuffer[lineIndex * VIDEO_WIDTH + x] = 0;
+            m_frameBuffer[lineIndex * VIDEO_WIDTH + x] = fillValue;
         }
     }
 
@@ -322,9 +327,9 @@ void PALDecoder::buildFrame()
     if (m_frameCount % 50 == 0) {
         float syncRate = m_linesProcessed > 0 ?
                              (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
-        qDebug() << "Frame" << m_frameCount
-                 << "| Sync:" << QString::number(syncRate, 'f', 1) << "%"
-                 << "| Confidence:" << QString::number(m_syncConfidence, 'f', 2);
+        // qDebug() << "Frame" << m_frameCount
+        //          << "| Sync:" << QString::number(syncRate, 'f', 1) << "%"
+        //          << "| Confidence:" << QString::number(m_syncConfidence, 'f', 2);
     }
 
     QImage frame(VIDEO_WIDTH, VIDEO_HEIGHT, QImage::Format_Grayscale8);
