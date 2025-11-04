@@ -11,6 +11,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
+#include <QComboBox>
 #include <QMessageBox>
 #include <QMutex>
 #include <QElapsedTimer>
@@ -51,10 +52,10 @@ private slots:
     void onInvertVideoChanged(int state);
     void onSyncThresholdChanged(int value);
     void onSyncStatsUpdated(float syncRate, float peakLevel, float minLevel);
+    void onSampleRateChanged(int index);
 
 private:
     void setupUI();
-    void setupControls();
     void initHackRF();
     void applyFrequencyChange();
     
@@ -77,7 +78,9 @@ private:
     
     QPushButton* m_startStopButton;
     QCheckBox* m_invertVideoCheckBox;
-    
+
+    QComboBox* m_sampleRateComboBox;
+
     // PAL Decoder
     std::unique_ptr<PALDecoder> m_palDecoder;
     
@@ -108,6 +111,7 @@ private:
 
     // Current frequency
     uint64_t m_currentFrequency;
+    int m_currentSampleRate;
 
     QSlider* m_syncThresholdSlider;
     QDoubleSpinBox* m_syncThresholdSpinBox;
@@ -118,8 +122,7 @@ private:
     static constexpr uint64_t UHF_MAX_FREQ = 862000000ULL;  // 862 MHz (Kanal 69)
     static constexpr uint64_t DEFAULT_FREQ = 478000000ULL;  // 478 MHz (Kanal 22)
     
-    // Settings
-    static constexpr uint64_t FREQ = 478000000;  // 478 MHz (from your code)
+    // Settings    
     static constexpr uint32_t SAMP_RATE = 16000000;  // 16 MHz
 };
 

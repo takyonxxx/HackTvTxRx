@@ -49,8 +49,8 @@ private:
     static constexpr int VISIBLE_LINES = 576;
     static constexpr int FIRST_VISIBLE_LINE = 23;
     static constexpr int SAMPLES_PER_LINE = 384;
-    static constexpr int VIDEO_WIDTH = 384;
-    static constexpr int VIDEO_HEIGHT = 576;
+    static constexpr int VIDEO_WIDTH = 576;
+    static constexpr int VIDEO_HEIGHT = 384;
 
     // PLL sync tracking
     int m_expectedSyncPosition;

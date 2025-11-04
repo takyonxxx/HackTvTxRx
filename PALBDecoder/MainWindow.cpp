@@ -12,6 +12,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_shuttingDown(false)
     , m_hackRfRunning(false)
     , m_currentFrequency(DEFAULT_FREQ)
+    , m_currentSampleRate(16000000)
 {
     // Create circular buffer - 64MB buffer (holds ~244 HackRF callbacks)
     constexpr size_t BUFFER_SIZE = 64 * 1024 * 1024; // 64 MB
@@ -44,7 +45,6 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Setup UI
     setupUI();
-    setupControls();
 
     // Setup status timer
     m_statusTimer = new QTimer(this);
@@ -102,136 +102,204 @@ void MainWindow::setupUI()
     mainLayout->setSpacing(10);
     mainLayout->setContentsMargins(10, 10, 10, 10);
 
-    // Video display
-    QGroupBox* videoGroup = new QGroupBox("PAL Video Display (384x576)", this);
-    QVBoxLayout* videoLayout = new QVBoxLayout(videoGroup);
+    // ========== MAIN HORIZONTAL LAYOUT (2 COLUMNS) ==========
+    QHBoxLayout* columnsLayout = new QHBoxLayout();
+    columnsLayout->setSpacing(15);
+
+    // ========== LEFT COLUMN ==========
+    QVBoxLayout* leftColumn = new QVBoxLayout();
+    leftColumn->setSpacing(10);
+
+    // Video display - 576x384 landscape
+    QGroupBox* videoGroup = new QGroupBox("PAL Video Display (576×384)", this);
+        QVBoxLayout* videoLayout = new QVBoxLayout(videoGroup);
 
     m_videoLabel = new QLabel(this);
-    m_videoLabel->setMinimumSize(384 / 2, 576 / 2);
-    m_videoLabel->setScaledContents(true);
-    m_videoLabel->setStyleSheet("QLabel { background-color: black; border: 1px solid gray; }");
+    m_videoLabel->setFixedSize(576, 384);  // Landscape gösterim
+    m_videoLabel->setScaledContents(false);
+    m_videoLabel->setStyleSheet("QLabel { background-color: black; border: 2px solid #333; }");
     m_videoLabel->setAlignment(Qt::AlignCenter);
 
-    // Set initial placeholder
+    // Set initial placeholder (rotated)
     QImage placeholder(384, 576, QImage::Format_Grayscale8);
     placeholder.fill(Qt::black);
-    m_videoLabel->setPixmap(QPixmap::fromImage(placeholder));
-
-    videoGroup->setMaximumWidth(576);
-    m_videoLabel->setMaximumWidth(576);
+    QTransform transform;
+    transform.rotate(90); // Saat yönünde 90°
+    QImage rotated = placeholder.transformed(transform);
+    m_videoLabel->setPixmap(QPixmap::fromImage(rotated));
 
     videoLayout->addWidget(m_videoLabel);
-    mainLayout->addWidget(videoGroup);
+    videoGroup->setFixedWidth(592);
+    leftColumn->addWidget(videoGroup);
 
-    // Status display
-    QHBoxLayout* statusLayout = new QHBoxLayout();
-    m_statusLabel = new QLabel("Status: Initializing...", this);
-    m_fpsLabel = new QLabel("FPS: 0.0", this);
-    statusLayout->addWidget(m_statusLabel);
-    statusLayout->addStretch();
-    statusLayout->addWidget(m_fpsLabel);
-    mainLayout->addLayout(statusLayout);
-}
+    // Video Processing Controls (BELOW VIDEO)
+    QGroupBox* videoControlGroup = new QGroupBox("Video Processing", this);
+    videoControlGroup->setMaximumWidth(592); // Video ile aynı genişlik
+    QVBoxLayout* videoControlLayout = new QVBoxLayout(videoControlGroup);
 
-void MainWindow::setupControls()
-{
-    QVBoxLayout* mainLayout = qobject_cast<QVBoxLayout*>(centralWidget()->layout());
-    if (!mainLayout) return;
+    // Video Gain
+    QHBoxLayout* videoGainLayout = new QHBoxLayout();
+    videoGainLayout->addWidget(new QLabel("Gain:", this));
+    m_videoGainSlider = new QSlider(Qt::Horizontal, this);
+    m_videoGainSlider->setRange(1, 100);
+    m_videoGainSlider->setValue(15);
+    m_videoGainSlider->setTickPosition(QSlider::TicksBelow);
+    m_videoGainSlider->setTickInterval(10);
+    m_videoGainSpinBox = new QDoubleSpinBox(this);
+    m_videoGainSpinBox->setRange(0.1, 10.0);
+    m_videoGainSpinBox->setSingleStep(0.1);
+    m_videoGainSpinBox->setValue(1.5);
+    m_videoGainSpinBox->setDecimals(1);
+    m_videoGainSpinBox->setMaximumWidth(80);
+    connect(m_videoGainSlider, &QSlider::valueChanged, this, &MainWindow::onVideoGainChanged);
+    connect(m_videoGainSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            [this](double value) { m_videoGainSlider->setValue(static_cast<int>(value * 10)); });
+    videoGainLayout->addWidget(m_videoGainSlider, 1);
+    videoGainLayout->addWidget(m_videoGainSpinBox);
+    videoControlLayout->addLayout(videoGainLayout);
 
-    // ========== FREQUENCY CONTROL ==========
+    // Video Offset
+    QHBoxLayout* videoOffsetLayout = new QHBoxLayout();
+    videoOffsetLayout->addWidget(new QLabel("Offset:", this));
+    m_videoOffsetSlider = new QSlider(Qt::Horizontal, this);
+    m_videoOffsetSlider->setRange(-100, 100);
+    m_videoOffsetSlider->setValue(0);
+    m_videoOffsetSlider->setTickPosition(QSlider::TicksBelow);
+    m_videoOffsetSlider->setTickInterval(20);
+    m_videoOffsetSpinBox = new QDoubleSpinBox(this);
+    m_videoOffsetSpinBox->setRange(-1.0, 1.0);
+    m_videoOffsetSpinBox->setSingleStep(0.01);
+    m_videoOffsetSpinBox->setValue(0.0);
+    m_videoOffsetSpinBox->setDecimals(2);
+    m_videoOffsetSpinBox->setMaximumWidth(80);
+    connect(m_videoOffsetSlider, &QSlider::valueChanged, this, &MainWindow::onVideoOffsetChanged);
+    connect(m_videoOffsetSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            [this](double value) { m_videoOffsetSlider->setValue(static_cast<int>(value * 100)); });
+    videoOffsetLayout->addWidget(m_videoOffsetSlider, 1);
+    videoOffsetLayout->addWidget(m_videoOffsetSpinBox);
+    videoControlLayout->addLayout(videoOffsetLayout);
+
+    // Invert checkbox
+    m_invertVideoCheckBox = new QCheckBox("Invert Video (Negative)", this);
+    m_invertVideoCheckBox->setStyleSheet("QCheckBox { font-weight: bold; }");
+    connect(m_invertVideoCheckBox, &QCheckBox::stateChanged,
+            this, &MainWindow::onInvertVideoChanged);
+    videoControlLayout->addWidget(m_invertVideoCheckBox);
+
+    leftColumn->addWidget(videoControlGroup);
+    leftColumn->addStretch();
+
+    columnsLayout->addLayout(leftColumn);
+
+    // ========== RIGHT COLUMN ==========
+    QVBoxLayout* rightColumn = new QVBoxLayout();
+    rightColumn->setSpacing(10);
+
+    // ========== SAMPLE RATE SELECTION (NEW - TOP OF RIGHT COLUMN) ==========
+    QGroupBox* sampleRateGroup = new QGroupBox("Sample Rate", this);
+    QHBoxLayout* sampleRateLayout = new QHBoxLayout(sampleRateGroup);
+
+    sampleRateLayout->addWidget(new QLabel("Rate:", this));
+
+    m_sampleRateComboBox = new QComboBox(this);
+    m_sampleRateComboBox->setStyleSheet("QComboBox { font-weight: bold; }");
+
+    // Add sample rates
+    std::map<int, QString> sortedSampleRates {
+        {2000000, "2"},
+        {4000000, "4"},
+        {8000000, "8"},
+        {10000000, "10"},
+        {12500000, "12.5"},
+        {16000000, "16"},
+        {20000000, "20"}
+    };
+
+    int defaultIndex = 0;
+    int currentIndex = 0;
+    for (const auto& [rate, displayText] : sortedSampleRates) {
+        m_sampleRateComboBox->addItem(displayText + " MHz", rate);
+        if (rate == 16000000) {
+            defaultIndex = currentIndex;
+        }
+        currentIndex++;
+    }
+
+    m_sampleRateComboBox->setCurrentIndex(defaultIndex);
+
+    connect(m_sampleRateComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onSampleRateChanged);
+
+    sampleRateLayout->addWidget(m_sampleRateComboBox);
+    sampleRateLayout->addStretch();
+
+    rightColumn->addWidget(sampleRateGroup);
+
+    // Frequency Control (TOP RIGHT)
     QGroupBox* freqGroup = new QGroupBox("Frequency Control - UHF TV Band", this);
     QVBoxLayout* freqLayout = new QVBoxLayout(freqGroup);
 
-    // Frequency spinbox
-    QHBoxLayout* spinLayout = new QHBoxLayout();
-    spinLayout->addWidget(new QLabel("<b>Frequency:</b>", this));
+    QHBoxLayout* freqTopLayout = new QHBoxLayout();
     m_frequencySpinBox = new QDoubleSpinBox(this);
     m_frequencySpinBox->setRange(470.0, 862.0);
     m_frequencySpinBox->setValue(478.0);
-    m_frequencySpinBox->setSingleStep(0.1);  // 100 kHz steps
+    m_frequencySpinBox->setSingleStep(0.1);
     m_frequencySpinBox->setDecimals(3);
     m_frequencySpinBox->setSuffix(" MHz");
     m_frequencySpinBox->setMinimumWidth(150);
-    m_frequencySpinBox->setStyleSheet("QDoubleSpinBox { font-size: 14pt; font-weight: bold; }");
+    m_frequencySpinBox->setStyleSheet("QDoubleSpinBox { font-size: 12pt; font-weight: bold; }");
     connect(m_frequencySpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, &MainWindow::onFrequencySpinBoxChanged);
-    spinLayout->addWidget(m_frequencySpinBox);
+    freqTopLayout->addWidget(m_frequencySpinBox);
 
-    // Channel label
     m_channelLabel = new QLabel(this);
     m_channelLabel->setStyleSheet(
         "QLabel {"
-        "    font-size: 14pt;"
+        "    font-size: 11pt;"
         "    font-weight: bold;"
         "    color: #3388ff;"
-        "    padding: 8px;"
+        "    padding: 5px;"
         "    background-color: #f0f0f0;"
-        "    border-radius: 5px;"
+        "    border-radius: 3px;"
         "    border: 2px solid #3388ff;"
         "}"
         );
     m_channelLabel->setAlignment(Qt::AlignCenter);
-    m_channelLabel->setMinimumWidth(200);
     updateChannelLabel(m_currentFrequency);
-    spinLayout->addWidget(m_channelLabel);
-    spinLayout->addStretch();
-    freqLayout->addLayout(spinLayout);
+    freqTopLayout->addWidget(m_channelLabel, 1);
+    freqLayout->addLayout(freqTopLayout);
 
-    // Horizontal slider with labels
     QHBoxLayout* sliderLayout = new QHBoxLayout();
-
-    QLabel* minLabel = new QLabel("470 MHz", this);
-    minLabel->setStyleSheet("font-weight: bold; color: #55ff55;");
+    QLabel* minLabel = new QLabel("470", this);
     sliderLayout->addWidget(minLabel);
 
     m_frequencySlider = new QSlider(Qt::Horizontal, this);
-    m_frequencySlider->setRange(470, 862);  // 470-862 MHz
-    m_frequencySlider->setValue(478);       // Default: 478 MHz
+    m_frequencySlider->setRange(470, 862);
+    m_frequencySlider->setValue(478);
     m_frequencySlider->setTickPosition(QSlider::TicksBelow);
-    m_frequencySlider->setTickInterval(8);  // 8 MHz steps
-    m_frequencySlider->setMinimumWidth(400);
-    m_frequencySlider->setStyleSheet(
-        "QSlider::groove:horizontal {"
-        "    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #66cc66, stop:1 #ff6666);"
-        "    height: 10px;"
-        "    border-radius: 5px;"
-        "}"
-        "QSlider::handle:horizontal {"
-        "    background: #3388ff;"
-        "    border: 2px solid #ffffff;"
-        "    width: 20px;"
-        "    margin: -5px 0;"
-        "    border-radius: 10px;"
-        "}"
-        "QSlider::handle:horizontal:hover {"
-        "    background: #5599ff;"
-        "}"
-        );
+    m_frequencySlider->setTickInterval(8);
     connect(m_frequencySlider, &QSlider::valueChanged,
             this, &MainWindow::onFrequencySliderChanged);
     sliderLayout->addWidget(m_frequencySlider, 1);
 
-    QLabel* maxLabel = new QLabel("862 MHz", this);
-    maxLabel->setStyleSheet("font-weight: bold; color: #ff5555;");
+    QLabel* maxLabel = new QLabel("862", this);
     sliderLayout->addWidget(maxLabel);
-
     freqLayout->addLayout(sliderLayout);
 
-    mainLayout->addWidget(freqGroup);
+    rightColumn->addWidget(freqGroup);
 
-    // ========== HackRF Controls ==========
+    // HackRF Controls
     QGroupBox* hackRfGroup = new QGroupBox("HackRF Controls", this);
     QVBoxLayout* hackRfLayout = new QVBoxLayout(hackRfGroup);
 
-    // Start/Stop button
     m_startStopButton = new QPushButton("Start HackRF", this);
     m_startStopButton->setStyleSheet("QPushButton { background-color: #55ff55; color: black; padding: 10px; font-weight: bold; }");
     connect(m_startStopButton, &QPushButton::clicked, this, &MainWindow::toggleHackRF);
     hackRfLayout->addWidget(m_startStopButton);
 
-    // LNA Gain
+    // LNA Gain (compact)
     QHBoxLayout* lnaLayout = new QHBoxLayout();
-    lnaLayout->addWidget(new QLabel("LNA Gain (0-40):", this));
+    lnaLayout->addWidget(new QLabel("LNA:", this));
     m_lnaGainSlider = new QSlider(Qt::Horizontal, this);
     m_lnaGainSlider->setRange(0, 40);
     m_lnaGainSlider->setValue(40);
@@ -240,6 +308,7 @@ void MainWindow::setupControls()
     m_lnaGainSpinBox = new QSpinBox(this);
     m_lnaGainSpinBox->setRange(0, 40);
     m_lnaGainSpinBox->setValue(40);
+    m_lnaGainSpinBox->setMaximumWidth(100);
     connect(m_lnaGainSlider, &QSlider::valueChanged, this, &MainWindow::onLnaGainChanged);
     connect(m_lnaGainSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
             [this](int value) { m_lnaGainSlider->setValue(value); });
@@ -247,9 +316,9 @@ void MainWindow::setupControls()
     lnaLayout->addWidget(m_lnaGainSpinBox);
     hackRfLayout->addLayout(lnaLayout);
 
-    // VGA Gain
+    // VGA Gain (compact)
     QHBoxLayout* vgaLayout = new QHBoxLayout();
-    vgaLayout->addWidget(new QLabel("VGA Gain (0-62):", this));
+    vgaLayout->addWidget(new QLabel("VGA:", this));
     m_vgaGainSlider = new QSlider(Qt::Horizontal, this);
     m_vgaGainSlider->setRange(0, 62);
     m_vgaGainSlider->setValue(20);
@@ -258,6 +327,7 @@ void MainWindow::setupControls()
     m_vgaGainSpinBox = new QSpinBox(this);
     m_vgaGainSpinBox->setRange(0, 62);
     m_vgaGainSpinBox->setValue(20);
+    m_vgaGainSpinBox->setMaximumWidth(100);
     connect(m_vgaGainSlider, &QSlider::valueChanged, this, &MainWindow::onVgaGainChanged);
     connect(m_vgaGainSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
             [this](int value) { m_vgaGainSlider->setValue(value); });
@@ -265,9 +335,9 @@ void MainWindow::setupControls()
     vgaLayout->addWidget(m_vgaGainSpinBox);
     hackRfLayout->addLayout(vgaLayout);
 
-    // RX Amp Gain
+    // RX Amp (compact)
     QHBoxLayout* rxAmpLayout = new QHBoxLayout();
-    rxAmpLayout->addWidget(new QLabel("RX Amp (0-14):", this));
+    rxAmpLayout->addWidget(new QLabel("RX Amp:", this));
     m_rxAmpGainSlider = new QSlider(Qt::Horizontal, this);
     m_rxAmpGainSlider->setRange(0, 14);
     m_rxAmpGainSlider->setValue(14);
@@ -276,6 +346,7 @@ void MainWindow::setupControls()
     m_rxAmpGainSpinBox = new QSpinBox(this);
     m_rxAmpGainSpinBox->setRange(0, 14);
     m_rxAmpGainSpinBox->setValue(14);
+    m_rxAmpGainSpinBox->setMaximumWidth(100);
     connect(m_rxAmpGainSlider, &QSlider::valueChanged, this, &MainWindow::onRxAmpGainChanged);
     connect(m_rxAmpGainSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
             [this](int value) { m_rxAmpGainSlider->setValue(value); });
@@ -283,73 +354,19 @@ void MainWindow::setupControls()
     rxAmpLayout->addWidget(m_rxAmpGainSpinBox);
     hackRfLayout->addLayout(rxAmpLayout);
 
-    mainLayout->addWidget(hackRfGroup);
+    rightColumn->addWidget(hackRfGroup);
 
-    // ========== Video Processing Controls ==========
-    QGroupBox* videoControlGroup = new QGroupBox("Video Processing Controls", this);
-    QVBoxLayout* videoControlLayout = new QVBoxLayout(videoControlGroup);
-
-    // Video Gain control
-    QHBoxLayout* videoGainLayout = new QHBoxLayout();
-    videoGainLayout->addWidget(new QLabel("Video Gain:", this));
-    m_videoGainSlider = new QSlider(Qt::Horizontal, this);
-    m_videoGainSlider->setRange(1, 100); // 0.1 to 10.0
-    m_videoGainSlider->setValue(15); // Default 1.5
-    m_videoGainSlider->setTickPosition(QSlider::TicksBelow);
-    m_videoGainSlider->setTickInterval(10);
-    m_videoGainSpinBox = new QDoubleSpinBox(this);
-    m_videoGainSpinBox->setRange(0.1, 10.0);
-    m_videoGainSpinBox->setSingleStep(0.1);
-    m_videoGainSpinBox->setValue(1.5);
-    m_videoGainSpinBox->setDecimals(1);
-    connect(m_videoGainSlider, &QSlider::valueChanged, this, &MainWindow::onVideoGainChanged);
-    connect(m_videoGainSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            [this](double value) { m_videoGainSlider->setValue(static_cast<int>(value * 10)); });
-    videoGainLayout->addWidget(m_videoGainSlider, 1);
-    videoGainLayout->addWidget(m_videoGainSpinBox);
-    videoControlLayout->addLayout(videoGainLayout);
-
-    // Video Offset control
-    QHBoxLayout* videoOffsetLayout = new QHBoxLayout();
-    videoOffsetLayout->addWidget(new QLabel("Video Offset:", this));
-    m_videoOffsetSlider = new QSlider(Qt::Horizontal, this);
-    m_videoOffsetSlider->setRange(-100, 100); // -1.0 to 1.0
-    m_videoOffsetSlider->setValue(0); // Default 0.0
-    m_videoOffsetSlider->setTickPosition(QSlider::TicksBelow);
-    m_videoOffsetSlider->setTickInterval(20);
-    m_videoOffsetSpinBox = new QDoubleSpinBox(this);
-    m_videoOffsetSpinBox->setRange(-1.0, 1.0);
-    m_videoOffsetSpinBox->setSingleStep(0.01);
-    m_videoOffsetSpinBox->setValue(0.0);
-    m_videoOffsetSpinBox->setDecimals(2);
-    connect(m_videoOffsetSlider, &QSlider::valueChanged, this, &MainWindow::onVideoOffsetChanged);
-    connect(m_videoOffsetSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            [this](double value) { m_videoOffsetSlider->setValue(static_cast<int>(value * 100)); });
-    videoOffsetLayout->addWidget(m_videoOffsetSlider, 1);
-    videoOffsetLayout->addWidget(m_videoOffsetSpinBox);
-    videoControlLayout->addLayout(videoOffsetLayout);
-
-    // Invert Video checkbox
-    QHBoxLayout* invertLayout = new QHBoxLayout();
-    m_invertVideoCheckBox = new QCheckBox("Invert Video (Negative)", this);
-    m_invertVideoCheckBox->setStyleSheet("QCheckBox { font-weight: bold; }");
-    connect(m_invertVideoCheckBox, &QCheckBox::stateChanged,
-            this, &MainWindow::onInvertVideoChanged);
-    invertLayout->addWidget(m_invertVideoCheckBox);
-    invertLayout->addStretch();
-    videoControlLayout->addLayout(invertLayout);
-    mainLayout->addWidget(videoControlGroup);
-
-    QGroupBox* syncControlGroup = new QGroupBox("Sync Detection Controls", this);
+    // Sync Detection Controls
+    QGroupBox* syncControlGroup = new QGroupBox("Sync Detection", this);
     QVBoxLayout* syncControlLayout = new QVBoxLayout(syncControlGroup);
 
-    // Sync Rate Display (read-only)
+    // Sync Rate Display
     QHBoxLayout* syncRateLayout = new QHBoxLayout();
-    syncRateLayout->addWidget(new QLabel("<b>Sync Rate:</b>", this));
+    syncRateLayout->addWidget(new QLabel("<b>Sync:</b>", this));
     m_syncRateLabel = new QLabel("---%", this);
     m_syncRateLabel->setStyleSheet(
         "QLabel {"
-        "    font-size: 16pt;"
+        "    font-size: 14pt;"
         "    font-weight: bold;"
         "    color: #00aa00;"
         "    padding: 5px;"
@@ -357,18 +374,18 @@ void MainWindow::setupControls()
         "    border-radius: 3px;"
         "}"
         );
-    m_syncRateLabel->setMinimumWidth(100);
+    m_syncRateLabel->setMinimumWidth(80);
     syncRateLayout->addWidget(m_syncRateLabel);
     syncRateLayout->addStretch();
     syncControlLayout->addLayout(syncRateLayout);
 
-    // Sync Threshold control
+    // Sync Threshold
     QHBoxLayout* syncThresholdLayout = new QHBoxLayout();
-    syncThresholdLayout->addWidget(new QLabel("Sync Threshold:", this));
+    syncThresholdLayout->addWidget(new QLabel("Threshold:", this));
 
     m_syncThresholdSlider = new QSlider(Qt::Horizontal, this);
-    m_syncThresholdSlider->setRange(-100, 0); // -1.0 to 0.0
-    m_syncThresholdSlider->setValue(-20); // Default -0.2
+    m_syncThresholdSlider->setRange(-100, 0);
+    m_syncThresholdSlider->setValue(-20);
     m_syncThresholdSlider->setTickPosition(QSlider::TicksBelow);
     m_syncThresholdSlider->setTickInterval(10);
 
@@ -377,6 +394,7 @@ void MainWindow::setupControls()
     m_syncThresholdSpinBox->setSingleStep(0.01);
     m_syncThresholdSpinBox->setValue(-0.2);
     m_syncThresholdSpinBox->setDecimals(2);
+    m_syncThresholdSpinBox->setMaximumWidth(100);
 
     connect(m_syncThresholdSlider, &QSlider::valueChanged,
             this, &MainWindow::onSyncThresholdChanged);
@@ -389,28 +407,29 @@ void MainWindow::setupControls()
     syncThresholdLayout->addWidget(m_syncThresholdSpinBox);
     syncControlLayout->addLayout(syncThresholdLayout);
 
-    // Help text
     QLabel* syncHelpLabel = new QLabel(
-        "<i>Lower values (-0.5) = stricter sync detection<br>"
-        "Higher values (-0.1) = more lenient sync detection<br>"
-        "Recommended: -0.2 to -0.3 for stable image</i>",
-        this);
+        "<i>Adjust for stable sync (try -0.2 to -0.3)</i>", this);
     syncHelpLabel->setWordWrap(true);
-    syncHelpLabel->setStyleSheet("QLabel { color: #666; font-size: 9pt; }");
+    syncHelpLabel->setStyleSheet("QLabel { color: #666; font-size: 8pt; }");
     syncControlLayout->addWidget(syncHelpLabel);
 
-    mainLayout->addWidget(syncControlGroup);
+    rightColumn->addWidget(syncControlGroup);
+    rightColumn->addStretch();
 
-    // Info label
-    QLabel* infoLabel = new QLabel(
-        "<b>PAL-B/G Decoder with HackRF</b><br>"
-        "• Sample Rate: 16 MHz | Video: 6 MHz<br>"
-        "• Resolution: 288×576 pixels (Grayscale)<br>"
-        "• 625 lines, 25 fps, AM demodulation<br><br>"
-        "<i>Adjust gains for signal strength, sync threshold for stability.</i>",
-        this);
-    infoLabel->setWordWrap(true);
-    mainLayout->addWidget(infoLabel);
+    columnsLayout->addLayout(rightColumn, 1); // Give right column more stretch
+
+    mainLayout->addLayout(columnsLayout);
+
+    // ========== BOTTOM STATUS BAR ==========
+    QHBoxLayout* statusLayout = new QHBoxLayout();
+    m_statusLabel = new QLabel("Status: Initializing...", this);
+    m_statusLabel->setStyleSheet("QLabel { font-size: 9pt; }");
+    m_fpsLabel = new QLabel("FPS: 0.0", this);
+    m_fpsLabel->setStyleSheet("QLabel { font-size: 9pt; font-weight: bold; }");
+    statusLayout->addWidget(m_statusLabel);
+    statusLayout->addStretch();
+    statusLayout->addWidget(m_fpsLabel);
+    mainLayout->addLayout(statusLayout);
 }
 
 void MainWindow::onSyncStatsUpdated(float syncRate, float peakLevel, float minLevel)
@@ -454,6 +473,27 @@ void MainWindow::onSyncThresholdChanged(int value)
     if (m_palDecoder) {
         m_palDecoder->setSyncThreshold(threshold);
         qDebug() << "Sync threshold set to:" << threshold;
+    }
+}
+
+void MainWindow::onSampleRateChanged(int index)
+{
+    if (!m_sampleRateComboBox) return;
+
+    int newSampleRate = m_sampleRateComboBox->itemData(index).toInt();
+
+    if (newSampleRate == m_currentSampleRate) {
+        return; // No change
+    }
+
+    qDebug() << "Sample rate changed from" << m_currentSampleRate
+             << "to" << newSampleRate;
+
+    m_currentSampleRate = newSampleRate;
+
+    // If HackRF is running, restart with new sample rate
+    if (m_hackTvLib) {
+        m_hackTvLib->setSampleRate(m_currentSampleRate);
     }
 }
 
@@ -542,6 +582,7 @@ void MainWindow::applyFrequencyChange()
 {
     if (!m_hackTvLib) return;
     m_hackTvLib->setFrequency(m_currentFrequency);
+    m_hackTvLib->setSampleRate(m_currentSampleRate);
 }
 
 void MainWindow::onVideoGainChanged(int value)
@@ -607,7 +648,7 @@ void MainWindow::onRxAmpGainChanged(int value)
 void MainWindow::toggleHackRF()
 {
     if (m_hackRfRunning) {
-        // Stop HackRF
+        // ========== STOP HackRF ==========
         qDebug() << "Stopping HackRF...";
 
         if (m_hackTvLib) {
@@ -635,18 +676,52 @@ void MainWindow::toggleHackRF()
             qDebug() << "Buffer cleared";
         }
 
+        // Reset sample rate to 16 MHz
+        m_currentSampleRate = 16000000;
+
+        // Update combobox to 16 MHz
+        if (m_sampleRateComboBox) {
+            for (int i = 0; i < m_sampleRateComboBox->count(); i++) {
+                if (m_sampleRateComboBox->itemData(i).toInt() == 16000000) {
+                    m_sampleRateComboBox->blockSignals(true);
+                    m_sampleRateComboBox->setCurrentIndex(i);
+                    m_sampleRateComboBox->blockSignals(false);
+                    break;
+                }
+            }
+        }
+
+        qDebug() << "Sample rate reset to 16 MHz";
+
         m_startStopButton->setText("Start HackRF");
         m_startStopButton->setStyleSheet("QPushButton { background-color: #55ff55; color: black; padding: 10px; font-weight: bold; }");
         qDebug() << "HackRF stopped";
 
     } else {
-        // Start HackRF
+        // ========== START HackRF ==========
         qDebug() << "Starting HackRF...";
 
         if (!m_hackTvLib) {
             QMessageBox::critical(this, "Error", "HackTvLib not initialized!");
             return;
         }
+
+        // Force sample rate to 16 MHz
+        m_currentSampleRate = 16000000;
+
+        // Update combobox to 16 MHz
+        if (m_sampleRateComboBox) {
+            for (int i = 0; i < m_sampleRateComboBox->count(); i++) {
+                if (m_sampleRateComboBox->itemData(i).toInt() == 16000000) {
+                    m_sampleRateComboBox->blockSignals(true);
+                    m_sampleRateComboBox->setCurrentIndex(i);
+                    m_sampleRateComboBox->blockSignals(false);
+                    break;
+                }
+            }
+        }
+
+        qDebug() << "Sample rate set to 16 MHz";
 
         // Clear buffer before starting
         if (m_circularBuffer) {
@@ -670,8 +745,6 @@ void MainWindow::toggleHackRF()
         if (!m_processorThread->isRunning()) {
             qDebug() << "Starting processor thread...";
             m_processorThread->start(QThread::HighPriority);
-
-            // Give thread time to start
             QThread::msleep(100);
 
             if (m_processorThread->isRunning()) {
@@ -682,7 +755,23 @@ void MainWindow::toggleHackRF()
             }
         }
 
-        // Now start HackRF
+        // Configure HackRF with 16 MHz sample rate
+        QStringList args;
+        args << "--rx-tx-mode" << "rx";
+        args << "-a";
+        args << "--filter";
+        args << "-f" << QString::number(m_currentFrequency);
+        args << "-s" << QString::number(m_currentSampleRate);  // Always 16 MHz
+
+        std::vector<std::string> stdArgs;
+        stdArgs.reserve(args.size());
+        for (const QString& arg : args) {
+            stdArgs.push_back(arg.toStdString());
+        }
+
+        m_hackTvLib->setArguments(stdArgs);
+
+        // Start HackRF
         qDebug() << "Starting HackRF device...";
         if (m_hackTvLib->start()) {
             m_hackRfRunning = true;
@@ -695,7 +784,7 @@ void MainWindow::toggleHackRF()
             m_startStopButton->setStyleSheet("QPushButton { background-color: #ff5555; color: white; padding: 10px; font-weight: bold; }");
             qDebug() << "HackRF started successfully";
             qDebug() << "Frequency:" << (m_currentFrequency / 1000000) << "MHz";
-            qDebug() << "Sample rate:" << SAMP_RATE << "Hz";
+            qDebug() << "Sample rate:" << m_currentSampleRate << "Hz (16 MHz)";
         } else {
             // Failed to start - stop processor thread
             qWarning() << "Failed to start HackRF!";
@@ -739,20 +828,20 @@ void MainWindow::updateStatus()
         m_fpsLabel->setText(QString("FPS: %1").arg(fps, 0, 'f', 1));
     }
 
-    // Reset counters
     m_frameCount = 0;
     m_fpsTimer.restart();
 
     // Update status
-    QString status = QString("Status: %1 | Freq: 478 MHz | Rate: 16 MHz")
-                         .arg(m_hackRfRunning ? "Running" : "Stopped");
+    QString status = QString("Status: %1 | Freq: %2 MHz | Rate: %3 MHz")
+                         .arg(m_hackRfRunning ? "Running" : "Stopped")
+                         .arg(m_currentFrequency / 1000000)
+                         .arg(m_currentSampleRate / 1000000.0, 0, 'f', 1);  // <<<< Dinamik
 
     if (m_hackRfRunning && m_palDecoder) {
         status += QString(" | V.Gain: %1 | V.Offset: %2")
                       .arg(m_palDecoder->getVideoGain(), 0, 'f', 1)
                       .arg(m_palDecoder->getVideoOffset(), 0, 'f', 2);
 
-        // Add buffer stats
         if (m_circularBuffer) {
             size_t bufferUsage = m_circularBuffer->availableData();
             uint64_t dropped = m_circularBuffer->droppedFrames();
@@ -773,33 +862,25 @@ void MainWindow::initHackRF()
 {
     qDebug() << "Initializing HackRF...";
 
-    // Create HackTvLib instance
     m_hackTvLib = std::make_unique<HackTvLib>(this);
 
-    // Setup arguments for RX mode with current frequency
     QStringList args;
     args << "--rx-tx-mode" << "rx";
-    args << "-a";  // Enable amp
+    args << "-a";
     args << "--filter";
-    args << "-f" << QString::number(m_currentFrequency);  // Use current frequency
-    args << "-s" << QString::number(SAMP_RATE);
+    args << "-f" << QString::number(m_currentFrequency);
+    args << "-s" << QString::number(m_currentSampleRate);  // <<<< Dinamik sample rate
 
-    // Convert to std::vector<std::string>
     std::vector<std::string> stdArgs;
     stdArgs.reserve(args.size());
     for (const QString& arg : args) {
         stdArgs.push_back(arg.toStdString());
     }
 
-    // Set arguments
     m_hackTvLib->setArguments(stdArgs);
-
-    // Set initial gains
     m_hackTvLib->setLnaGain(40);
     m_hackTvLib->setVgaGain(20);
     m_hackTvLib->setRxAmpGain(14);
-
-    // Set mic disabled
     m_hackTvLib->setMicEnabled(false);
 
     // Setup log callback
@@ -847,9 +928,9 @@ void MainWindow::initHackRF()
     });
 
     qDebug() << "HackRF initialized:";
-    qDebug() << "  Sample rate:" << SAMP_RATE << "Hz";
+    qDebug() << "  Sample rate:" << m_currentSampleRate << "Hz";
     qDebug() << "  Frequency:" << m_currentFrequency << "Hz ("
-             << (m_currentFrequency / 1000000) << "MHz)";  
+             << (m_currentFrequency / 1000000) << "MHz)";
     qDebug() << "  Circular buffer size:" << (64 * 1024 * 1024) << "bytes";
 
     m_hackRfRunning = false;

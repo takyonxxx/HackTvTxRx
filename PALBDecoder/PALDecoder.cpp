@@ -24,6 +24,7 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_videoGain(1.5f)
     , m_videoOffset(0.0f)
     , m_videoInvert(false)
+    , m_syncThreshold(-0.2f)
     , m_totalSamples(0)
     , m_frameCount(0)
     , m_linesProcessed(0)
@@ -38,7 +39,7 @@ PALDecoder::PALDecoder(QObject *parent)
 
     qDebug() << "PAL-B/G Decoder (PLL-BASED SYNC):";
     qDebug() << "  625 lines, 25 fps, AM demodulation";
-    qDebug() << "  Resolution:" << VIDEO_WIDTH << "x" << VIDEO_HEIGHT;
+    qDebug() << "  Resolution:" << VIDEO_WIDTH << "x" << VIDEO_HEIGHT; // 576x384
     qDebug() << "  Default sync threshold:" << m_syncThreshold;
 }
 
@@ -291,38 +292,41 @@ void PALDecoder::finalizeLine()
     m_linesProcessed++;
     m_currentLine++;
 
-    // Store visible lines
     if (m_currentLine >= FIRST_VISIBLE_LINE &&
         m_currentLine < FIRST_VISIBLE_LINE + VISIBLE_LINES) {
 
         int lineIndex = m_currentLine - FIRST_VISIBLE_LINE;
-        int samplesToUse = std::min(static_cast<int>(m_lineBuffer.size()), VIDEO_WIDTH);
 
-        for (int x = 0; x < samplesToUse; x++) {
-            // Already normalized to -1..+1, map to 0..1
-            float value = (m_lineBuffer[x] + 1.0f) * 0.5f;
+        // Map 576 lines to 384 height (decimate by 1.5)
+        int y = (lineIndex * VIDEO_HEIGHT) / VISIBLE_LINES; // 0-383
+
+        // Map 384 samples to 576 width (interpolate by 1.5)
+        int samplesToUse = std::min(static_cast<int>(m_lineBuffer.size()), SAMPLES_PER_LINE);
+
+        for (int x = 0; x < VIDEO_WIDTH; x++) {
+            // Map x (0-575) to sample index (0-383)
+            float srcX = (x * SAMPLES_PER_LINE) / (float)VIDEO_WIDTH;
+            int idx = static_cast<int>(srcX);
+
+            if (idx >= samplesToUse) {
+                m_frameBuffer[y * VIDEO_WIDTH + x] = m_videoInvert ? 255 : 0;
+                continue;
+            }
+
+            float value = (m_lineBuffer[idx] + 1.0f) * 0.5f;
             value = value * m_videoGain + m_videoOffset;
             value = clipValue(value, 0.0f, 1.0f);
 
-            // Apply invert if enabled
             if (m_videoInvert) {
                 value = 1.0f - value;
             }
 
-            uint8_t pixel = static_cast<uint8_t>(value * 255.0f);
-            m_frameBuffer[lineIndex * VIDEO_WIDTH + x] = pixel;
-        }
-
-        // Fill rest with black/white
-        uint8_t fillValue = m_videoInvert ? 255 : 0;
-        for (int x = samplesToUse; x < VIDEO_WIDTH; x++) {
-            m_frameBuffer[lineIndex * VIDEO_WIDTH + x] = fillValue;
+            m_frameBuffer[y * VIDEO_WIDTH + x] = static_cast<uint8_t>(value * 255.0f);
         }
     }
 
     m_lineBuffer.clear();
 
-    // End of frame
     if (m_currentLine >= LINES_PER_FRAME) {
         buildFrame();
         m_currentLine = 0;
