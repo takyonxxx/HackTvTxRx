@@ -38,7 +38,8 @@ PALDecoder::PALDecoder(QObject *parent)
 
     qDebug() << "PAL-B/G Decoder (PLL-BASED SYNC):";
     qDebug() << "  625 lines, 25 fps, AM demodulation";
-    qDebug() << "  PLL sync tracking enabled";
+    qDebug() << "  Resolution:" << VIDEO_WIDTH << "x" << VIDEO_HEIGHT;
+    qDebug() << "  Default sync threshold:" << m_syncThreshold;
 }
 
 PALDecoder::~PALDecoder()
@@ -162,8 +163,8 @@ bool PALDecoder::detectSyncPulse()
         return false;
     }
 
-    // Look for sync pulse: sustained low value (~30 samples)
-    constexpr float SYNC_THRESHOLD = -0.2f; // In normalized -1..+1 space
+    // Use adjustable threshold (not constexpr anymore)
+    float SYNC_THRESHOLD = m_syncThreshold; // Use member variable
 
     // Count low samples
     int lowCount = 0;
@@ -182,7 +183,6 @@ bool PALDecoder::detectSyncPulse()
         }
     }
 
-    // At least 50% of samples should be below threshold + clear end
     return (lowCount >= HSYNC_WIDTH / 2) && afterPulse;
 }
 
@@ -207,15 +207,17 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
     for (const auto& sample : samples) {
         m_totalSamples++;
 
-        // Stats every 10M samples
+        // Stats every 10M samples - emit to MainWindow
         if (m_totalSamples % 10000000 == 0) {
             float syncRate = m_linesProcessed > 0 ?
                                  (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
-            qDebug() << (m_totalSamples / 1000000) << "M samples |"
-                     << m_frameCount << "frames |"
-                     << "Sync:" << QString::number(syncRate, 'f', 1) << "% |"
-                     << "Peak:" << QString::number(m_peakLevel, 'f', 2)
-                     << "Min:" << QString::number(m_minLevel, 'f', 2);
+
+            // qDebug() << (m_totalSamples / 1000000) << "M samples |"
+            //          << m_frameCount << "frames |"
+            //          << "Sync:" << QString::number(syncRate, 'f', 1) << "%";
+
+            // Emit stats to MainWindow
+            emit syncStatsUpdated(syncRate, m_peakLevel, m_minLevel);
         }
 
         // Processing chain
@@ -231,7 +233,6 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
             m_resampleCounter = 0;
             float luma = applyLumaFilter(normalized);
 
-            // Add to history for sync detection
             m_sampleHistory.push_front(luma);
             if (m_sampleHistory.size() > HISTORY_SIZE) {
                 m_sampleHistory.pop_back();

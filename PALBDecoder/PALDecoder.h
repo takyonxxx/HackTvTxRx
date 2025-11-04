@@ -22,15 +22,23 @@ public:
 
     QImage getCurrentFrame() const;
 
+    // Video controls
     void setVideoGain(float gain) { m_videoGain = gain; }
     void setVideoOffset(float offset) { m_videoOffset = offset; }
+    void setVideoInvert(bool invert) { m_videoInvert = invert; }
+
+    // NEW: Sync threshold control
+    void setSyncThreshold(float threshold) { m_syncThreshold = threshold; }
+
+    // Getters
     float getVideoGain() const { return m_videoGain; }
     float getVideoOffset() const { return m_videoOffset; }
-    void setVideoInvert(bool invert) { m_videoInvert = invert; }
     bool getVideoInvert() const { return m_videoInvert; }
+    float getSyncThreshold() const { return m_syncThreshold; }
 
 signals:
     void frameReady(const QImage& frame);
+    void syncStatsUpdated(float syncRate, float peakLevel, float minLevel); // NEW
 
 private:
     // PAL-B/G Constants
@@ -77,7 +85,7 @@ private:
     float m_minLevel;
     float m_meanLevel;
 
-    // Sync detection buffer
+    // Sync detection
     std::deque<float> m_sampleHistory;
     static constexpr int HISTORY_SIZE = 100;
 
@@ -85,6 +93,7 @@ private:
     float m_videoGain;
     float m_videoOffset;
     bool m_videoInvert;
+    float m_syncThreshold;  // NEW: Adjustable sync threshold
 
     // Stats
     uint64_t m_totalSamples;

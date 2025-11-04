@@ -24,6 +24,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_palDecoder.get(), &PALDecoder::frameReady,
             this, &MainWindow::onFrameReady, Qt::QueuedConnection);
 
+    connect(m_palDecoder.get(), &PALDecoder::syncStatsUpdated,
+            this, &MainWindow::onSyncStatsUpdated, Qt::QueuedConnection);
+
     // Create processor thread
     m_processorThread = std::make_unique<PALProcessorThread>(
         m_circularBuffer.get(),
@@ -336,6 +339,122 @@ void MainWindow::setupControls()
     invertLayout->addStretch();
     videoControlLayout->addLayout(invertLayout);
     mainLayout->addWidget(videoControlGroup);
+
+    QGroupBox* syncControlGroup = new QGroupBox("Sync Detection Controls", this);
+    QVBoxLayout* syncControlLayout = new QVBoxLayout(syncControlGroup);
+
+    // Sync Rate Display (read-only)
+    QHBoxLayout* syncRateLayout = new QHBoxLayout();
+    syncRateLayout->addWidget(new QLabel("<b>Sync Rate:</b>", this));
+    m_syncRateLabel = new QLabel("---%", this);
+    m_syncRateLabel->setStyleSheet(
+        "QLabel {"
+        "    font-size: 16pt;"
+        "    font-weight: bold;"
+        "    color: #00aa00;"
+        "    padding: 5px;"
+        "    background-color: #f0f0f0;"
+        "    border-radius: 3px;"
+        "}"
+        );
+    m_syncRateLabel->setMinimumWidth(100);
+    syncRateLayout->addWidget(m_syncRateLabel);
+    syncRateLayout->addStretch();
+    syncControlLayout->addLayout(syncRateLayout);
+
+    // Sync Threshold control
+    QHBoxLayout* syncThresholdLayout = new QHBoxLayout();
+    syncThresholdLayout->addWidget(new QLabel("Sync Threshold:", this));
+
+    m_syncThresholdSlider = new QSlider(Qt::Horizontal, this);
+    m_syncThresholdSlider->setRange(-100, 0); // -1.0 to 0.0
+    m_syncThresholdSlider->setValue(-20); // Default -0.2
+    m_syncThresholdSlider->setTickPosition(QSlider::TicksBelow);
+    m_syncThresholdSlider->setTickInterval(10);
+
+    m_syncThresholdSpinBox = new QDoubleSpinBox(this);
+    m_syncThresholdSpinBox->setRange(-1.0, 0.0);
+    m_syncThresholdSpinBox->setSingleStep(0.01);
+    m_syncThresholdSpinBox->setValue(-0.2);
+    m_syncThresholdSpinBox->setDecimals(2);
+
+    connect(m_syncThresholdSlider, &QSlider::valueChanged,
+            this, &MainWindow::onSyncThresholdChanged);
+    connect(m_syncThresholdSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            [this](double value) {
+                m_syncThresholdSlider->setValue(static_cast<int>(value * 100));
+            });
+
+    syncThresholdLayout->addWidget(m_syncThresholdSlider, 1);
+    syncThresholdLayout->addWidget(m_syncThresholdSpinBox);
+    syncControlLayout->addLayout(syncThresholdLayout);
+
+    // Help text
+    QLabel* syncHelpLabel = new QLabel(
+        "<i>Lower values (-0.5) = stricter sync detection<br>"
+        "Higher values (-0.1) = more lenient sync detection<br>"
+        "Recommended: -0.2 to -0.3 for stable image</i>",
+        this);
+    syncHelpLabel->setWordWrap(true);
+    syncHelpLabel->setStyleSheet("QLabel { color: #666; font-size: 9pt; }");
+    syncControlLayout->addWidget(syncHelpLabel);
+
+    mainLayout->addWidget(syncControlGroup);
+
+    // Info label
+    QLabel* infoLabel = new QLabel(
+        "<b>PAL-B/G Decoder with HackRF</b><br>"
+        "• Sample Rate: 16 MHz | Video: 6 MHz<br>"
+        "• Resolution: 288×576 pixels (Grayscale)<br>"
+        "• 625 lines, 25 fps, AM demodulation<br><br>"
+        "<i>Adjust gains for signal strength, sync threshold for stability.</i>",
+        this);
+    infoLabel->setWordWrap(true);
+    mainLayout->addWidget(infoLabel);
+}
+
+void MainWindow::onSyncStatsUpdated(float syncRate, float peakLevel, float minLevel)
+{
+    // Update sync rate label with color coding
+    QString text = QString("%1%").arg(syncRate, 0, 'f', 1);
+    m_syncRateLabel->setText(text);
+
+    // Color code based on sync rate
+    QString color;
+    if (syncRate >= 95.0f) {
+        color = "#00aa00"; // Green - excellent
+    } else if (syncRate >= 85.0f) {
+        color = "#aaaa00"; // Yellow - good
+    } else if (syncRate >= 70.0f) {
+        color = "#ff8800"; // Orange - acceptable
+    } else {
+        color = "#ff0000"; // Red - poor
+    }
+
+    m_syncRateLabel->setStyleSheet(QString(
+                                       "QLabel {"
+                                       "    font-size: 16pt;"
+                                       "    font-weight: bold;"
+                                       "    color: %1;"
+                                       "    padding: 5px;"
+                                       "    background-color: #f0f0f0;"
+                                       "    border-radius: 3px;"
+                                       "}"
+                                       ).arg(color));
+}
+
+void MainWindow::onSyncThresholdChanged(int value)
+{
+    float threshold = value / 100.0f; // -100 to 0 -> -1.0 to 0.0
+
+    m_syncThresholdSpinBox->blockSignals(true);
+    m_syncThresholdSpinBox->setValue(threshold);
+    m_syncThresholdSpinBox->blockSignals(false);
+
+    if (m_palDecoder) {
+        m_palDecoder->setSyncThreshold(threshold);
+        qDebug() << "Sync threshold set to:" << threshold;
+    }
 }
 
 void MainWindow::onFrequencySliderChanged(int value)

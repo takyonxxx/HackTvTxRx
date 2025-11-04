@@ -49,6 +49,8 @@ private slots:
     void onFrequencySpinBoxChanged(double value);
     void updateChannelLabel(uint64_t frequency);
     void onInvertVideoChanged(int state);
+    void onSyncThresholdChanged(int value);
+    void onSyncStatsUpdated(float syncRate, float peakLevel, float minLevel);
 
 private:
     void setupUI();
@@ -106,6 +108,10 @@ private:
 
     // Current frequency
     uint64_t m_currentFrequency;
+
+    QSlider* m_syncThresholdSlider;
+    QDoubleSpinBox* m_syncThresholdSpinBox;
+    QLabel* m_syncRateLabel;
 
     // Constants
     static constexpr uint64_t UHF_MIN_FREQ = 470000000ULL;  // 470 MHz (Kanal 21)
