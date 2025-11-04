@@ -106,6 +106,9 @@ float PALDecoder::applyLumaFilter(float sample)
     return output;
 }
 
+// 0.98 = hızlı DC blocking
+// 0.995 = yavaş DC blocking
+// TEST: 0.95, 0.98, 0.99, 0.995
 float PALDecoder::dcBlock(float sample)
 {
     constexpr float alpha = 0.98f;
@@ -115,22 +118,27 @@ float PALDecoder::dcBlock(float sample)
     return output;
 }
 
+// Attack: 0.05 = hızlı, 0.01 = yavaş
+// Decay: 0.9995 = yavaş, 0.999 = hızlı
+// TEST: Attack: 0.01-0.1, Decay: 0.999-0.9999
+
 float PALDecoder::normalizeAndAGC(float sample)
 {
     float absSample = std::abs(sample);
 
-    // Track peak
+    constexpr float AGC_ATTACK = 0.05f;  // <<<< DEĞİŞTİR (0.01 - 0.1)
+    constexpr float AGC_DECAY = 0.999f; // <<<< DEĞİŞTİR (0.999 - 0.9999)
+
     if (absSample > m_peakLevel) {
-        m_peakLevel = m_peakLevel * 0.95f + absSample * 0.05f;
+        m_peakLevel = m_peakLevel * (1.0f - AGC_ATTACK) + absSample * AGC_ATTACK;
     } else {
-        m_peakLevel *= 0.9995f;
+        m_peakLevel *= AGC_DECAY;
     }
 
-    // Track minimum
     if (sample < m_minLevel) {
-        m_minLevel = m_minLevel * 0.95f + sample * 0.05f;
+        m_minLevel = m_minLevel * (1.0f - AGC_ATTACK) + sample * AGC_ATTACK;
     } else {
-        m_minLevel *= 0.9995f;
+        m_minLevel *= AGC_DECAY;
     }
 
     m_meanLevel = m_meanLevel * 0.999f + sample * 0.001f;
@@ -155,7 +163,7 @@ bool PALDecoder::detectSyncPulse()
     }
 
     // Look for sync pulse: sustained low value (~30 samples)
-    constexpr float SYNC_THRESHOLD = -0.3f; // In normalized -1..+1 space
+    constexpr float SYNC_THRESHOLD = -0.2f; // In normalized -1..+1 space
 
     // Count low samples
     int lowCount = 0;
@@ -199,16 +207,16 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
     for (const auto& sample : samples) {
         m_totalSamples++;
 
-        // // Stats every 10M samples
-        // if (m_totalSamples % 10000000 == 0) {
-        //     float syncRate = m_linesProcessed > 0 ?
-        //                          (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
-        //     qDebug() << (m_totalSamples / 1000000) << "M samples |"
-        //              << m_frameCount << "frames |"
-        //              << "Sync:" << QString::number(syncRate, 'f', 1) << "% |"
-        //              << "Peak:" << QString::number(m_peakLevel, 'f', 2)
-        //              << "Min:" << QString::number(m_minLevel, 'f', 2);
-        // }
+        // Stats every 10M samples
+        if (m_totalSamples % 10000000 == 0) {
+            float syncRate = m_linesProcessed > 0 ?
+                                 (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
+            qDebug() << (m_totalSamples / 1000000) << "M samples |"
+                     << m_frameCount << "frames |"
+                     << "Sync:" << QString::number(syncRate, 'f', 1) << "% |"
+                     << "Peak:" << QString::number(m_peakLevel, 'f', 2)
+                     << "Min:" << QString::number(m_minLevel, 'f', 2);
+        }
 
         // Processing chain
         std::complex<float> filtered = applyVideoFilter(sample);
@@ -246,11 +254,11 @@ void PALDecoder::processVideoSample(float sample)
     if (inSyncWindow && detectSyncPulse()) {
         // Sync found! Adjust PLL
         int error = m_samplesSinceSync - m_expectedSyncPosition;
-        m_expectedSyncPosition += error / 4; // Slow correction
+        m_expectedSyncPosition += error / 16; // Slow correction
 
         // Clamp expected position
-        m_expectedSyncPosition = std::max(SAMPLES_PER_LINE - 50,
-                                          std::min(SAMPLES_PER_LINE + 50, m_expectedSyncPosition));
+        m_expectedSyncPosition = std::max(SAMPLES_PER_LINE - 20,
+                                          std::min(SAMPLES_PER_LINE + 20, m_expectedSyncPosition));
 
         m_syncConfidence = std::min(1.0f, m_syncConfidence + 0.1f);
         m_syncDetected++;
@@ -290,21 +298,21 @@ void PALDecoder::finalizeLine()
         int samplesToUse = std::min(static_cast<int>(m_lineBuffer.size()), VIDEO_WIDTH);
 
         for (int x = 0; x < samplesToUse; x++) {
-            // Map -1..1 to 0..1
+            // Already normalized to -1..+1, map to 0..1
             float value = (m_lineBuffer[x] + 1.0f) * 0.5f;
             value = value * m_videoGain + m_videoOffset;
             value = clipValue(value, 0.0f, 1.0f);
 
             // Apply invert if enabled
             if (m_videoInvert) {
-                value = 1.0f - value;  // Invert: 0 becomes 1, 1 becomes 0
+                value = 1.0f - value;
             }
 
             uint8_t pixel = static_cast<uint8_t>(value * 255.0f);
             m_frameBuffer[lineIndex * VIDEO_WIDTH + x] = pixel;
         }
 
-        // Fill rest with black (or white if inverted)
+        // Fill rest with black/white
         uint8_t fillValue = m_videoInvert ? 255 : 0;
         for (int x = samplesToUse; x < VIDEO_WIDTH; x++) {
             m_frameBuffer[lineIndex * VIDEO_WIDTH + x] = fillValue;
@@ -322,15 +330,15 @@ void PALDecoder::finalizeLine()
 
 void PALDecoder::buildFrame()
 {
-    m_frameCount++;
+    // m_frameCount++;
 
-    if (m_frameCount % 50 == 0) {
-        float syncRate = m_linesProcessed > 0 ?
-                             (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
-        // qDebug() << "Frame" << m_frameCount
-        //          << "| Sync:" << QString::number(syncRate, 'f', 1) << "%"
-        //          << "| Confidence:" << QString::number(m_syncConfidence, 'f', 2);
-    }
+    // if (m_frameCount % 50 == 0) {
+    //     float syncRate = m_linesProcessed > 0 ?
+    //                          (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
+    //     qDebug() << "Frame" << m_frameCount
+    //              << "| Sync:" << QString::number(syncRate, 'f', 1) << "%"
+    //              << "| Confidence:" << QString::number(m_syncConfidence, 'f', 2);
+    // }
 
     QImage frame(VIDEO_WIDTH, VIDEO_HEIGHT, QImage::Format_Grayscale8);
 
