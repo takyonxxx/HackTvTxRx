@@ -19,6 +19,8 @@ You can compile HackTvGui with these libraries, they will be automaticaly copied
 
 ![HackTvGui Screenshot](hacktvgui_screen.png)
 
+![PALBDecoder Screenshot](paltv_screen.png)
+
 ## Installation Instructions for Windows
 
 ### 1. Install MSYS2
