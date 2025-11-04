@@ -6,7 +6,6 @@
 #include <QFuture>
 #include <memory>
 #include "constants.h"
-#include "palbdemodulator.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -14,13 +13,9 @@
 #endif
 
 MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent),
-    tvDisplay(nullptr),
-    m_tvAdapter(nullptr),
+    : QMainWindow(parent),    
     logBrowser(nullptr),
     m_hackTvLib(nullptr),
-    palbDemodulator(nullptr),
-    palFrameBuffer(nullptr),   
     m_threadPool(nullptr),
     m_frequency(DEFAULT_FREQUENCY),
     m_sampleRate(DEFAULT_SAMPLE_RATE),
@@ -28,8 +23,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_LowCutFreq(-1*int(DEFAULT_CUT_OFF)),
     m_HiCutFreq(DEFAULT_CUT_OFF),
     m_shuttingDown(false),
-    m_isProcessing(false),   
-    palDemodulationInProgress(0),
+    m_isProcessing(false),
     audioDemodulationInProgress(0)
 {
     QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
@@ -48,64 +42,12 @@ MainWindow::MainWindow(QWidget *parent)
         qDebug() << "Exception caught:" << e.what();
     }
 
-    tvDisplay = new TVDisplay(this);
-    m_tvAdapter = new TVDisplayAdapter(tvDisplay);
     logBrowser = new QTextBrowser(this);
     audioOutput = std::make_unique<AudioOutput>();
     // Set audio volume if available
     if (audioOutput) {
         audioOutput->setVolume(m_volumeLevel);
     }
-
-    palbDemodulator = new PALBDemodulator(m_sampleRate);
-    palFrameBuffer = new FrameBuffer(m_sampleRate, 0.04); // 25 fps
-
-    m_tvAdapter = new TVDisplayAdapter(tvDisplay);
-    palbDemodulator->setTVScreen(m_tvAdapter);
-
-    // Carrier frequencies
-    palbDemodulator->setVideoCarrier(0.0);
-    palbDemodulator->setAudioCarrier(5.5e6);
-
-    // PAL-B/G parameters - critical timing
-    palbDemodulator->setPixelsPerLine(720);
-    palbDemodulator->setVisibleLines(576);
-    palbDemodulator->setVBILines(25);
-    palbDemodulator->setLineDuration(64e-6);
-
-    // Horizontal offset: (H-sync + back porch) / line duration
-    // = (4.7μs + 5.7μs) / 64μs = 0.1625
-    palbDemodulator->setHorizontalOffset(0.1625);
-
-    // AM mode
-    palbDemodulator->setDemodMode(PALBDemodulator::DEMOD_AM);
-
-    // VSB filter is critical for AM
-    palbDemodulator->setVSBFilterEnabled(true);
-    palbDemodulator->setVSBLowerCutoff(0.75e6);
-    palbDemodulator->setVSBUpperCutoff(5.5e6);
-
-    // Processing
-    palbDemodulator->setDecimationFactor(2); // 16MS/s -> 8MS/s
-    palbDemodulator->setDeinterlace(false);  // Start without deinterlacing
-
-    // Very gentle AGC (SDRangel defaults)
-    palbDemodulator->setAGCAttack(0.00001f);   // Very slow attack
-    palbDemodulator->setAGCDecay(0.000001f);    // Very slow decay
-
-    // Sync threshold (150mV on 0-1V scale)
-    palbDemodulator->setVSyncThreshold(0.15f);
-
-    // Video adjustments - neutral
-    palbDemodulator->setVideoBrightness(0.0f);
-    palbDemodulator->setVideoContrast(1.0f);
-    palbDemodulator->setVideoGamma(1.0f);
-
-    // AM-specific (SDRangel-style)
-    palbDemodulator->setInvertVideo(false);
-    palbDemodulator->setAMScaleFactor(1.0f);   // Adjust if too dark/bright
-    palbDemodulator->setAMLevelShift(0.0f);
-    palbDemodulator->setBlackLevel(0.3f);
 
     m_threadPool = new QThreadPool(this);
     if (m_threadPool) {
@@ -132,15 +74,6 @@ MainWindow::~MainWindow()
     if (m_hackTvLib) {
         m_hackTvLib->clearCallbacks();
         m_hackTvLib->stop();
-    }
-
-    if (palbDemodulator) {
-        palbDemodulator->setTVScreen(nullptr); // Clear reference first
-    }
-
-    if (m_tvAdapter) {
-        delete m_tvAdapter;
-        m_tvAdapter = nullptr;
     }
 }
 
@@ -170,8 +103,8 @@ void MainWindow::setupUi()
     addOutputGroup();
     addRxGroup();
     addModeGroup();
-    addVideoControls();
     addinputTypeGroup();
+    mainLayout->addWidget(logBrowser);
     setCentralWidget(centralWidget);
 
     frequencyEdit->setText(QString::number(m_frequency));
@@ -189,11 +122,8 @@ void MainWindow::setupUi()
     connect(sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onSampleRateChanged);
 
-    //rxtxCombo->setCurrentIndex(0);
     onRxTxTypeChanged(0);
     setCurrentSampleRate(DEFAULT_SAMPLE_RATE);
-    //setFixedWidth(1024);
-    //showMaximized();
 }
 
 void MainWindow::setCurrentSampleRate(int sampleRate)
@@ -268,9 +198,7 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
     constexpr double PAL_BAND_LOW = 45e6;
     constexpr double PAL_BAND_HIGH = 860e6;
 
-    // ========================================================================
-    // FM RADYO DEMODÜLASYONU
-    // ========================================================================
+    // FM Radio DEMODULATION
     if (m_frequency >= FM_BAND_LOW && m_frequency <= FM_BAND_HIGH)
     {
         if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
@@ -295,133 +223,11 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
         return;
     }
 
-    // PAL-B TV DEMODULATION
+    // Analog TV DEMODULATION
     if (m_frequency >= PAL_BAND_LOW && m_frequency <= PAL_BAND_HIGH)
     {
-        if (!palbDemodulator || !palFrameBuffer || !audioOutput || samples.size() > 10000000) {
-            return;
-        }
 
-        palFrameBuffer->addBuffer(samples);
-
-        // AUDIO PROCESSING - her 1/4 frame
-        qsizetype quarterFrameSize = palFrameBuffer->targetSize() / 4;
-        if (palFrameBuffer->size() >= quarterFrameSize) {
-            int expectedAudio = 0;
-            if (audioDemodulationInProgress.testAndSetAcquire(expectedAudio, 1)) {
-                auto audioSamples = palFrameBuffer->getSamples(quarterFrameSize);
-                if (!audioSamples.empty() && audioSamples.size() < 5000000) {
-                    auto audioPtr = std::make_shared<std::vector<std::complex<float>>>(
-                        std::move(audioSamples)
-                        );
-                    startPalAudioProcessing(audioPtr);
-                } else {
-                    audioDemodulationInProgress.storeRelease(0);
-                }
-            }
-        }
-
-        // VIDEO PROCESSING - tam frame (40ms = 1 PAL frame)
-        if (palFrameBuffer->isFrameReady()) {
-            int expectedVideo = 0;
-            if (palDemodulationInProgress.testAndSetAcquire(expectedVideo, 1)) {
-                auto fullFrame = palFrameBuffer->getFrame();
-                if (!fullFrame.empty() && fullFrame.size() < 10000000) {
-                    auto framePtr = std::make_shared<std::vector<std::complex<float>>>(
-                        std::move(fullFrame)
-                        );
-                    startPalVideoProcessing(framePtr);
-                } else {
-                    palDemodulationInProgress.storeRelease(0);
-                }
-            }
-        }
     }
-}
-
-// --- startPalAudioProcessing Uygulaması ---
-void MainWindow::startPalAudioProcessing(std::shared_ptr<std::vector<std::complex<float>>> audioPtr)
-{
-    QtConcurrent::run(QThreadPool::globalInstance(), [this, audioPtr]() {
-        AtomicGuard guard(audioDemodulationInProgress); // CRITICAL: Kilit ilk açılmalı
-
-        try {
-            if (audioPtr->size() > 5000000) {
-                qCritical() << "Audio frame too large:" << audioPtr->size();
-                return;
-            }
-
-            auto audio = palbDemodulator->demodulateAudioOnly(*audioPtr);
-
-            if (!audio.empty() && audio.size() < 1000000) {
-                const float gain = audioGain;
-                for (auto& sample : audio) {
-                    sample = std::clamp(sample * gain, -0.95f, 0.95f);
-                }
-                audioOutput->enqueueAudio(std::move(audio));
-            }
-        }
-        catch (const std::exception& e) {
-            qCritical() << "PAL audio demodulation error:" << e.what();
-        }
-        catch (...) {
-            qCritical() << "Unknown exception in PAL audio demodulation";
-        }
-    });
-}
-
-// mainwindow.cpp - startPalVideoProcessing metodunu debug ile güncelle
-
-void MainWindow::startPalVideoProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr)
-{
-    QtConcurrent::run(m_threadPool, [this, framePtr]() {
-        AtomicGuard guard(palDemodulationInProgress);
-
-        try {
-            if (framePtr->size() > 10000000) {
-                qCritical() << "Video frame too large:" << framePtr->size();
-                return;
-            }
-
-            // Demodulate video
-            auto image = palbDemodulator->demodulateVideoOnly(*framePtr);
-
-            if (!image.isNull()) {
-
-                // Use TVScreen interface (DATV-style - RECOMMENDED)
-                if (palbDemodulator->isTVScreenAvailable()) {
-
-                    // Render to TVScreen in main thread
-                    QMetaObject::invokeMethod(this, [this]() {
-                        if (this && palbDemodulator && m_tvAdapter) {
-                            palbDemodulator->renderToTVScreen();
-                        }
-                    }, Qt::QueuedConnection);
-                }
-                else {
-                    // Fallback: Direct QImage update
-                    QImage displayImage = image;
-                    if (image.width() > 1024 || image.height() > 768) {
-                        displayImage = image.scaled(1024, 768, Qt::KeepAspectRatio, Qt::FastTransformation);
-                    }
-
-                    QMetaObject::invokeMethod(this, [this, img = std::move(displayImage)]() {
-                        if (this) {
-                            updateDisplay(img);
-                        }
-                    }, Qt::QueuedConnection);
-                }
-            } else {
-                qWarning() << "✗ Demodulation returned null image";
-            }
-        }
-        catch (const std::exception& e) {
-            qCritical() << "PAL video demodulation error:" << e.what();
-        }
-        catch (...) {
-            qCritical() << "Unknown exception in PAL video demodulation";
-        }
-    });
 }
 
 void MainWindow::processFft(const std::vector<std::complex<float>>& samples)
@@ -461,127 +267,6 @@ void MainWindow::updatePlotter(float* fft_data, int size)
 
     // Clean up the memory we allocated
     delete[] fft_data;
-}
-
-void MainWindow::addVideoControls()
-{
-    videoGroup = new QGroupBox("Video Controls");
-    QGridLayout* videoLayout = new QGridLayout(videoGroup);
-    videoLayout->setSpacing(3);
-
-    // Labels in first row
-    brightLabel = new QLabel("Brightness:");
-    contrastLabel = new QLabel("Contrast:");
-    gammaLabel = new QLabel("Gamma:");
-    syncLabel = new QLabel("Sync:");
-
-    // Sliders in second row
-    brightSlider = new QSlider(Qt::Horizontal);
-    brightSlider->setRange(-50, 50);
-    brightSlider->setValue(20);
-
-    contrastSlider = new QSlider(Qt::Horizontal);
-    contrastSlider->setRange(50, 200);
-    contrastSlider->setValue(130);
-
-    gammaSlider = new QSlider(Qt::Horizontal);
-    gammaSlider->setRange(50, 150);
-    gammaSlider->setValue(80);
-
-    syncSlider = new QSlider(Qt::Horizontal);
-    syncSlider->setRange(0, 100);
-    syncSlider->setValue(15);
-
-    // Values in third row
-    brightValue = new QLabel("20");
-    brightValue->setAlignment(Qt::AlignCenter);
-
-    contrastValue = new QLabel("1.3");
-    contrastValue->setAlignment(Qt::AlignCenter);
-
-    gammaValue = new QLabel("0.8");
-    gammaValue->setAlignment(Qt::AlignCenter);
-
-    syncValue = new QLabel("0.15");
-    syncValue->setAlignment(Qt::AlignCenter);
-
-    // Invert checkbox in fourth row
-    invertCheckBox = new QCheckBox("Invert Video ");    
-
-    // Controls on the left (columns 0, 1, 2)
-    videoLayout->addWidget(brightLabel, 0, 0, Qt::AlignCenter);
-    videoLayout->addWidget(contrastLabel, 0, 1, Qt::AlignCenter);
-    videoLayout->addWidget(gammaLabel, 0, 2, Qt::AlignCenter);
-    videoLayout->addWidget(syncLabel, 0, 3, Qt::AlignCenter);
-
-    videoLayout->addWidget(brightSlider, 1, 0);
-    videoLayout->addWidget(contrastSlider, 1, 1);
-    videoLayout->addWidget(gammaSlider, 1, 2);
-    videoLayout->addWidget(syncSlider, 1, 3);
-    videoLayout->addWidget(invertCheckBox, 1, 4);
-
-    videoLayout->addWidget(brightValue, 2, 0, Qt::AlignCenter);
-    videoLayout->addWidget(contrastValue, 2, 1, Qt::AlignCenter);
-    videoLayout->addWidget(gammaValue, 2, 2, Qt::AlignCenter);
-    videoLayout->addWidget(syncValue, 2, 3, Qt::AlignCenter);
-
-    brightSlider->setFixedWidth(100);
-    contrastSlider->setFixedWidth(100);
-    gammaSlider->setFixedWidth(100);
-    syncSlider->setFixedWidth(100);
-
-    // gammaValue'nun altında: logBrowser (sol) ve invertCheckBox (sağ) yan yana (row 3, columns 0-3)
-    const int PAL_HEIGHT = 576;
-    const int PAL_WIDTH = 625;
-
-    videoLayout->addWidget(logBrowser, 3, 0, 1, 4);
-
-    // En sağda: tvDisplay tek başına (column 4)
-    tvDisplay->setMinimumHeight(3 * PAL_HEIGHT / 5);
-    tvDisplay->setMinimumWidth(3 * PAL_WIDTH / 5);
-    videoLayout->addWidget(tvDisplay, 0, 5, 5, 1);  // row=0, col=4, rowSpan=4, colSpan=1
-
-    // Connect signals
-    connect(brightSlider, &QSlider::valueChanged, [this](int value) {
-        m_videoBrightness = value / 100.0f;
-        brightValue->setText(QString::number(value));
-        if (palbDemodulator) {
-            palbDemodulator->setVideoBrightness(m_videoBrightness);
-        }
-    });
-
-    connect(contrastSlider, &QSlider::valueChanged, [this](int value) {
-        m_videoContrast = value / 100.0f;
-        contrastValue->setText(QString::number(m_videoContrast, 'f', 1));
-        if (palbDemodulator) {
-            palbDemodulator->setVideoContrast(m_videoContrast);
-        }
-    });
-
-    connect(gammaSlider, &QSlider::valueChanged, [this](int value) {
-        m_videoGamma = value / 100.0f;
-        gammaValue->setText(QString::number(m_videoGamma, 'f', 2));
-        if (palbDemodulator) {
-            palbDemodulator->setVideoGamma(m_videoGamma);
-        }
-    });
-
-    connect(syncSlider, &QSlider::valueChanged, [this](int value) {
-        m_videoSync = value / 100.0f;
-        syncValue->setText(QString::number(m_videoSync, 'f', 2));
-        if (palbDemodulator) {
-            palbDemodulator->setVSyncThreshold(m_videoSync);
-        }
-    });
-
-    connect(invertCheckBox, &QCheckBox::toggled, [this](bool checked) {
-        if (palbDemodulator) {
-            palbDemodulator->setInvertVideo(checked);
-        }
-    });
-
-    mainLayout->addWidget(videoGroup);
-    invertCheckBox->setChecked(false);
 }
 
 void MainWindow::addOutputGroup()
@@ -1190,21 +875,9 @@ void MainWindow::handleSamples(const std::vector<std::complex<float>>& samples)
     demodFuture.waitForFinished();
 }
 
-void MainWindow::updateDisplay(const QImage& image)
-{
-    // Direct QImage update (fallback when not using TVScreen)
-    if (!image.isNull() && tvDisplay) {
-        QImage safeCopy = image.copy();
-        tvDisplay->updateDisplay(safeCopy);
-    }
-}
-
 void MainWindow::clear()
 {
     logBrowser->clear();
-    brightSlider->setValue(20);
-    contrastSlider->setValue(130);
-    gammaSlider->setValue(80);
 }
 
 void MainWindow::onFreqCtrl_setFrequency(qint64 freq)
@@ -1239,10 +912,6 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
 
 void MainWindow::executeCommand()
 {
-    if (palFrameBuffer) {
-        palFrameBuffer->clear();
-    }
-
     if (executeButton->text() == "Start")
     {
         if (!m_hackTvLib) {
@@ -1251,8 +920,7 @@ void MainWindow::executeCommand()
             return;
         }
 
-        palDemodulationInProgress.storeRelease(0);
-        QStringList args = buildCommand();
+        QStringList args = createArgs();
 
         if(mode == "rx")
         {
@@ -1308,8 +976,7 @@ void MainWindow::executeCommand()
         m_isProcessing.store(true);
     }
     else if (executeButton->text() == "Stop")
-    {
-        palDemodulationInProgress.storeRelease(0);
+    {        
         m_isProcessing.store(false);
 
         if (m_hackTvLib) {
@@ -1323,7 +990,7 @@ void MainWindow::executeCommand()
     }
 }
 
-QStringList MainWindow::buildCommand()
+QStringList MainWindow::createArgs()
 {
     QStringList args;
 
@@ -1485,19 +1152,7 @@ void MainWindow::onRxTxTypeChanged(int index)
     txInterpolationSpinBox->setVisible(isTx);
     txAmpSlider->setVisible(isTx);
     txAmpSpinBox->setVisible(isTx);
-    tx_line->setVisible(isTx);
-
-    brightLabel->setVisible(!isTx);
-    contrastLabel->setVisible(!isTx);
-    gammaLabel->setVisible(!isTx);
-    brightSlider->setVisible(!isTx);
-    contrastSlider->setVisible(!isTx);
-    gammaSlider->setVisible(!isTx);
-    brightValue->setVisible(!isTx);
-    contrastValue->setVisible(!isTx);
-    gammaValue->setVisible(!isTx);
-    invertCheckBox->setVisible(!isTx);
-    tvDisplay->setVisible(!isTx);
+    tx_line->setVisible(isTx);   
 
     // Also hide/show labels
     for (int i = 0; i < txControlsLayout->rowCount(); ++i) {
@@ -1523,15 +1178,6 @@ void MainWindow::onSampleRateChanged(int index)
         cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
         m_hackTvLib->setSampleRate(m_sampleRate);
         saveSettings();
-
-        if (palbDemodulator) {
-            palbDemodulator->setSampleRate(m_sampleRate);
-        }
-
-        // YENİ: FrameBuffer'ı güncelle
-        if (palFrameBuffer) {
-            palFrameBuffer->setSampleRate(m_sampleRate);
-        }
     }
 }
 
@@ -1642,13 +1288,6 @@ void MainWindow::onChannelChanged(int index)
     }
     saveSettings();
 }
-
-void MainWindow::closeEvent(QCloseEvent *event)
-{
-    event->ignore(); // Prevent default close
-    exitApp();
-}
-
 void MainWindow::exitApp()
 {
     m_shuttingDown.store(true);
@@ -1656,39 +1295,31 @@ void MainWindow::exitApp()
     if (m_hackTvLib) {
         m_hackTvLib->clearCallbacks();
         m_hackTvLib->stop();
-        // Qt otomatik siler (parent-child)
     }
 
- try {
-
+    try {
 #ifdef Q_OS_WIN
-    DWORD currentPID = GetCurrentProcessId();
-    HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, currentPID);
-    if (hProcess != NULL)
-    {
-        TerminateProcess(hProcess, 0);
-        CloseHandle(hProcess);
+        DWORD currentPID = GetCurrentProcessId();
+        HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, currentPID);
+        if (hProcess != NULL)
+        {
+            TerminateProcess(hProcess, 0);
+            CloseHandle(hProcess);
+        }
+#else
+        QApplication::quit();
+#endif
     }
-#else
-    // FIXED: Use Qt's proper shutdown instead of exit(0)
-    QApplication::quit();
-#endif
-
-} catch (const std::exception& e) {
-    qDebug() << "Exception in exitApp:" << e.what();
+    catch (const std::exception& e) {
+        qDebug() << "Exception during shutdown:" << e.what();
 #ifdef Q_OS_WIN
-    // Force exit on Windows if there's an exception
-    std::exit(1);
+        std::exit(1);   // Force exit on Windows
 #else
-    // Use Qt quit on Linux even if there's an exception
-    QApplication::quit();
+        QApplication::quit();  // Graceful quit on Linux/macOS
 #endif
-
-} catch (const std::exception& e) {
-    qDebug() << "Exception during shutdown:" << e.what();
-    std::exit(0);
-} catch (...) {
-    qDebug() << "Unknown exception during shutdown";
-    std::exit(0);
-}
+    }
+    catch (...) {
+        qDebug() << "Unknown exception during shutdown";
+        std::exit(0);
+    }
 }

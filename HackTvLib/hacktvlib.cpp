@@ -1447,7 +1447,7 @@ bool HackTvLib::start()
         {
             if(hackRfDevice->start(rf_mode::RX) != RF_OK)
             {
-                log("Could not open HackRF ib RX. Please check the device.");
+                log("Could not open HackRF at RX mode. Please check the device.");
                 return false;
             }
             log("HackTvLib started at RX mode with HackRf.");
