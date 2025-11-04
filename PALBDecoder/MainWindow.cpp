@@ -114,6 +114,9 @@ void MainWindow::setupUI()
     placeholder.fill(Qt::black);
     m_videoLabel->setPixmap(QPixmap::fromImage(placeholder));
 
+    videoGroup->setMaximumWidth(576);
+    m_videoLabel->setMaximumWidth(576);
+
     videoLayout->addWidget(m_videoLabel);
     mainLayout->addWidget(videoGroup);
 
@@ -332,19 +335,7 @@ void MainWindow::setupControls()
     invertLayout->addWidget(m_invertVideoCheckBox);
     invertLayout->addStretch();
     videoControlLayout->addLayout(invertLayout);
-
     mainLayout->addWidget(videoControlGroup);
-
-    // Info label
-    QLabel* infoLabel = new QLabel(
-        "<b>PAL-B/G Decoder with HackRF</b><br>"
-        "• Sample Rate: 16 MHz | Line Freq: 15625 Hz<br>"
-        "• Image: 384×576 pixels (Grayscale)<br>"
-        "• 625 lines, 25 fps, AM demodulation<br><br>"
-        "<i>Adjust HackRF gains for signal strength, Video controls for picture quality.</i>",
-        this);
-    infoLabel->setWordWrap(true);
-    mainLayout->addWidget(infoLabel);
 }
 
 void MainWindow::onFrequencySliderChanged(int value)
@@ -431,46 +422,7 @@ void MainWindow::updateChannelLabel(uint64_t frequency)
 void MainWindow::applyFrequencyChange()
 {
     if (!m_hackTvLib) return;
-
-    qDebug() << "Changing frequency to:" << m_currentFrequency << "Hz";
-
-    // HackRF'yi durdur, frekansı değiştir, tekrar başlat
-    bool wasRunning = m_hackRfRunning;
-
-    if (wasRunning) {
-        m_hackTvLib->stop();
-
-        // Kısa bir bekleme (HackRF'nin temiz durması için)
-        QThread::msleep(50);
-    }
-
-    // Yeni argümanlarla yeniden yapılandır
-    QStringList args;
-    args << "--rx-tx-mode" << "rx";
-    args << "-a";  // Enable amp
-    args << "--filter";
-    args << "-f" << QString::number(m_currentFrequency);
-    args << "-s" << QString::number(SAMP_RATE);
-
-    std::vector<std::string> stdArgs;
-    stdArgs.reserve(args.size());
-    for (const QString& arg : args) {
-        stdArgs.push_back(arg.toStdString());
-    }
-
-    m_hackTvLib->setArguments(stdArgs);
-
-    if (wasRunning) {
-        // Tekrar başlat
-        if (m_hackTvLib->start()) {
-            qDebug() << "HackRF restarted with new frequency:" << m_currentFrequency;
-        } else {
-            qWarning() << "Failed to restart HackRF with new frequency";
-            m_hackRfRunning = false;
-            m_startStopButton->setText("Start HackRF");
-            m_startStopButton->setStyleSheet("QPushButton { background-color: #55ff55; color: black; padding: 10px; font-weight: bold; }");
-        }
-    }
+    m_hackTvLib->setFrequency(m_currentFrequency);
 }
 
 void MainWindow::onVideoGainChanged(int value)
