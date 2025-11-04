@@ -26,8 +26,10 @@ SOURCES += \
     PALDecoder.cpp
 
 HEADERS += \
+    CircularBuffer.h \
     MainWindow.h \
-    PALDecoder.h
+    PALDecoder.h \
+    PALProcessorThread.h
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

@@ -2,6 +2,7 @@
 #include <QDebug>
 #include <algorithm>
 #include <cstring>
+#include <numeric>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -9,44 +10,48 @@
 
 PALDecoder::PALDecoder(QObject *parent)
     : QObject(parent)
+    , m_expectedSyncPosition(SAMPLES_PER_LINE)
+    , m_samplesSinceSync(0)
+    , m_syncConfidence(0.5f)
     , m_dcBlockerX1(0.0f)
     , m_dcBlockerY1(0.0f)
     , m_resampleCounter(0)
     , m_currentLine(0)
-    , m_videoGain(2.0f)
+    , m_samplesInCurrentLine(0)
+    , m_agcGain(1.0f)
+    , m_peakLevel(0.1f)
+    , m_minLevel(-0.1f)
+    , m_meanLevel(0.0f)
+    , m_videoGain(1.5f)
     , m_videoOffset(0.0f)
+    , m_totalSamples(0)
+    , m_frameCount(0)
+    , m_linesProcessed(0)
+    , m_syncDetected(0)
 {
-    m_resampleDecim = SAMP_RATE / VIDEO_SAMP_RATE; // 16M / 6M = 2.666... ≈ 3
-    
-    // Initialize frame buffer
+    m_resampleDecim = 3;
+
     m_frameBuffer.resize(VIDEO_WIDTH * VIDEO_HEIGHT, 128);
-    
-    // Initialize filters
+    m_lineBuffer.reserve(SAMPLES_PER_LINE + 100);
+
     initFilters();
-    
-    qDebug() << "PAL Decoder initialized:";
-    qDebug() << "  Sample rate:" << SAMP_RATE << "Hz";
-    qDebug() << "  Video sample rate:" << VIDEO_SAMP_RATE << "Hz";
-    qDebug() << "  Samples per line:" << SAMPLES_PER_LINE;
-    qDebug() << "  Lines per frame:" << LINES_PER_FRAME;
-    qDebug() << "  Visible lines:" << VISIBLE_LINES;
-    qDebug() << "  Frame size:" << VIDEO_WIDTH << "x" << VIDEO_HEIGHT;
+
+    qDebug() << "PAL-B/G Decoder (PLL-BASED SYNC):";
+    qDebug() << "  625 lines, 25 fps, AM demodulation";
+    qDebug() << "  PLL sync tracking enabled";
 }
 
 PALDecoder::~PALDecoder()
 {
+    float syncRate = m_linesProcessed > 0 ?
+                         (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
+    qDebug() << "PALDecoder: Frames:" << m_frameCount << "Sync rate:" << syncRate << "%";
 }
 
 void PALDecoder::initFilters()
 {
-    // Design video low-pass filter (5 MHz cutoff at 16 MHz sample rate)
-    m_videoFilterTaps = designLowPassFIR(5.0e6f, SAMP_RATE, 65);
-    
-    // Design luminance filter (3 MHz cutoff at 6 MHz sample rate)
-    m_lumaFilterTaps = designLowPassFIR(3.0e6f, VIDEO_SAMP_RATE, 65);
-    
-    qDebug() << "Video filter taps:" << m_videoFilterTaps.size();
-    qDebug() << "Luma filter taps:" << m_lumaFilterTaps.size();
+    m_videoFilterTaps = designLowPassFIR(5.0e6f, SAMP_RATE, 33);
+    m_lumaFilterTaps = designLowPassFIR(3.0e6f, VIDEO_SAMP_RATE, 33);
 }
 
 std::vector<float> PALDecoder::designLowPassFIR(float cutoff, float sampleRate, int numTaps)
@@ -54,89 +59,294 @@ std::vector<float> PALDecoder::designLowPassFIR(float cutoff, float sampleRate, 
     std::vector<float> taps(numTaps);
     float fc = cutoff / sampleRate;
     int M = numTaps - 1;
-    
-    // Hamming window FIR filter design
+
     for (int n = 0; n < numTaps; n++) {
         float mm = n - M / 2.0f;
-        
-        // Ideal low-pass filter (sinc function)
-        float h;
-        if (mm == 0.0f) {
-            h = 2.0f * fc;
-        } else {
-            h = std::sin(2.0f * M_PI * fc * mm) / (M_PI * mm);
-        }
-        
-        // Hamming window
+        float h = (mm == 0.0f) ? 2.0f * fc : std::sin(2.0f * M_PI * fc * mm) / (M_PI * mm);
         float w = 0.54f - 0.46f * std::cos(2.0f * M_PI * n / M);
-        
         taps[n] = h * w;
     }
-    
-    // Normalize
+
     float sum = 0.0f;
-    for (float tap : taps) {
-        sum += tap;
-    }
+    for (float tap : taps) sum += tap;
     if (sum != 0.0f) {
-        for (float& tap : taps) {
-            tap /= sum;
-        }
+        for (float& tap : taps) tap /= sum;
     }
-    
+
     return taps;
 }
 
 std::complex<float> PALDecoder::applyVideoFilter(const std::complex<float>& sample)
 {
-    // Add new sample to delay line
     m_videoFilterDelay.push_front(sample);
-    
-    // Keep only necessary samples
     if (m_videoFilterDelay.size() > m_videoFilterTaps.size()) {
         m_videoFilterDelay.pop_back();
     }
-    
-    // Compute filtered output
+
     std::complex<float> output(0.0f, 0.0f);
-    size_t delaySize = std::min(m_videoFilterDelay.size(), m_videoFilterTaps.size());
-    
-    for (size_t i = 0; i < delaySize; i++) {
+    size_t n = std::min(m_videoFilterDelay.size(), m_videoFilterTaps.size());
+    for (size_t i = 0; i < n; i++) {
         output += m_videoFilterDelay[i] * m_videoFilterTaps[i];
     }
-    
     return output;
 }
 
 float PALDecoder::applyLumaFilter(float sample)
 {
-    // Add new sample to delay line
     m_lumaFilterDelay.push_front(sample);
-    
-    // Keep only necessary samples
     if (m_lumaFilterDelay.size() > m_lumaFilterTaps.size()) {
         m_lumaFilterDelay.pop_back();
     }
-    
-    // Compute filtered output
+
     float output = 0.0f;
-    size_t delaySize = std::min(m_lumaFilterDelay.size(), m_lumaFilterTaps.size());
-    
-    for (size_t i = 0; i < delaySize; i++) {
+    size_t n = std::min(m_lumaFilterDelay.size(), m_lumaFilterTaps.size());
+    for (size_t i = 0; i < n; i++) {
         output += m_lumaFilterDelay[i] * m_lumaFilterTaps[i];
     }
-    
     return output;
 }
 
 float PALDecoder::dcBlock(float sample)
 {
-    // DC blocker: y[n] = x[n] - x[n-1] + 0.999 * y[n-1]
-    constexpr float alpha = 0.999f;
+    constexpr float alpha = 0.98f;
     float output = sample - m_dcBlockerX1 + alpha * m_dcBlockerY1;
     m_dcBlockerX1 = sample;
     m_dcBlockerY1 = output;
     return output;
+}
+
+float PALDecoder::normalizeAndAGC(float sample)
+{
+    // Fast AGC with proper normalization
+    float absSample = std::abs(sample);
+
+    // Track levels
+    if (absSample > m_peakLevel) {
+        m_peakLevel = m_peakLevel * 0.95f + absSample * 0.05f;
+    } else {
+        m_peakLevel *= 0.9995f;
+    }
+
+    if (sample < m_minLevel) {
+        m_minLevel = m_minLevel * 0.95f + sample * 0.05f;
+    } else {
+        m_minLevel *= 0.9995f;
+    }
+
+    m_meanLevel = m_meanLevel * 0.999f + sample * 0.001f;
+
+    // Ensure valid range
+    if (m_peakLevel < 0.01f) m_peakLevel = 0.01f;
+    if (m_minLevel > -0.01f) m_minLevel = -0.01f;
+
+    // Normalize to -1..+1 range
+    float range = m_peakLevel - m_minLevel;
+    if (range < 0.1f) range = 0.1f;
+
+    float normalized = 2.0f * (sample - m_minLevel) / range - 1.0f;
+
+    return clipValue(normalized, -1.0f, 1.0f);
+}
+
+bool PALDecoder::detectSyncPulse()
+{
+    if (m_sampleHistory.size() < HSYNC_WIDTH) {
+        return false;
+    }
+
+    // More aggressive sync detection
+    // Look for pattern: sustained low, then rising
+    constexpr float SYNC_THRESHOLD = -0.3f; // Less strict
+
+    // Count low samples in sync pulse area
+    int lowCount = 0;
+    for (int i = 0; i < HSYNC_WIDTH && i < static_cast<int>(m_sampleHistory.size()); i++) {
+        if (m_sampleHistory[i] < SYNC_THRESHOLD) {
+            lowCount++;
+        }
+    }
+
+    // Also check that next samples are NOT low (end of sync pulse)
+    bool afterPulse = true;
+    for (int i = HSYNC_WIDTH; i < HSYNC_WIDTH + 10 && i < static_cast<int>(m_sampleHistory.size()); i++) {
+        if (m_sampleHistory[i] < SYNC_THRESHOLD) {
+            afterPulse = false;
+            break;
+        }
+    }
+
+    // At least 50% low samples + clear end
+    return (lowCount >= HSYNC_WIDTH / 2) && afterPulse;
+}
+
+void PALDecoder::processSamples(const int8_t* data, size_t len)
+{
+    if (!data || len == 0) return;
+
+    std::vector<std::complex<float>> samples;
+    samples.reserve(len / 2);
+
+    for (size_t i = 0; i < len; i += 2) {
+        float I = static_cast<float>(data[i]) / 128.0f;
+        float Q = static_cast<float>(data[i + 1]) / 128.0f;
+        samples.emplace_back(I, Q);
+    }
+
+    processSamples(samples);
+}
+
+void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
+{
+    for (const auto& sample : samples) {
+        m_totalSamples++;
+
+        // Stats
+        if (m_totalSamples % 10000000 == 0) {
+            float syncRate = m_linesProcessed > 0 ?
+                                 (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
+            qDebug() << (m_totalSamples / 1000000) << "M samples |"
+                     << m_frameCount << "frames |"
+                     << "Sync:" << QString::number(syncRate, 'f', 1) << "% |"
+                     << "Peak:" << QString::number(m_peakLevel, 'f', 2)
+                     << "Min:" << QString::number(m_minLevel, 'f', 2);
+        }
+
+        // Processing chain
+        std::complex<float> filtered = applyVideoFilter(sample);
+        float magnitude = std::sqrt(filtered.real() * filtered.real() +
+                                    filtered.imag() * filtered.imag());
+        float dcBlocked = dcBlock(magnitude);
+        float normalized = normalizeAndAGC(dcBlocked);
+
+        // Decimation
+        m_resampleCounter++;
+        if (m_resampleCounter >= m_resampleDecim) {
+            m_resampleCounter = 0;
+            float luma = applyLumaFilter(normalized);
+
+            // Add to history for sync detection
+            m_sampleHistory.push_front(luma);
+            if (m_sampleHistory.size() > HISTORY_SIZE) {
+                m_sampleHistory.pop_back();
+            }
+
+            processVideoSample(luma);
+        }
+    }
+}
+
+void PALDecoder::processVideoSample(float sample)
+{
+    m_samplesInCurrentLine++;
+    m_samplesSinceSync++;
+
+    // PLL: Check if we're near expected sync position
+    bool inSyncWindow = (m_samplesSinceSync >= m_expectedSyncPosition - SYNC_SEARCH_WINDOW) &&
+                        (m_samplesSinceSync <= m_expectedSyncPosition + SYNC_SEARCH_WINDOW);
+
+    if (inSyncWindow && detectSyncPulse()) {
+        // Sync found! Adjust PLL
+        int error = m_samplesSinceSync - m_expectedSyncPosition;
+        m_expectedSyncPosition += error / 4; // Slow correction
+
+        // Clamp expected position
+        m_expectedSyncPosition = std::max(SAMPLES_PER_LINE - 50,
+                                          std::min(SAMPLES_PER_LINE + 50, m_expectedSyncPosition));
+
+        m_syncConfidence = std::min(1.0f, m_syncConfidence + 0.1f);
+        m_syncDetected++;
+
+        // End current line, start new one
+        finalizeLine();
+        m_samplesSinceSync = 0;
+        m_samplesInCurrentLine = 0;
+        return;
+    }
+
+    // Timeout: force new line even without sync
+    if (m_samplesSinceSync >= m_expectedSyncPosition + SYNC_SEARCH_WINDOW + 50) {
+        m_syncConfidence = std::max(0.0f, m_syncConfidence - 0.05f);
+        finalizeLine();
+        m_samplesSinceSync = 0;
+        m_samplesInCurrentLine = 0;
+        return;
+    }
+
+    // Collect video data (skip first ~40 samples after sync for back porch)
+    if (m_samplesInCurrentLine > 40 && m_lineBuffer.size() < SAMPLES_PER_LINE) {
+        m_lineBuffer.push_back(sample);
+    }
+}
+
+void PALDecoder::finalizeLine()
+{
+    m_linesProcessed++;
+    m_currentLine++;
+
+    // Store visible lines
+    if (m_currentLine >= FIRST_VISIBLE_LINE &&
+        m_currentLine < FIRST_VISIBLE_LINE + VISIBLE_LINES) {
+
+        int lineIndex = m_currentLine - FIRST_VISIBLE_LINE;
+        int samplesToUse = std::min(static_cast<int>(m_lineBuffer.size()), VIDEO_WIDTH);
+
+        for (int x = 0; x < samplesToUse; x++) {
+            // Already normalized to -1..+1, map to 0..1
+            float value = (m_lineBuffer[x] + 1.0f) * 0.5f;
+            value = value * m_videoGain + m_videoOffset;
+            value = clipValue(value, 0.0f, 1.0f);
+
+            uint8_t pixel = static_cast<uint8_t>(value * 255.0f);
+            m_frameBuffer[lineIndex * VIDEO_WIDTH + x] = pixel;
+        }
+
+        // Fill rest with black
+        for (int x = samplesToUse; x < VIDEO_WIDTH; x++) {
+            m_frameBuffer[lineIndex * VIDEO_WIDTH + x] = 0;
+        }
+    }
+
+    m_lineBuffer.clear();
+
+    // End of frame
+    if (m_currentLine >= LINES_PER_FRAME) {
+        buildFrame();
+        m_currentLine = 0;
+    }
+}
+
+void PALDecoder::buildFrame()
+{
+    m_frameCount++;
+
+    if (m_frameCount % 50 == 0) {
+        float syncRate = m_linesProcessed > 0 ?
+                             (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
+        qDebug() << "Frame" << m_frameCount
+                 << "| Sync:" << QString::number(syncRate, 'f', 1) << "%"
+                 << "| Confidence:" << QString::number(m_syncConfidence, 'f', 2);
+    }
+
+    QImage frame(VIDEO_WIDTH, VIDEO_HEIGHT, QImage::Format_Grayscale8);
+
+    for (int y = 0; y < VIDEO_HEIGHT; y++) {
+        uint8_t* scanLine = frame.scanLine(y);
+        std::memcpy(scanLine, &m_frameBuffer[y * VIDEO_WIDTH], VIDEO_WIDTH);
+    }
+
+    emit frameReady(frame);
+}
+
+QImage PALDecoder::getCurrentFrame() const
+{
+    QImage frame(VIDEO_WIDTH, VIDEO_HEIGHT, QImage::Format_Grayscale8);
+
+    for (int y = 0; y < VIDEO_HEIGHT; y++) {
+        uint8_t* scanLine = frame.scanLine(y);
+        std::memcpy(scanLine, &m_frameBuffer[y * VIDEO_WIDTH], VIDEO_WIDTH);
+    }
+
+    return frame;
 }
 
 float PALDecoder::clipValue(float value, float min, float max)
@@ -144,115 +354,4 @@ float PALDecoder::clipValue(float value, float min, float max)
     if (value < min) return min;
     if (value > max) return max;
     return value;
-}
-
-void PALDecoder::processSamples(const int8_t* data, size_t len)
-{
-    if (!data || len == 0) return;
-    
-    // Convert int8_t IQ pairs to complex<float>
-    // HackRF uses interleaved I,Q format with int8 values
-    std::vector<std::complex<float>> samples;
-    samples.reserve(len / 2);
-    
-    for (size_t i = 0; i < len; i += 2) {
-        float I = static_cast<float>(data[i]) / 128.0f;
-        float Q = static_cast<float>(data[i + 1]) / 128.0f;
-        samples.emplace_back(I, Q);
-    }
-    
-    processSamples(samples);
-}
-
-void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
-{
-    for (const auto& sample : samples) {
-        // Step 1: Low-pass filter (5 MHz video bandwidth)
-        std::complex<float> filtered = applyVideoFilter(sample);
-        
-        // Step 2: AM Demodulation (envelope detection - complex to magnitude)
-        float magnitude = std::sqrt(filtered.real() * filtered.real() + 
-                                   filtered.imag() * filtered.imag());
-        
-        // Step 3: DC blocking
-        float dcBlocked = dcBlock(magnitude);
-        
-        // Step 4: Resampling from 16 MHz to 6 MHz (decimate by ~2.67)
-        // Simple decimation: keep every Nth sample
-        m_resampleCounter++;
-        if (m_resampleCounter >= m_resampleDecim) {
-            m_resampleCounter = 0;
-            
-            // Step 5: Luminance filter (3 MHz, removes 4.43 MHz color subcarrier)
-            float luma = applyLumaFilter(dcBlocked);
-            
-            // Step 6: Apply gain and offset
-            float adjusted = luma * m_videoGain + m_videoOffset;
-            
-            // Step 7: Clip to 0-1 range
-            float clipped = clipValue(adjusted, 0.0f, 1.0f);
-            
-            // Step 8: Process video sample (build frame)
-            processVideoSample(clipped);
-        }
-    }
-}
-
-void PALDecoder::processVideoSample(float sample)
-{
-    m_videoBuffer.push_back(sample);
-    
-    // Check if we have a complete line
-    if (m_videoBuffer.size() >= SAMPLES_PER_LINE) {
-        m_currentLine++;
-        
-        // Check if this is a visible line (skip vertical blanking interval)
-        if (m_currentLine >= FIRST_VISIBLE_LINE && 
-            m_currentLine < FIRST_VISIBLE_LINE + VISIBLE_LINES) {
-            
-            int lineIndex = m_currentLine - FIRST_VISIBLE_LINE;
-            
-            // Copy line to frame buffer
-            for (int x = 0; x < SAMPLES_PER_LINE && x < VIDEO_WIDTH; x++) {
-                if (x < static_cast<int>(m_videoBuffer.size())) {
-                    uint8_t pixelValue = static_cast<uint8_t>(m_videoBuffer[x] * 255.0f);
-                    m_frameBuffer[lineIndex * VIDEO_WIDTH + x] = pixelValue;
-                }
-            }
-        }
-        
-        // Clear buffer for next line
-        m_videoBuffer.clear();
-        
-        // Check if we have a complete frame
-        if (m_currentLine >= LINES_PER_FRAME) {
-            buildFrame();
-            m_currentLine = 0;
-        }
-    }
-}
-
-void PALDecoder::buildFrame()
-{
-    // Create QImage from frame buffer
-    QImage frame(VIDEO_WIDTH, VIDEO_HEIGHT, QImage::Format_Grayscale8);
-    
-    for (int y = 0; y < VIDEO_HEIGHT; y++) {
-        uint8_t* scanLine = frame.scanLine(y);
-        std::memcpy(scanLine, &m_frameBuffer[y * VIDEO_WIDTH], VIDEO_WIDTH);
-    }
-    
-    emit frameReady(frame);
-}
-
-QImage PALDecoder::getCurrentFrame() const
-{
-    QImage frame(VIDEO_WIDTH, VIDEO_HEIGHT, QImage::Format_Grayscale8);
-    
-    for (int y = 0; y < VIDEO_HEIGHT; y++) {
-        uint8_t* scanLine = frame.scanLine(y);
-        std::memcpy(scanLine, &m_frameBuffer[y * VIDEO_WIDTH], VIDEO_WIDTH);
-    }
-    
-    return frame;
 }

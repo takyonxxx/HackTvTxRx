@@ -11,11 +11,14 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
+#include <QMessageBox>
 #include <QMutex>
 #include <QElapsedTimer>
 #include <atomic>
 #include <memory>
 #include "PALDecoder.h"
+#include "CircularBuffer.h"
+#include "PALProcessorThread.h"
 
 // Forward declaration for your HackTvLib
 class HackTvLib;
@@ -41,11 +44,16 @@ private slots:
     void onRxAmpGainChanged(int value);
     void updateStatus();
     void toggleHackRF();
+    void onBufferStats(size_t available, uint64_t dropped);
+    void onFrequencySliderChanged(int value);
+    void onFrequencySpinBoxChanged(double value);
+    void updateChannelLabel(uint64_t frequency);
 
 private:
     void setupUI();
     void setupControls();
     void initHackRF();
+    void applyFrequencyChange();
     
     // UI Components
     QLabel* m_videoLabel;
@@ -84,6 +92,23 @@ private:
     // Current frame
     QImage m_currentFrame;
     QMutex m_frameMutex;
+
+    std::unique_ptr<CircularBuffer> m_circularBuffer;
+    std::unique_ptr<PALProcessorThread> m_processorThread;
+    uint64_t m_lastDroppedFrames = 0;
+
+    // Frequency control
+    QSlider* m_frequencySlider;
+    QDoubleSpinBox* m_frequencySpinBox;
+    QLabel* m_channelLabel;
+
+    // Current frequency
+    uint64_t m_currentFrequency;
+
+    // Constants
+    static constexpr uint64_t UHF_MIN_FREQ = 470000000ULL;  // 470 MHz (Kanal 21)
+    static constexpr uint64_t UHF_MAX_FREQ = 862000000ULL;  // 862 MHz (Kanal 69)
+    static constexpr uint64_t DEFAULT_FREQ = 478000000ULL;  // 478 MHz (Kanal 22)
     
     // Settings
     static constexpr uint64_t FREQ = 478000000;  // 478 MHz (from your code)

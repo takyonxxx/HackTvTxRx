@@ -17,16 +17,11 @@ public:
     explicit PALDecoder(QObject *parent = nullptr);
     ~PALDecoder();
 
-    // Process incoming HackRF samples (int8_t IQ pairs)
     void processSamples(const int8_t* data, size_t len);
-    
-    // Process complex float samples
     void processSamples(const std::vector<std::complex<float>>& samples);
 
-    // Get current frame as QImage
     QImage getCurrentFrame() const;
-    
-    // Configuration
+
     void setVideoGain(float gain) { m_videoGain = gain; }
     void setVideoOffset(float offset) { m_videoOffset = offset; }
     float getVideoGain() const { return m_videoGain; }
@@ -37,48 +32,73 @@ signals:
 
 private:
     // PAL-B/G Constants
-    static constexpr int SAMP_RATE = 16000000;        // 16 MHz
-    static constexpr int VIDEO_SAMP_RATE = 6000000;   // 6 MHz
-    static constexpr int LINE_FREQ = 15625;           // Hz
+    static constexpr int SAMP_RATE = 16000000;
+    static constexpr int VIDEO_SAMP_RATE = 6000000;
+    static constexpr int LINE_FREQ = 15625;
     static constexpr int LINES_PER_FRAME = 625;
-    static constexpr int VISIBLE_LINES = 576;         // Active video lines
-    static constexpr int FIRST_VISIBLE_LINE = 49;     // Skip VBI
-    static constexpr int SAMPLES_PER_LINE = VIDEO_SAMP_RATE / LINE_FREQ; // 384
-    static constexpr int VIDEO_WIDTH = SAMPLES_PER_LINE;
-    static constexpr int VIDEO_HEIGHT = VISIBLE_LINES;
+    static constexpr int VISIBLE_LINES = 576;
+    static constexpr int FIRST_VISIBLE_LINE = 23;
+    static constexpr int SAMPLES_PER_LINE = 384;
+    static constexpr int VIDEO_WIDTH = 384;
+    static constexpr int VIDEO_HEIGHT = 576;
 
-    // FIR filter taps for low-pass filtering (5 MHz cutoff at 16 MHz)
+    // PLL-based sync
+    int m_expectedSyncPosition;
+    int m_samplesSinceSync;
+    float m_syncConfidence;
+    static constexpr int SYNC_SEARCH_WINDOW = 50;  // Search ±50 samples
+    static constexpr int HSYNC_WIDTH = 30;
+
+    // FIR filters
     std::vector<float> m_videoFilterTaps;
     std::deque<std::complex<float>> m_videoFilterDelay;
-    
-    // FIR filter taps for luminance (3 MHz cutoff at 6 MHz)
     std::vector<float> m_lumaFilterTaps;
     std::deque<float> m_lumaFilterDelay;
-    
-    // DC blocker state
+
+    // DC blocker
     float m_dcBlockerX1;
     float m_dcBlockerY1;
-    
-    // Resampler state
+
+    // Resampler
     int m_resampleCounter;
     int m_resampleDecim;
-    
-    // Video buffer
-    std::vector<float> m_videoBuffer;  // Demodulated video at 6 MHz
-    std::vector<uint8_t> m_frameBuffer; // Current frame buffer
+
+    // Buffers
+    std::vector<float> m_lineBuffer;
+    std::vector<uint8_t> m_frameBuffer;
     int m_currentLine;
-    
+    int m_samplesInCurrentLine;
+
+    // AGC with normalization
+    float m_agcGain;
+    float m_peakLevel;
+    float m_minLevel;
+    float m_meanLevel;
+
+    // Rolling buffer for sync detection
+    std::deque<float> m_sampleHistory;
+    static constexpr int HISTORY_SIZE = 100;
+
     // Settings
     float m_videoGain;
     float m_videoOffset;
-    
+
+    // Stats
+    uint64_t m_totalSamples;
+    uint64_t m_frameCount;
+    uint64_t m_linesProcessed;
+    uint64_t m_syncDetected;
+
     // Helper functions
     void initFilters();
     std::vector<float> designLowPassFIR(float cutoff, float sampleRate, int numTaps);
     std::complex<float> applyVideoFilter(const std::complex<float>& sample);
     float applyLumaFilter(float sample);
     float dcBlock(float sample);
+    float normalizeAndAGC(float sample);
+    bool detectSyncPulse();
     void processVideoSample(float sample);
+    void finalizeLine();
     void buildFrame();
     float clipValue(float value, float min, float max);
 };

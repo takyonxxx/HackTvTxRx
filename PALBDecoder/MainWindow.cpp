@@ -10,9 +10,29 @@ MainWindow::MainWindow(QWidget *parent)
     , m_frameCount(0)
     , m_shuttingDown(false)
     , m_hackRfRunning(false)
+    , m_currentFrequency(DEFAULT_FREQ)
 {
+    // Create circular buffer - 64MB buffer (holds ~244 HackRF callbacks)
+    constexpr size_t BUFFER_SIZE = 64 * 1024 * 1024; // 64 MB
+    m_circularBuffer = std::make_unique<CircularBuffer>(BUFFER_SIZE);
+
     // Create PAL decoder
     m_palDecoder = std::make_unique<PALDecoder>(this);
+
+    // Connect frame ready signal
+    connect(m_palDecoder.get(), &PALDecoder::frameReady,
+            this, &MainWindow::onFrameReady, Qt::QueuedConnection);
+
+    // Create processor thread
+    m_processorThread = std::make_unique<PALProcessorThread>(
+        m_circularBuffer.get(),
+        m_palDecoder.get(),
+        this
+        );
+
+    // Connect buffer stats
+    connect(m_processorThread.get(), &PALProcessorThread::bufferStats,
+            this, &MainWindow::onBufferStats, Qt::QueuedConnection);
 
     // Connect frame ready signal
     connect(m_palDecoder.get(), &PALDecoder::frameReady,
@@ -31,7 +51,6 @@ MainWindow::MainWindow(QWidget *parent)
     m_fpsTimer.start();
 
     setWindowTitle("PAL-B/G Decoder with HackRF - Qt 6.9.3");
-    resize(900, 850);
 
     // Initialize HackRF automatically
     initHackRF();
@@ -39,16 +58,34 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    qDebug() << "MainWindow destructor started";
     m_shuttingDown = true;
+
+    // Stop HackRF FIRST
+    if (m_hackTvLib && m_hackRfRunning) {
+        qDebug() << "Stopping HackRF...";
+        m_hackTvLib->stop();
+        QThread::msleep(100); // Wait for callbacks to finish
+    }
+
+    // Stop processor thread
+    if (m_processorThread && m_processorThread->isRunning()) {
+        qDebug() << "Stopping processor thread...";
+        m_processorThread->stopProcessing();
+        m_processorThread->quit();
+        if (!m_processorThread->wait(2000)) {
+            qWarning() << "Forcing thread termination";
+            m_processorThread->terminate();
+            m_processorThread->wait(1000);
+        }
+        qDebug() << "Processor thread stopped";
+    }
 
     if (m_statusTimer) {
         m_statusTimer->stop();
     }
 
-    // Stop HackRF
-    if (m_hackTvLib && m_hackRfRunning) {
-        m_hackTvLib->stop();
-    }
+    qDebug() << "MainWindow destructor finished";
 }
 
 void MainWindow::setupUI()
@@ -94,6 +131,150 @@ void MainWindow::setupControls()
     QVBoxLayout* mainLayout = qobject_cast<QVBoxLayout*>(centralWidget()->layout());
     if (!mainLayout) return;
 
+    // ========== FREQUENCY CONTROL (EN ÜSTTE) ==========
+    QGroupBox* freqGroup = new QGroupBox("Frequency Control - UHF TV Band", this);
+    QHBoxLayout* freqMainLayout = new QHBoxLayout(freqGroup);
+
+    // Vertical slider (solda)
+    QVBoxLayout* sliderLayout = new QVBoxLayout();
+
+    QLabel* maxLabel = new QLabel("862 MHz", this);
+    maxLabel->setAlignment(Qt::AlignCenter);
+    maxLabel->setStyleSheet("font-weight: bold; color: #ff5555;");
+    sliderLayout->addWidget(maxLabel);
+
+    m_frequencySlider = new QSlider(Qt::Vertical, this);
+    m_frequencySlider->setRange(470, 862);  // 470-862 MHz
+    m_frequencySlider->setValue(478);       // Default: 478 MHz
+    m_frequencySlider->setTickPosition(QSlider::TicksLeft);
+    m_frequencySlider->setTickInterval(8);  // 8 MHz steps (TV channel spacing)
+    m_frequencySlider->setMinimumHeight(300);
+    m_frequencySlider->setStyleSheet(
+        "QSlider::groove:vertical {"
+        "    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #66cc66, stop:1 #ff6666);"
+        "    width: 20px;"
+        "    border-radius: 5px;"
+        "}"
+        "QSlider::handle:vertical {"
+        "    background: #3388ff;"
+        "    border: 2px solid #ffffff;"
+        "    height: 30px;"
+        "    margin: 0 -5px;"
+        "    border-radius: 8px;"
+        "}"
+        "QSlider::handle:vertical:hover {"
+        "    background: #5599ff;"
+        "}"
+        );
+    connect(m_frequencySlider, &QSlider::valueChanged,
+            this, &MainWindow::onFrequencySliderChanged);
+    sliderLayout->addWidget(m_frequencySlider, 1);
+
+    QLabel* minLabel = new QLabel("470 MHz", this);
+    minLabel->setAlignment(Qt::AlignCenter);
+    minLabel->setStyleSheet("font-weight: bold; color: #55ff55;");
+    sliderLayout->addWidget(minLabel);
+
+    freqMainLayout->addLayout(sliderLayout);
+
+    // Frequency info (sağda)
+    QVBoxLayout* freqInfoLayout = new QVBoxLayout();
+    freqInfoLayout->setSpacing(15);
+
+    // Frequency spinbox
+    QHBoxLayout* spinLayout = new QHBoxLayout();
+    spinLayout->addWidget(new QLabel("<b>Frequency:</b>", this));
+    m_frequencySpinBox = new QDoubleSpinBox(this);
+    m_frequencySpinBox->setRange(470.0, 862.0);
+    m_frequencySpinBox->setValue(478.0);
+    m_frequencySpinBox->setSingleStep(0.1);  // 100 kHz steps
+    m_frequencySpinBox->setDecimals(3);
+    m_frequencySpinBox->setSuffix(" MHz");
+    m_frequencySpinBox->setMinimumWidth(150);
+    m_frequencySpinBox->setStyleSheet("QDoubleSpinBox { font-size: 14pt; font-weight: bold; }");
+    connect(m_frequencySpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &MainWindow::onFrequencySpinBoxChanged);
+    spinLayout->addWidget(m_frequencySpinBox);
+    spinLayout->addStretch();
+    freqInfoLayout->addLayout(spinLayout);
+
+    // Channel label
+    m_channelLabel = new QLabel(this);
+    m_channelLabel->setStyleSheet(
+        "QLabel {"
+        "    font-size: 16pt;"
+        "    font-weight: bold;"
+        "    color: #3388ff;"
+        "    padding: 10px;"
+        "    background-color: #f0f0f0;"
+        "    border-radius: 5px;"
+        "    border: 2px solid #3388ff;"
+        "}"
+        );
+    m_channelLabel->setAlignment(Qt::AlignCenter);
+    updateChannelLabel(m_currentFrequency);
+    freqInfoLayout->addWidget(m_channelLabel);
+
+    // Quick channel buttons
+    QLabel* quickLabel = new QLabel("<b>Quick Channels:</b>", this);
+    freqInfoLayout->addWidget(quickLabel);
+
+    QGridLayout* channelGrid = new QGridLayout();
+    channelGrid->setSpacing(5);
+
+    struct ChannelPreset {
+        int channel;
+        const char* name;
+    };
+
+    std::vector<ChannelPreset> presets = {
+        {21, "Ch 21"},
+        {22, "Ch 22"},
+        {23, "Ch 23"},
+        {24, "Ch 24"},
+        {25, "Ch 25"},
+        {30, "Ch 30"},
+        {40, "Ch 40"},
+        {50, "Ch 50"},
+        {60, "Ch 60"}
+    };
+
+    int row = 0, col = 0;
+    for (const auto& preset : presets) {
+        QPushButton* btn = new QPushButton(preset.name, this);
+        btn->setStyleSheet(
+            "QPushButton {"
+            "    background-color: #5588ff;"
+            "    color: white;"
+            "    padding: 8px;"
+            "    border-radius: 3px;"
+            "    font-weight: bold;"
+            "}"
+            "QPushButton:hover {"
+            "    background-color: #6699ff;"
+            "}"
+            );
+
+        connect(btn, &QPushButton::clicked, this, [this, preset]() {
+            uint64_t freq = 306000000ULL + (preset.channel * 8000000ULL);  // Formula: 306 + (channel * 8) MHz
+            m_frequencySpinBox->setValue(freq / 1000000.0);
+        });
+
+        channelGrid->addWidget(btn, row, col);
+        col++;
+        if (col >= 3) {
+            col = 0;
+            row++;
+        }
+    }
+
+    freqInfoLayout->addLayout(channelGrid);
+    freqInfoLayout->addStretch();
+
+    freqMainLayout->addLayout(freqInfoLayout, 1);
+
+    mainLayout->addWidget(freqGroup);
+
     // ========== HackRF Controls ==========
     QGroupBox* hackRfGroup = new QGroupBox("HackRF Controls", this);
     QVBoxLayout* hackRfLayout = new QVBoxLayout(hackRfGroup);
@@ -127,12 +308,12 @@ void MainWindow::setupControls()
     vgaLayout->addWidget(new QLabel("VGA Gain (0-62):", this));
     m_vgaGainSlider = new QSlider(Qt::Horizontal, this);
     m_vgaGainSlider->setRange(0, 62);
-    m_vgaGainSlider->setValue(40);
+    m_vgaGainSlider->setValue(20);
     m_vgaGainSlider->setTickPosition(QSlider::TicksBelow);
     m_vgaGainSlider->setTickInterval(8);
     m_vgaGainSpinBox = new QSpinBox(this);
     m_vgaGainSpinBox->setRange(0, 62);
-    m_vgaGainSpinBox->setValue(40);
+    m_vgaGainSpinBox->setValue(20);
     connect(m_vgaGainSlider, &QSlider::valueChanged, this, &MainWindow::onVgaGainChanged);
     connect(m_vgaGainSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
             [this](int value) { m_vgaGainSlider->setValue(value); });
@@ -175,7 +356,7 @@ void MainWindow::setupControls()
     m_videoGainSpinBox = new QDoubleSpinBox(this);
     m_videoGainSpinBox->setRange(0.1, 10.0);
     m_videoGainSpinBox->setSingleStep(0.1);
-    m_videoGainSpinBox->setValue(2.0);
+    m_videoGainSpinBox->setValue(1.5);
     m_videoGainSpinBox->setDecimals(1);
     connect(m_videoGainSlider, &QSlider::valueChanged, this, &MainWindow::onVideoGainChanged);
     connect(m_videoGainSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
@@ -218,6 +399,121 @@ void MainWindow::setupControls()
     infoLabel->setWordWrap(true);
     //infoLabel->setStyleSheet("QLabel { padding: 10px; background-color: #f0f0f0; border-radius: 5px; }");
     mainLayout->addWidget(infoLabel);
+}
+
+void MainWindow::onFrequencySliderChanged(int value)
+{
+    // Slider MHz cinsinden (470-862)
+    double freqMHz = static_cast<double>(value);
+
+    // Spinbox'ı güncelle (sonsuz döngü önleme)
+    m_frequencySpinBox->blockSignals(true);
+    m_frequencySpinBox->setValue(freqMHz);
+    m_frequencySpinBox->blockSignals(false);
+
+    // Frequency'yi Hz cinsine çevir
+    m_currentFrequency = static_cast<uint64_t>(freqMHz * 1000000.0);
+
+    // Channel label'ı güncelle
+    updateChannelLabel(m_currentFrequency);
+
+    // HackRF çalışıyorsa frekansı güncelle
+    if (m_hackRfRunning && m_hackTvLib) {
+        applyFrequencyChange();
+    }
+}
+
+void MainWindow::onFrequencySpinBoxChanged(double value)
+{
+    // SpinBox MHz cinsinden
+    int sliderValue = static_cast<int>(value);
+
+    // Slider'ı güncelle (sonsuz döngü önleme)
+    m_frequencySlider->blockSignals(true);
+    m_frequencySlider->setValue(sliderValue);
+    m_frequencySlider->blockSignals(false);
+
+    // Frequency'yi Hz cinsine çevir
+    m_currentFrequency = static_cast<uint64_t>(value * 1000000.0);
+
+    // Channel label'ı güncelle
+    updateChannelLabel(m_currentFrequency);
+
+    // HackRF çalışıyorsa frekansı güncelle
+    if (m_hackRfRunning && m_hackTvLib) {
+        applyFrequencyChange();
+    }
+}
+
+void MainWindow::updateChannelLabel(uint64_t frequency)
+{
+    // UHF TV kanalı hesapla
+    // UHF kanal formülü: Kanal = (Frekans - 306 MHz) / 8 MHz
+    // Örnek: 474 MHz = Kanal 21
+
+    int64_t freqMHz = frequency / 1000000;
+    int channel = -1;
+
+    if (freqMHz >= 470 && freqMHz <= 862) {
+        channel = (freqMHz - 306) / 8;
+    }
+
+    QString text;
+    if (channel >= 21 && channel <= 69) {
+        text = QString("<b>UHF Channel %1</b><br>%2 MHz")
+                   .arg(channel)
+                   .arg(freqMHz);
+    } else {
+        text = QString("<b>Custom Frequency</b><br>%1 MHz")
+                   .arg(freqMHz);
+    }
+
+    m_channelLabel->setText(text);
+}
+
+void MainWindow::applyFrequencyChange()
+{
+    if (!m_hackTvLib) return;
+
+    qDebug() << "Changing frequency to:" << m_currentFrequency << "Hz";
+
+    // HackRF'yi durdur, frekansı değiştir, tekrar başlat
+    bool wasRunning = m_hackRfRunning;
+
+    if (wasRunning) {
+        m_hackTvLib->stop();
+
+        // Kısa bir bekleme (HackRF'nin temiz durması için)
+        QThread::msleep(50);
+    }
+
+    // Yeni argümanlarla yeniden yapılandır
+    QStringList args;
+    args << "--rx-tx-mode" << "rx";
+    args << "-a";  // Enable amp
+    args << "--filter";
+    args << "-f" << QString::number(m_currentFrequency);
+    args << "-s" << QString::number(SAMP_RATE);
+
+    std::vector<std::string> stdArgs;
+    stdArgs.reserve(args.size());
+    for (const QString& arg : args) {
+        stdArgs.push_back(arg.toStdString());
+    }
+
+    m_hackTvLib->setArguments(stdArgs);
+
+    if (wasRunning) {
+        // Tekrar başlat
+        if (m_hackTvLib->start()) {
+            qDebug() << "HackRF restarted with new frequency:" << m_currentFrequency;
+        } else {
+            qWarning() << "Failed to restart HackRF with new frequency";
+            m_hackRfRunning = false;
+            m_startStopButton->setText("Start HackRF");
+            m_startStopButton->setStyleSheet("QPushButton { background-color: #55ff55; color: black; padding: 10px; font-weight: bold; }");
+        }
+    }
 }
 
 void MainWindow::onVideoGainChanged(int value)
@@ -284,24 +580,103 @@ void MainWindow::toggleHackRF()
 {
     if (m_hackRfRunning) {
         // Stop HackRF
+        qDebug() << "Stopping HackRF...";
+
         if (m_hackTvLib) {
             m_hackTvLib->stop();
-            m_hackRfRunning = false;
-            m_startStopButton->setText("Start HackRF");
-            m_startStopButton->setStyleSheet("QPushButton { background-color: #55ff55; color: black; padding: 10px; font-weight: bold; }");
-            qDebug() << "HackRF stopped";
         }
+
+        m_hackRfRunning = false;
+
+        // Stop processor thread
+        if (m_processorThread && m_processorThread->isRunning()) {
+            qDebug() << "Stopping processor thread...";
+            m_processorThread->stopProcessing();
+            m_processorThread->quit();
+            if (!m_processorThread->wait(2000)) {
+                qWarning() << "Processor thread did not stop gracefully";
+                m_processorThread->terminate();
+                m_processorThread->wait(1000);
+            }
+            qDebug() << "Processor thread stopped";
+        }
+
+        // Clear buffer
+        if (m_circularBuffer) {
+            m_circularBuffer->clear();
+            qDebug() << "Buffer cleared";
+        }
+
+        m_startStopButton->setText("Start HackRF");
+        m_startStopButton->setStyleSheet("QPushButton { background-color: #55ff55; color: black; padding: 10px; font-weight: bold; }");
+        qDebug() << "HackRF stopped";
+
     } else {
         // Start HackRF
-        if (m_hackTvLib) {
-            if (m_hackTvLib->start()) {
-                m_hackRfRunning = true;
-                m_startStopButton->setText("Stop HackRF");
-                m_startStopButton->setStyleSheet("QPushButton { background-color: #ff5555; color: white; padding: 10px; font-weight: bold; }");
-                qDebug() << "HackRF started";
+        qDebug() << "Starting HackRF...";
+
+        if (!m_hackTvLib) {
+            QMessageBox::critical(this, "Error", "HackTvLib not initialized!");
+            return;
+        }
+
+        // Clear buffer before starting
+        if (m_circularBuffer) {
+            m_circularBuffer->clear();
+            qDebug() << "Buffer cleared";
+        }
+
+        // Make sure processor thread exists
+        if (!m_processorThread) {
+            qWarning() << "Creating processor thread...";
+            m_processorThread = std::make_unique<PALProcessorThread>(
+                m_circularBuffer.get(),
+                m_palDecoder.get(),
+                this
+                );
+            connect(m_processorThread.get(), &PALProcessorThread::bufferStats,
+                    this, &MainWindow::onBufferStats, Qt::QueuedConnection);
+        }
+
+        // Start processor thread FIRST
+        if (!m_processorThread->isRunning()) {
+            qDebug() << "Starting processor thread...";
+            m_processorThread->start(QThread::HighPriority);
+
+            // Give thread time to start
+            QThread::msleep(100);
+
+            if (m_processorThread->isRunning()) {
+                qDebug() << "Processor thread started successfully";
             } else {
-                QMessageBox::critical(this, "Error", "Failed to start HackRF. Check device connection.");
+                QMessageBox::critical(this, "Error", "Failed to start processor thread!");
+                return;
             }
+        }
+
+        // Now start HackRF
+        qDebug() << "Starting HackRF device...";
+        if (m_hackTvLib->start()) {
+            m_hackRfRunning = true;
+
+            m_hackTvLib->setLnaGain(40);
+            m_hackTvLib->setVgaGain(20);
+            m_hackTvLib->setRxAmpGain(14);
+
+            m_startStopButton->setText("Stop HackRF");
+            m_startStopButton->setStyleSheet("QPushButton { background-color: #ff5555; color: white; padding: 10px; font-weight: bold; }");
+            qDebug() << "HackRF started successfully";
+            qDebug() << "Frequency:" << (m_currentFrequency / 1000000) << "MHz";
+            qDebug() << "Sample rate:" << SAMP_RATE << "Hz";
+        } else {
+            // Failed to start - stop processor thread
+            qWarning() << "Failed to start HackRF!";
+            if (m_processorThread) {
+                m_processorThread->stopProcessing();
+                m_processorThread->quit();
+                m_processorThread->wait(1000);
+            }
+            QMessageBox::critical(this, "Error", "Failed to start HackRF. Check device connection.");
         }
     }
 }
@@ -310,24 +685,17 @@ void MainWindow::onFrameReady(const QImage& frame)
 {
     if (m_shuttingDown) return;
 
+    // Create a deep copy immediately
+    QImage frameCopy = frame.copy();
+
     QMutexLocker locker(&m_frameMutex);
-
-    // Update frame count for FPS calculation
     m_frameCount++;
+    m_currentFrame = frameCopy;
 
-    // Store current frame
-    m_currentFrame = frame;
-
-    // Scale to fit display while maintaining aspect ratio
-    QPixmap pixmap = QPixmap::fromImage(frame);
-
-    // Scale to label size
     if (m_videoLabel) {
-        int labelWidth = m_videoLabel->width();
-        int labelHeight = m_videoLabel->height();
-
-        // Calculate scaled size maintaining aspect ratio
-        QSize scaledSize = frame.size().scaled(labelWidth, labelHeight, Qt::KeepAspectRatio);
+        QPixmap pixmap = QPixmap::fromImage(frameCopy);
+        QSize labelSize(m_videoLabel->width(), m_videoLabel->height());
+        QSize scaledSize = frameCopy.size().scaled(labelSize, Qt::KeepAspectRatio);
         pixmap = pixmap.scaled(scaledSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 
         m_videoLabel->setPixmap(pixmap);
@@ -353,8 +721,17 @@ void MainWindow::updateStatus()
 
     if (m_hackRfRunning && m_palDecoder) {
         status += QString(" | V.Gain: %1 | V.Offset: %2")
-        .arg(m_palDecoder->getVideoGain(), 0, 'f', 1)
-            .arg(m_palDecoder->getVideoOffset(), 0, 'f', 2);
+                      .arg(m_palDecoder->getVideoGain(), 0, 'f', 1)
+                      .arg(m_palDecoder->getVideoOffset(), 0, 'f', 2);
+
+        // Add buffer stats
+        if (m_circularBuffer) {
+            size_t bufferUsage = m_circularBuffer->availableData();
+            uint64_t dropped = m_circularBuffer->droppedFrames();
+            status += QString(" | Buf: %1 KB | Dropped: %2")
+                          .arg(bufferUsage / 1024)
+                          .arg(dropped);
+        }
     }
 
     m_statusLabel->setText(status);
@@ -371,12 +748,12 @@ void MainWindow::initHackRF()
     // Create HackTvLib instance
     m_hackTvLib = std::make_unique<HackTvLib>(this);
 
-    // Setup arguments for RX mode
+    // Setup arguments for RX mode with current frequency
     QStringList args;
     args << "--rx-tx-mode" << "rx";
     args << "-a";  // Enable amp
     args << "--filter";
-    args << "-f" << QString::number(FREQ);
+    args << "-f" << QString::number(m_currentFrequency);  // Use current frequency
     args << "-s" << QString::number(SAMP_RATE);
 
     // Convert to std::vector<std::string>
@@ -391,7 +768,7 @@ void MainWindow::initHackRF()
 
     // Set initial gains
     m_hackTvLib->setLnaGain(40);
-    m_hackTvLib->setVgaGain(40);
+    m_hackTvLib->setVgaGain(20);
     m_hackTvLib->setRxAmpGain(14);
 
     // Set mic disabled
@@ -400,42 +777,56 @@ void MainWindow::initHackRF()
     // Setup log callback
     m_hackTvLib->setLogCallback([this](const std::string& msg) {
         if (!m_shuttingDown.load() && this && m_hackTvLib) {
-            QMetaObject::invokeMethod(this, [this, msg]() {
-                if (this && !m_shuttingDown.load()) {
-                    qDebug() << "[HackRF]" << QString::fromStdString(msg);
-                }
-            }, Qt::QueuedConnection);
+            // Copy message to avoid dangling reference
+            std::string msgCopy = msg;
+            QMetaObject::invokeMethod(this, [this, msgCopy]() {
+                    if (this && !m_shuttingDown.load()) {
+                        qDebug() << "[HackRF]" << QString::fromStdString(msgCopy);
+                    }
+                }, Qt::QueuedConnection);
         }
     });
 
     // Setup data callback - THIS IS THE KEY INTEGRATION
     m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
-        if (!m_shuttingDown.load() && this && m_hackTvLib && data && len == 262144) {
-            // Copy data to avoid dangling pointer
-            QByteArray dataCopy(reinterpret_cast<const char*>(data), len);
-            QMetaObject::invokeMethod(this, [this, dataCopy]() {
-                if (this && !m_shuttingDown.load()) {
-                    handleReceivedData(
-                        reinterpret_cast<const int8_t*>(dataCopy.data()),
-                        dataCopy.size()
-                        );
-                }
-            }, Qt::QueuedConnection);
+        // Validate pointers and state
+        if (!this || m_shuttingDown.load() || !m_hackTvLib || !m_circularBuffer) {
+            return;
+        }
+
+        // Validate data
+        if (!data || len == 0) {
+            return;
+        }
+
+        // Expected callback size from HackRF
+        if (len != 262144) {
+            static bool warned = false;
+            if (!warned) {
+                qWarning() << "Unexpected callback size:" << len << "expected 262144";
+                warned = true;
+            }
+        }
+
+        // Write directly to circular buffer (this is FAST)
+        // No need to copy or use QMetaObject - just write to buffer
+        if (m_circularBuffer) {
+            bool success = m_circularBuffer->write(data, len);
+            if (!success) {
+                // Buffer full - this is logged by the buffer stats
+            }
         }
     });
 
     qDebug() << "HackRF initialized:";
     qDebug() << "  Sample rate:" << SAMP_RATE << "Hz";
-    qDebug() << "  Frequency:" << FREQ << "Hz";
-    qDebug() << "  LNA Gain: 40 dB";
-    qDebug() << "  VGA Gain: 40 dB";
-    qDebug() << "  RX Amp: 14 dB";
+    qDebug() << "  Frequency:" << m_currentFrequency << "Hz ("
+             << (m_currentFrequency / 1000000) << "MHz)";  
+    qDebug() << "  Circular buffer size:" << (64 * 1024 * 1024) << "bytes";
 
-    // *** DO NOT AUTO-START - Wait for user to click Start button ***
     m_hackRfRunning = false;
     qDebug() << "HackRF ready. Click 'Start HackRF' button to begin.";
 }
-
 void MainWindow::handleSamples(const std::vector<std::complex<float>>& samples)
 {
     if (m_shuttingDown || !m_palDecoder) return;
@@ -446,8 +837,15 @@ void MainWindow::handleSamples(const std::vector<std::complex<float>>& samples)
 
 void MainWindow::handleReceivedData(const int8_t* data, size_t len)
 {
-    if (m_shuttingDown || !m_palDecoder || !data || len == 0) return;
+    if (m_shuttingDown || !m_circularBuffer || !data || len == 0) return;
+    m_circularBuffer->write(data, len);
+}
 
-    // Process int8_t IQ data through PAL decoder
-    m_palDecoder->processSamples(data, len);
+void MainWindow::onBufferStats(size_t available, uint64_t dropped)
+{
+    // Log dropped frames
+    if (dropped > m_lastDroppedFrames) {
+        qDebug() << "WARNING: Dropped" << (dropped - m_lastDroppedFrames) << "frames. Buffer size:" << available;
+        m_lastDroppedFrames = dropped;
+    }
 }
