@@ -103,8 +103,7 @@ void MainWindow::setupUi()
     addOutputGroup();
     addRxGroup();
     addModeGroup();
-    addinputTypeGroup();
-    mainLayout->addWidget(logBrowser);
+    addinputTypeGroup();   
     setCentralWidget(centralWidget);
 
     frequencyEdit->setText(QString::number(m_frequency));
@@ -555,6 +554,8 @@ void MainWindow::addinputTypeGroup()
     buttonLayout->addWidget(executeButton);
     buttonLayout->addWidget(clearButton);
     buttonLayout->addWidget(exitButton);
+
+    mainLayout->addWidget(logBrowser);
 
     mainLayout->addLayout(buttonLayout);
 
