@@ -24,7 +24,7 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_videoGain(1.5f)
     , m_videoOffset(0.0f)
     , m_videoInvert(false)
-    , m_syncThreshold(-0.2f)
+    , m_syncThreshold(-0.2f)   
     , m_totalSamples(0)
     , m_frameCount(0)
     , m_linesProcessed(0)
@@ -37,9 +37,10 @@ PALDecoder::PALDecoder(QObject *parent)
 
     initFilters();
 
-    qDebug() << "PAL-B/G Decoder (PLL-BASED SYNC):";
+    qDebug() << "PAL-B/G Decoder (PLL-BASED SYNC + AUDIO):";
     qDebug() << "  625 lines, 25 fps, AM demodulation";
-    qDebug() << "  Resolution:" << VIDEO_WIDTH << "x" << VIDEO_HEIGHT; // 576x384
+    qDebug() << "  Audio: 48 kHz, FM demodulation, 60ms buffer";
+    qDebug() << "  Resolution:" << VIDEO_WIDTH << "x" << VIDEO_HEIGHT;
     qDebug() << "  Default sync threshold:" << m_syncThreshold;
 }
 
@@ -208,27 +209,21 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
     for (const auto& sample : samples) {
         m_totalSamples++;
 
-        // Stats every 10M samples - emit to MainWindow
+        // Stats every 10M samples
         if (m_totalSamples % 10000000 == 0) {
             float syncRate = m_linesProcessed > 0 ?
                                  (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
-
-            // qDebug() << (m_totalSamples / 1000000) << "M samples |"
-            //          << m_frameCount << "frames |"
-            //          << "Sync:" << QString::number(syncRate, 'f', 1) << "%";
-
-            // Emit stats to MainWindow
             emit syncStatsUpdated(syncRate, m_peakLevel, m_minLevel);
         }
 
-        // Processing chain
+        // VIDEO PROCESSING CHAIN
         std::complex<float> filtered = applyVideoFilter(sample);
         float magnitude = std::sqrt(filtered.real() * filtered.real() +
                                     filtered.imag() * filtered.imag());
         float dcBlocked = dcBlock(magnitude);
         float normalized = normalizeAndAGC(dcBlocked);
 
-        // Decimation to 6 MHz
+        // Video decimation to 6 MHz
         m_resampleCounter++;
         if (m_resampleCounter >= m_resampleDecim) {
             m_resampleCounter = 0;

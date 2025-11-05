@@ -20,6 +20,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Create PAL decoder
     m_palDecoder = std::make_unique<PALDecoder>(this);
+    m_audioDemodulator = std::make_unique<AudioDemodulator>(this);
+    audioOutput = std::make_unique<AudioOutput>();
 
     // Connect frame ready signal
     connect(m_palDecoder.get(), &PALDecoder::frameReady,
@@ -28,10 +30,25 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_palDecoder.get(), &PALDecoder::syncStatsUpdated,
             this, &MainWindow::onSyncStatsUpdated, Qt::QueuedConnection);
 
+    connect(
+        m_audioDemodulator.get(),
+        &AudioDemodulator::audioReady,
+        this,
+        &MainWindow::onAudioReady,
+        Qt::QueuedConnection
+        );
+
     // Create processor thread
     m_processorThread = std::make_unique<PALProcessorThread>(
         m_circularBuffer.get(),
         m_palDecoder.get(),
+        this
+        );
+
+    // Create AUDIO processor thread
+    m_audioProcessorThread = std::make_unique<AudioProcessorThread>(
+        m_circularBuffer.get(),
+        m_audioDemodulator.get(),
         this
         );
 
@@ -63,7 +80,7 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     qDebug() << "MainWindow destructor started";
-    m_shuttingDown = true;
+    m_shuttingDown = true;   
 
     // Stop HackRF FIRST
     if (m_hackTvLib && m_hackRfRunning) {
@@ -187,6 +204,76 @@ void MainWindow::setupUI()
     videoControlLayout->addWidget(m_invertVideoCheckBox);
 
     leftColumn->addWidget(videoControlGroup);
+
+    // Audio Controls (NEW - BELOW VIDEO CONTROLS)
+    QGroupBox* audioControlGroup = new QGroupBox("Audio Controls", this);
+    audioControlGroup->setMaximumWidth(592);
+    QVBoxLayout* audioControlLayout = new QVBoxLayout(audioControlGroup);
+
+    // Audio Enable Checkbox
+    m_audioEnabledCheckBox = new QCheckBox("Enable Audio", this);
+    m_audioEnabledCheckBox->setChecked(true);
+    m_audioEnabledCheckBox->setStyleSheet("QCheckBox { font-weight: bold; }");
+    connect(m_audioEnabledCheckBox, &QCheckBox::stateChanged,
+            this, &MainWindow::onAudioEnabledChanged);
+    audioControlLayout->addWidget(m_audioEnabledCheckBox);
+
+    // Audio Gain
+    QHBoxLayout* audioGainLayout = new QHBoxLayout();
+    audioGainLayout->addWidget(new QLabel("Audio Gain:", this));
+
+    m_audioGainSlider = new QSlider(Qt::Horizontal, this);
+    m_audioGainSlider->setRange(0, 100);
+    m_audioGainSlider->setValue(10);  // 1.0x gain
+    m_audioGainSlider->setTickPosition(QSlider::TicksBelow);
+    m_audioGainSlider->setTickInterval(10);
+
+    m_audioGainSpinBox = new QDoubleSpinBox(this);
+    m_audioGainSpinBox->setRange(0.0, 10.0);
+    m_audioGainSpinBox->setSingleStep(0.1);
+    m_audioGainSpinBox->setValue(1.0);
+    m_audioGainSpinBox->setDecimals(1);
+    m_audioGainSpinBox->setMaximumWidth(80);
+
+    connect(m_audioGainSlider, &QSlider::valueChanged,
+            this, &MainWindow::onAudioGainChanged);
+    connect(m_audioGainSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            [this](double value) {
+                m_audioGainSlider->setValue(static_cast<int>(value * 10));
+            });
+
+    audioGainLayout->addWidget(m_audioGainSlider, 1);
+    audioGainLayout->addWidget(m_audioGainSpinBox);
+    audioControlLayout->addLayout(audioGainLayout);
+
+    // System Volume Control
+    QHBoxLayout* volumeLayout = new QHBoxLayout();
+    volumeLayout->addWidget(new QLabel("Volume:", this));
+
+    QSlider* volumeSlider = new QSlider(Qt::Horizontal, this);
+    volumeSlider->setRange(0, 100);
+    volumeSlider->setValue(50);
+    volumeSlider->setTickPosition(QSlider::TicksBelow);
+    volumeSlider->setTickInterval(10);
+
+    connect(volumeSlider, &QSlider::valueChanged,
+            audioOutput.get(), &AudioOutput::setVolume);
+
+    QLabel* volumeLabel = new QLabel("50%", this);
+    volumeLabel->setMinimumWidth(50);
+    volumeLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+    connect(volumeSlider, &QSlider::valueChanged,
+            [volumeLabel](int value) {
+                volumeLabel->setText(QString("%1%").arg(value));
+            });
+
+    volumeLayout->addWidget(volumeSlider, 1);
+    volumeLayout->addWidget(volumeLabel);
+    audioControlLayout->addLayout(volumeLayout);
+
+    leftColumn->addWidget(audioControlGroup);
+
     leftColumn->addStretch();
 
     columnsLayout->addLayout(leftColumn);
@@ -476,6 +563,36 @@ void MainWindow::onSyncThresholdChanged(int value)
     }
 }
 
+void MainWindow::onAudioGainChanged(int value)
+{
+    float gain = value / 10.0f;  // 0-100 -> 0.0-10.0
+
+    m_audioGainSpinBox->blockSignals(true);
+    m_audioGainSpinBox->setValue(gain);
+    m_audioGainSpinBox->blockSignals(false);
+
+    if (m_audioDemodulator) {  // PALDecoder → AudioDemodulator
+        m_audioDemodulator->setAudioGain(gain);
+        qDebug() << "Audio gain set to:" << gain;
+    }
+}
+
+void MainWindow::onAudioEnabledChanged(int state)
+{
+    bool enabled = (state == Qt::Checked);
+
+    if (m_audioDemodulator) {  // PALDecoder → AudioDemodulator
+        m_audioDemodulator->setAudioEnabled(enabled);
+    }
+
+    qDebug() << "Audio:" << (enabled ? "ENABLED" : "DISABLED");
+}
+
+void MainWindow::onAudioReady(const std::vector<float> &audioSamples)
+{
+     audioOutput->enqueueAudio(std::move(audioSamples));
+}
+
 void MainWindow::onSampleRateChanged(int index)
 {
     if (!m_sampleRateComboBox) return;
@@ -670,6 +787,13 @@ void MainWindow::toggleHackRF()
             qDebug() << "Processor thread stopped";
         }
 
+        if (m_audioProcessorThread && m_audioProcessorThread->isRunning()) {
+            qDebug() << "Stopping audio processor thread...";
+            m_audioProcessorThread->stopProcessing();
+            m_audioProcessorThread->quit();
+            m_audioProcessorThread->wait(2000);
+        }
+
         // Clear buffer
         if (m_circularBuffer) {
             m_circularBuffer->clear();
@@ -729,30 +853,17 @@ void MainWindow::toggleHackRF()
             qDebug() << "Buffer cleared";
         }
 
-        // Make sure processor thread exists
-        if (!m_processorThread) {
-            qWarning() << "Creating processor thread...";
-            m_processorThread = std::make_unique<PALProcessorThread>(
-                m_circularBuffer.get(),
-                m_palDecoder.get(),
-                this
-                );
-            connect(m_processorThread.get(), &PALProcessorThread::bufferStats,
-                    this, &MainWindow::onBufferStats, Qt::QueuedConnection);
-        }
-
         // Start processor thread FIRST
         if (!m_processorThread->isRunning()) {
             qDebug() << "Starting processor thread...";
             m_processorThread->start(QThread::HighPriority);
-            QThread::msleep(100);
+            QThread::msleep(50);
+        }
 
-            if (m_processorThread->isRunning()) {
-                qDebug() << "Processor thread started successfully";
-            } else {
-                QMessageBox::critical(this, "Error", "Failed to start processor thread!");
-                return;
-            }
+        if (!m_audioProcessorThread->isRunning()) {
+            qDebug() << "Starting audio processor thread...";
+            m_audioProcessorThread->start(QThread::HighPriority);
+            QThread::msleep(50);
         }
 
         // Configure HackRF with 16 MHz sample rate
@@ -835,12 +946,12 @@ void MainWindow::updateStatus()
     QString status = QString("Status: %1 | Freq: %2 MHz | Rate: %3 MHz")
                          .arg(m_hackRfRunning ? "Running" : "Stopped")
                          .arg(m_currentFrequency / 1000000)
-                         .arg(m_currentSampleRate / 1000000.0, 0, 'f', 1);  // <<<< Dinamik
+                         .arg(m_currentSampleRate / 1000000.0, 0, 'f', 1);
 
     if (m_hackRfRunning && m_palDecoder) {
         status += QString(" | V.Gain: %1 | V.Offset: %2")
-                      .arg(m_palDecoder->getVideoGain(), 0, 'f', 1)
-                      .arg(m_palDecoder->getVideoOffset(), 0, 'f', 2);
+        .arg(m_palDecoder->getVideoGain(), 0, 'f', 1)
+            .arg(m_palDecoder->getVideoOffset(), 0, 'f', 2);
 
         if (m_circularBuffer) {
             size_t bufferUsage = m_circularBuffer->availableData();

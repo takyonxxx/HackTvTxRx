@@ -1,4 +1,4 @@
-QT += core gui widgets
+QT += core gui widgets multimedia
 
 greaterThan(QT_MAJOR_VERSION, 5): QT += widgets
 
@@ -21,6 +21,9 @@ win32 {
 }
 
 SOURCES += \
+    audiodemodulator.cpp \
+    audiooutput.cpp \
+    audioprocessorthread.cpp \
     main.cpp \
     MainWindow.cpp \
     PALDecoder.cpp
@@ -29,7 +32,10 @@ HEADERS += \
     CircularBuffer.h \
     MainWindow.h \
     PALDecoder.h \
-    PALProcessorThread.h
+    PALProcessorThread.h \
+    audiodemodulator.h \
+    audiooutput.h \
+    audioprocessorthread.h
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

@@ -12,22 +12,18 @@
 class PALDecoder : public QObject
 {
     Q_OBJECT
-
 public:
     explicit PALDecoder(QObject *parent = nullptr);
     ~PALDecoder();
 
     void processSamples(const int8_t* data, size_t len);
     void processSamples(const std::vector<std::complex<float>>& samples);
-
     QImage getCurrentFrame() const;
 
     // Video controls
     void setVideoGain(float gain) { m_videoGain = gain; }
     void setVideoOffset(float offset) { m_videoOffset = offset; }
     void setVideoInvert(bool invert) { m_videoInvert = invert; }
-
-    // NEW: Sync threshold control
     void setSyncThreshold(float threshold) { m_syncThreshold = threshold; }
 
     // Getters
@@ -38,7 +34,7 @@ public:
 
 signals:
     void frameReady(const QImage& frame);
-    void syncStatsUpdated(float syncRate, float peakLevel, float minLevel); // NEW
+    void syncStatsUpdated(float syncRate, float peakLevel, float minLevel);
 
 private:
     // PAL-B/G Constants
@@ -50,7 +46,7 @@ private:
     static constexpr int FIRST_VISIBLE_LINE = 23;
     static constexpr int SAMPLES_PER_LINE = 384;
     static constexpr int VIDEO_WIDTH = 576;
-    static constexpr int VIDEO_HEIGHT = 384;
+    static constexpr int VIDEO_HEIGHT = 384;   
 
     // PLL sync tracking
     int m_expectedSyncPosition;
@@ -93,7 +89,7 @@ private:
     float m_videoGain;
     float m_videoOffset;
     bool m_videoInvert;
-    float m_syncThreshold;  // NEW: Adjustable sync threshold
+    float m_syncThreshold;  
 
     // Stats
     uint64_t m_totalSamples;
