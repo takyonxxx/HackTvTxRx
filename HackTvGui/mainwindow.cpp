@@ -198,7 +198,7 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
     constexpr double PAL_BAND_HIGH = 860e6;
 
     // FM Radio DEMODULATION
-    if (m_frequency >= FM_BAND_LOW && m_frequency <= FM_BAND_HIGH)
+    //if (m_frequency >= FM_BAND_LOW && m_frequency <= FM_BAND_HIGH)
     {
         if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
         {
