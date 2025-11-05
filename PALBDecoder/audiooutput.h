@@ -41,10 +41,10 @@ private:
     // Audio configuration
     static constexpr int SAMPLE_RATE = 48000;
     static constexpr int CHANNEL_COUNT = 2;
-    static constexpr int MIN_BUFFER_SAMPLES = 14400;  // 300ms @ 48kHz
-    static constexpr int CHUNK_SIZE = 1920;  // 40ms @ 48kHz
-    static constexpr int MAX_QUEUE_SIZE = 480000;       // 10s
-    static constexpr int RESERVE_SIZE = 500000;         // Pre-allocate
+    static constexpr int MIN_BUFFER_SAMPLES = 1920;   // ← 40ms @ 48kHz (AZALTILDI!)
+    static constexpr int CHUNK_SIZE = 960;            // ← 20ms @ 48kHz (AZALTILDI!)
+    static constexpr int MAX_QUEUE_SIZE = 480000;
+    static constexpr int RESERVE_SIZE = 500000;
 
     // Audio format and device
     QAudioFormat m_format;

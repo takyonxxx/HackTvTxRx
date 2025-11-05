@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QImage>
 #include <vector>
+#include <QMutex>
 #include <complex>
 #include <deque>
 #include <cstdint>
@@ -46,7 +47,9 @@ private:
     static constexpr int FIRST_VISIBLE_LINE = 23;
     static constexpr int SAMPLES_PER_LINE = 384;
     static constexpr int VIDEO_WIDTH = 576;
-    static constexpr int VIDEO_HEIGHT = 384;   
+    static constexpr int VIDEO_HEIGHT = 384;
+
+    mutable QMutex m_processMutex;
 
     // PLL sync tracking
     int m_expectedSyncPosition;

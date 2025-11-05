@@ -14,16 +14,15 @@
 #include <QComboBox>
 #include <QMessageBox>
 #include <QMutex>
+#include <QThreadPool>
 #include <QElapsedTimer>
 #include <atomic>
 #include <memory>
 
 #include "PALDecoder.h"
-#include "CircularBuffer.h"
-#include "PALProcessorThread.h"
 #include "audiooutput.h"
 #include "AudioDemodulator.h"
-#include "AudioProcessorThread.h"
+#include "FrameBuffer.h"
 
 class HackTvLib;
 
@@ -34,8 +33,15 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
-    void handleSamples(const std::vector<std::complex<float>>& samples);
+    struct AtomicGuard {
+        QAtomicInt& counter;
+        // CRITICAL: Kilit açma işlemini sadece yıkıcı (destructor) içinde yapıyoruz.
+        AtomicGuard(QAtomicInt& c) : counter(c) {}
+        ~AtomicGuard() { counter.storeRelease(0); }
+    };
+
     void handleReceivedData(const int8_t* data, size_t len);
+    void processDemod(const std::vector<std::complex<float>>& samples);
 
 private slots:
     void onFrameReady(const QImage& frame);
@@ -46,7 +52,6 @@ private slots:
     void onRxAmpGainChanged(int value);
     void updateStatus();
     void toggleHackRF();
-    void onBufferStats(size_t available, uint64_t dropped);
     void onFrequencySliderChanged(int value);
     void onFrequencySpinBoxChanged(double value);
     void updateChannelLabel(uint64_t frequency);
@@ -62,6 +67,10 @@ private:
     void setupUI();
     void initHackRF();
     void applyFrequencyChange();
+    void startPalVideoProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr);
+    void startPalAudioProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr);
+
+    QThreadPool* m_threadPool;
 
     // UI Components
     QLabel* m_videoLabel;
@@ -92,13 +101,8 @@ private:
     QComboBox* m_sampleRateComboBox;
 
     // Core components
-    std::unique_ptr<PALDecoder> m_palDecoder;
+    std::shared_ptr<PALDecoder> m_palDecoder;
     std::unique_ptr<HackTvLib> m_hackTvLib;
-
-    // Buffers and threads
-    std::unique_ptr<CircularBuffer> m_circularBuffer;
-    std::unique_ptr<PALProcessorThread> m_processorThread;
-    std::unique_ptr<AudioProcessorThread> m_audioProcessorThread;
 
     // Status tracking
     QTimer* m_statusTimer;
@@ -126,6 +130,14 @@ private:
     QSlider* m_syncThresholdSlider;
     QDoubleSpinBox* m_syncThresholdSpinBox;
     QLabel* m_syncRateLabel;
+
+    FrameBuffer* palFrameBuffer;
+    QAtomicInt palDemodulationInProgress{0};
+    QAtomicInt audioDemodulationInProgress{0};
+
+    QMutex m_audioQueueMutex;
+    std::deque<std::vector<std::complex<float>>> m_audioQueue;
+    static constexpr size_t MAX_AUDIO_QUEUE = 10; // Max 10 chunk
 
     // Constants
     static constexpr uint64_t UHF_MIN_FREQ = 470000000ULL;

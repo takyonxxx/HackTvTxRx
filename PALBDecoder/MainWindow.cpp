@@ -1,6 +1,9 @@
 #include "MainWindow.h"
 #include "hacktvlib.h"  // Your HackRF library
 #include <QDebug>
+#include <QFuture>
+#include <QtConcurrent/QtConcurrent>
+#include <memory>
 #include <QMessageBox>
 #include <QApplication>
 #include <QScreen>
@@ -8,18 +11,22 @@
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
+    , m_threadPool(nullptr)
     , m_frameCount(0)
     , m_shuttingDown(false)
     , m_hackRfRunning(false)
     , m_currentFrequency(DEFAULT_FREQ)
     , m_currentSampleRate(16000000)
 {
-    // Create circular buffer - 64MB buffer (holds ~244 HackRF callbacks)
-    constexpr size_t BUFFER_SIZE = 64 * 1024 * 1024; // 64 MB
-    m_circularBuffer = std::make_unique<CircularBuffer>(BUFFER_SIZE);
+    m_threadPool = new QThreadPool(this);
+    if (m_threadPool) {
+        m_threadPool->setMaxThreadCount(QThread::idealThreadCount() / 2);
+    }
+
+    palFrameBuffer = new FrameBuffer(m_currentSampleRate, 0.04);
 
     // Create PAL decoder
-    m_palDecoder = std::make_unique<PALDecoder>(this);
+    m_palDecoder = std::make_shared<PALDecoder>(this);
     m_audioDemodulator = std::make_unique<AudioDemodulator>(this);
     m_audioOutput = std::make_unique<AudioOutput>();
 
@@ -31,30 +38,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onSyncStatsUpdated, Qt::QueuedConnection);
 
     connect(
-        m_audioDemodulator.get(),
-        &AudioDemodulator::audioReady,
-        this,
-        &MainWindow::onAudioReady,
-        Qt::QueuedConnection
-        );
-
-    // Create processor thread
-    m_processorThread = std::make_unique<PALProcessorThread>(
-        m_circularBuffer.get(),
-        m_palDecoder.get(),
-        this
-        );
-
-    // Create AUDIO processor thread
-    m_audioProcessorThread = std::make_unique<AudioProcessorThread>(
-        m_circularBuffer.get(),
-        m_audioDemodulator.get(),
-        this
-        );
-
-    // Connect buffer stats
-    connect(m_processorThread.get(), &PALProcessorThread::bufferStats,
-            this, &MainWindow::onBufferStats, Qt::QueuedConnection);
+        m_audioDemodulator.get(), &AudioDemodulator::audioReady,
+        this, &MainWindow::onAudioReady, Qt::QueuedConnection);
 
     // Connect frame ready signal
     connect(m_palDecoder.get(), &PALDecoder::frameReady,
@@ -87,19 +72,6 @@ MainWindow::~MainWindow()
         qDebug() << "Stopping HackRF...";
         m_hackTvLib->stop();
         QThread::msleep(100); // Wait for callbacks to finish
-    }
-
-    // Stop processor thread
-    if (m_processorThread && m_processorThread->isRunning()) {
-        qDebug() << "Stopping processor thread...";
-        m_processorThread->stopProcessing();
-        m_processorThread->quit();
-        if (!m_processorThread->wait(2000)) {
-            qWarning() << "Forcing thread termination";
-            m_processorThread->terminate();
-            m_processorThread->wait(1000);
-        }
-        qDebug() << "Processor thread stopped";
     }
 
     if (m_statusTimer) {
@@ -239,7 +211,7 @@ void MainWindow::setupUI()
             this, &MainWindow::onAudioGainChanged);
     connect(m_audioGainSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             [this](double value) {
-                m_audioGainSlider->setValue(static_cast<int>(value * 10));
+                m_audioGainSlider->setValue(static_cast<int>(value * 10));                
             });
 
     audioGainLayout->addWidget(m_audioGainSlider, 1);
@@ -255,9 +227,10 @@ void MainWindow::setupUI()
     volumeSlider->setValue(50);
     volumeSlider->setTickPosition(QSlider::TicksBelow);
     volumeSlider->setTickInterval(10);
-
-    connect(volumeSlider, &QSlider::valueChanged,
-            m_audioOutput.get(), &AudioOutput::setVolume);
+    connect(volumeSlider,  &QSlider::valueChanged,
+            [this](double value) {
+                 m_audioOutput->setVolume(value);
+            });
 
     QLabel* volumeLabel = new QLabel("50%", this);
     volumeLabel->setMinimumWidth(50);
@@ -778,32 +751,6 @@ void MainWindow::toggleHackRF()
 
         m_hackRfRunning = false;
 
-        // Stop processor thread
-        if (m_processorThread && m_processorThread->isRunning()) {
-            qDebug() << "Stopping processor thread...";
-            m_processorThread->stopProcessing();
-            m_processorThread->quit();
-            if (!m_processorThread->wait(2000)) {
-                qWarning() << "Processor thread did not stop gracefully";
-                m_processorThread->terminate();
-                m_processorThread->wait(1000);
-            }
-            qDebug() << "Processor thread stopped";
-        }
-
-        if (m_audioProcessorThread && m_audioProcessorThread->isRunning()) {
-            qDebug() << "Stopping audio processor thread...";
-            m_audioProcessorThread->stopProcessing();
-            m_audioProcessorThread->quit();
-            m_audioProcessorThread->wait(2000);
-        }
-
-        // Clear buffer
-        if (m_circularBuffer) {
-            m_circularBuffer->clear();
-            qDebug() << "Buffer cleared";
-        }
-
         // Reset sample rate to 16 MHz
         m_currentSampleRate = 16000000;
 
@@ -849,27 +796,6 @@ void MainWindow::toggleHackRF()
             }
         }
 
-        qDebug() << "Sample rate set to 16 MHz";
-
-        // Clear buffer before starting
-        if (m_circularBuffer) {
-            m_circularBuffer->clear();
-            qDebug() << "Buffer cleared";
-        }
-
-        // Start processor thread FIRST
-        if (!m_processorThread->isRunning()) {
-            qDebug() << "Starting processor thread...";
-            m_processorThread->start(QThread::HighPriority);
-            QThread::msleep(50);
-        }
-
-        if (!m_audioProcessorThread->isRunning()) {
-            qDebug() << "Starting audio processor thread...";
-            m_audioProcessorThread->start(QThread::HighPriority);
-            QThread::msleep(50);
-        }
-
         // Configure HackRF with 16 MHz sample rate
         QStringList args;
         args << "--rx-tx-mode" << "rx";
@@ -902,12 +828,7 @@ void MainWindow::toggleHackRF()
             qDebug() << "Sample rate:" << m_currentSampleRate << "Hz (16 MHz)";
         } else {
             // Failed to start - stop processor thread
-            qWarning() << "Failed to start HackRF!";
-            if (m_processorThread) {
-                m_processorThread->stopProcessing();
-                m_processorThread->quit();
-                m_processorThread->wait(1000);
-            }
+            qWarning() << "Failed to start HackRF!";           
             QMessageBox::critical(this, "Error", "Failed to start HackRF. Check device connection.");
         }
     }
@@ -957,13 +878,6 @@ void MainWindow::updateStatus()
         .arg(m_palDecoder->getVideoGain(), 0, 'f', 1)
             .arg(m_palDecoder->getVideoOffset(), 0, 'f', 2);
 
-        if (m_circularBuffer) {
-            size_t bufferUsage = m_circularBuffer->availableData();
-            uint64_t dropped = m_circularBuffer->droppedFrames();
-            status += QString(" | Buf: %1 KB | Dropped: %2")
-                          .arg(bufferUsage / 1024)
-                          .arg(dropped);
-        }
     }
 
     m_statusLabel->setText(status);
@@ -978,6 +892,8 @@ void MainWindow::initHackRF()
     qDebug() << "Initializing HackRF...";
 
     m_hackTvLib = std::make_unique<HackTvLib>(this);
+
+    palDemodulationInProgress.storeRelease(0);
 
     QStringList args;
     args << "--rx-tx-mode" << "rx";
@@ -1011,34 +927,15 @@ void MainWindow::initHackRF()
         }
     });
 
-    // Setup data callback - THIS IS THE KEY INTEGRATION
     m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
-        // Validate pointers and state
-        if (!this || m_shuttingDown.load() || !m_hackTvLib || !m_circularBuffer) {
-            return;
-        }
-
-        // Validate data
-        if (!data || len == 0) {
-            return;
-        }
-
-        // Expected callback size from HackRF
-        if (len != 262144) {
-            static bool warned = false;
-            if (!warned) {
-                qWarning() << "Unexpected callback size:" << len << "expected 262144";
-                warned = true;
-            }
-        }
-
-        // Write directly to circular buffer (this is FAST)
-        // No need to copy or use QMetaObject - just write to buffer
-        if (m_circularBuffer) {
-            bool success = m_circularBuffer->write(data, len);
-            if (!success) {
-                // Buffer full - this is logged by the buffer stats
-            }
+        if (!m_shuttingDown.load() && this && m_hackTvLib && data && len == 262144) {
+            // Copy data to avoid dangling pointer
+            QByteArray dataCopy(reinterpret_cast<const char*>(data), len);
+            QMetaObject::invokeMethod(this, [this, dataCopy]() {
+                    if (this && !m_shuttingDown.load()) {
+                        handleReceivedData(reinterpret_cast<const int8_t*>(dataCopy.data()), dataCopy.size());
+                    }
+                }, Qt::QueuedConnection);
         }
     });
 
@@ -1051,24 +948,122 @@ void MainWindow::initHackRF()
     m_hackRfRunning = false;
     qDebug() << "HackRF ready. Click 'Start HackRF' button to begin.";
 }
-void MainWindow::handleSamples(const std::vector<std::complex<float>>& samples)
-{
-    if (m_shuttingDown || !m_palDecoder) return;
-
-    // Process samples through PAL decoder
-    m_palDecoder->processSamples(samples);
-}
 
 void MainWindow::handleReceivedData(const int8_t* data, size_t len)
 {
-    if (m_shuttingDown || !m_circularBuffer || !data || len == 0) return;
-    m_circularBuffer->write(data, len);
+    // Validate pointers and state
+    if (m_shuttingDown.load() || !m_hackTvLib || !palFrameBuffer) {
+        return;
+    }
+
+    // Validate data
+    if (!data || len == 0) {
+        return;
+    }
+
+    const int samples_count = len / 2;
+    auto samplesPtr = std::make_shared<std::vector<std::complex<float>>>(samples_count);
+
+#pragma omp parallel for
+    for (int i = 0; i < samples_count; i++) {
+        (*samplesPtr)[i] = std::complex<float>(
+            static_cast<int8_t>(data[i * 2]) / 128.0f,
+            static_cast<int8_t>(data[i * 2 + 1]) / 128.0f
+            );
+    }
+
+    QFuture<void> demodSamples = QtConcurrent::run(m_threadPool, [this, samplesPtr]() {
+        this->processDemod(*samplesPtr);
+    });
 }
 
-void MainWindow::onBufferStats(size_t available, uint64_t dropped)
+// MainWindow.cpp - processDemod
+void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-    // Log dropped frames
-    if (dropped > m_lastDroppedFrames) {
-        m_lastDroppedFrames = dropped;
+    if (!m_palDecoder || !palFrameBuffer || !m_audioOutput || samples.size() > 10000000) {
+        return;
     }
+
+    palFrameBuffer->addBuffer(samples);
+
+    // AUDIO PROCESSING - her 1/4 frame
+    qsizetype quarterFrameSize = palFrameBuffer->targetSize() / 4;
+    if (palFrameBuffer->size() >= quarterFrameSize) {
+        int expectedAudio = 0;
+        if (audioDemodulationInProgress.testAndSetAcquire(expectedAudio, 1)) {
+            auto audioSamples = palFrameBuffer->getSamples(quarterFrameSize);
+            if (!audioSamples.empty() && audioSamples.size() < 5000000) {
+                auto audioPtr = std::make_shared<std::vector<std::complex<float>>>(
+                    std::move(audioSamples)
+                    );
+                startPalAudioProcessing(audioPtr);
+            } else {
+                audioDemodulationInProgress.storeRelease(0);
+            }
+        }
+    }
+
+    // VIDEO PROCESSING - tam frame (40ms = 1 PAL frame)
+    if (palFrameBuffer->isFrameReady()) {
+        int expectedVideo = 0;
+        if (palDemodulationInProgress.testAndSetAcquire(expectedVideo, 1)) {
+            auto fullFrame = palFrameBuffer->getFrame();
+            if (!fullFrame.empty() && fullFrame.size() < 10000000) {
+                auto framePtr = std::make_shared<std::vector<std::complex<float>>>(
+                    std::move(fullFrame)
+                    );
+                startPalVideoProcessing(framePtr);
+            } else {
+                palDemodulationInProgress.storeRelease(0);
+            }
+        }
+    }
+}
+
+void MainWindow::startPalAudioProcessing(std::shared_ptr<std::vector<std::complex<float>>> audioPtr)
+{
+    QtConcurrent::run(QThreadPool::globalInstance(), [this, audioPtr]() {
+        AtomicGuard guard(audioDemodulationInProgress);
+
+        try {
+            if (audioPtr->size() > 5000000) {
+                qCritical() << "Audio frame too large:" << audioPtr->size();
+                return;
+            }
+            if (m_audioDemodulator && m_audioDemodulator->getAudioEnabled()) {
+                m_audioDemodulator->processSamples(*audioPtr);
+            }
+        }
+        catch (const std::exception& e) {
+            qCritical() << "PAL audio demodulation error:" << e.what();
+        }
+        catch (...) {
+            qCritical() << "Unknown exception in PAL audio demodulation";
+        }
+    });
+}
+
+// mainwindow.cpp - startPalVideoProcessing metodunu debug ile güncelle
+
+void MainWindow::startPalVideoProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr)
+{
+    QtConcurrent::run(m_threadPool, [this, framePtr]() {
+        AtomicGuard guard(palDemodulationInProgress);
+
+        try {
+            if (framePtr->size() > 10000000) {
+                qCritical() << "Video frame too large:" << framePtr->size();
+                return;
+            }
+            if(m_palDecoder)
+                m_palDecoder->processSamples(*framePtr);
+
+        }
+        catch (const std::exception& e) {
+            qCritical() << "PAL video demodulation error:" << e.what();
+        }
+        catch (...) {
+            qCritical() << "Unknown exception in PAL video demodulation";
+        }
+    });
 }

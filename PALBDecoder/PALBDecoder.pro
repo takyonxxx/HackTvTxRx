@@ -23,19 +23,16 @@ win32 {
 SOURCES += \
     audiodemodulator.cpp \
     audiooutput.cpp \
-    audioprocessorthread.cpp \
     main.cpp \
     MainWindow.cpp \
     PALDecoder.cpp
 
 HEADERS += \
-    CircularBuffer.h \
+    FrameBuffer.h \
     MainWindow.h \
     PALDecoder.h \
-    PALProcessorThread.h \
     audiodemodulator.h \
-    audiooutput.h \
-    audioprocessorthread.h
+    audiooutput.h
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

@@ -206,6 +206,19 @@ void PALDecoder::processSamples(const int8_t* data, size_t len)
 
 void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
 {
+    QMutexLocker locker(&m_processMutex);
+
+    // SAFETY CHECKS
+    if (samples.empty()) {
+        qWarning() << "PALDecoder: Empty samples vector!";
+        return;
+    }
+
+    if (samples.size() > 100000000) { // 100M sample = anormal
+        qWarning() << "PALDecoder: Suspiciously large samples:" << samples.size();
+        return;
+    }
+
     for (const auto& sample : samples) {
         m_totalSamples++;
 
@@ -213,7 +226,9 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         if (m_totalSamples % 10000000 == 0) {
             float syncRate = m_linesProcessed > 0 ?
                                  (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
-            emit syncStatsUpdated(syncRate, m_peakLevel, m_minLevel);
+            QMetaObject::invokeMethod(this, [this, syncRate]() {
+                    emit syncStatsUpdated(syncRate, m_peakLevel, m_minLevel);
+                }, Qt::QueuedConnection);
         }
 
         // VIDEO PROCESSING CHAIN
