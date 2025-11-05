@@ -21,7 +21,7 @@ MainWindow::MainWindow(QWidget *parent)
     // Create PAL decoder
     m_palDecoder = std::make_unique<PALDecoder>(this);
     m_audioDemodulator = std::make_unique<AudioDemodulator>(this);
-    audioOutput = std::make_unique<AudioOutput>();
+    m_audioOutput = std::make_unique<AudioOutput>();
 
     // Connect frame ready signal
     connect(m_palDecoder.get(), &PALDecoder::frameReady,
@@ -257,7 +257,7 @@ void MainWindow::setupUI()
     volumeSlider->setTickInterval(10);
 
     connect(volumeSlider, &QSlider::valueChanged,
-            audioOutput.get(), &AudioOutput::setVolume);
+            m_audioOutput.get(), &AudioOutput::setVolume);
 
     QLabel* volumeLabel = new QLabel("50%", this);
     volumeLabel->setMinimumWidth(50);
@@ -588,9 +588,13 @@ void MainWindow::onAudioEnabledChanged(int state)
     qDebug() << "Audio:" << (enabled ? "ENABLED" : "DISABLED");
 }
 
-void MainWindow::onAudioReady(const std::vector<float> &audioSamples)
+void MainWindow::onAudioReady(const std::vector<float>& audioSamples)
 {
-     audioOutput->enqueueAudio(std::move(audioSamples));
+    if (m_audioOutput) {
+        m_audioOutput->enqueueAudio(audioSamples);
+    } else {
+        qCritical() << "AudioOutput is NULL!";
+    }
 }
 
 void MainWindow::onSampleRateChanged(int index)

@@ -13,7 +13,6 @@ AudioDemodulator::AudioDemodulator(QObject *parent)
     , m_lastAudioSample(0.0f, 0.0f)
     , m_audioGain(1.0f)
     , m_audioEnabled(true)
-    , m_totalSamples(0)
     , m_audioBuffersEmitted(0)
 {
     m_audioBuffer.reserve(AUDIO_BUFFER_SIZE + 100);
@@ -102,12 +101,6 @@ void AudioDemodulator::processAudioSample(float sample)
     if (m_audioBuffer.size() >= AUDIO_BUFFER_SIZE) {
         m_audioBuffersEmitted++;
 
-        // Debug first few
-        if (m_audioBuffersEmitted <= 3) {
-            qDebug() << "AudioDemodulator: Emitting buffer" << m_audioBuffersEmitted
-                     << "with" << m_audioBuffer.size() << "samples";
-        }
-
         emit audioReady(m_audioBuffer);
         m_audioBuffer.clear();
     }
@@ -141,13 +134,6 @@ void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& sa
     if (!m_audioEnabled) return;
 
     for (const auto& sample : samples) {
-        m_totalSamples++;
-
-        // Stats every 100M samples
-        if (m_totalSamples % 100000000 == 0) {
-            qDebug() << "AudioDemodulator: Processed" << (m_totalSamples / 1000000)
-            << "M samples, emitted" << m_audioBuffersEmitted << "buffers";
-        }
 
         // FM demodulate
         float audioFM = fmDemodulate(sample);

@@ -81,7 +81,8 @@ private:
     QSlider* m_rxAmpGainSlider;
 
     // Audio Controls
-    std::unique_ptr<AudioOutput> audioOutput;
+    std::unique_ptr<AudioDemodulator> m_audioDemodulator;
+    std::unique_ptr<AudioOutput> m_audioOutput;
     QSlider* m_audioGainSlider;
     QDoubleSpinBox* m_audioGainSpinBox;
     QCheckBox* m_audioEnabledCheckBox;
@@ -93,9 +94,6 @@ private:
     // Core components
     std::unique_ptr<PALDecoder> m_palDecoder;
     std::unique_ptr<HackTvLib> m_hackTvLib;
-
-    std::unique_ptr<AudioDemodulator> m_audioDemodulator;
-    std::unique_ptr<AudioOutput> m_audioOutput;
 
     // Buffers and threads
     std::unique_ptr<CircularBuffer> m_circularBuffer;
