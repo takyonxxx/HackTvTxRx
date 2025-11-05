@@ -977,38 +977,20 @@ void MainWindow::handleReceivedData(const int8_t* data, size_t len)
     });
 }
 
-// MainWindow.cpp - processDemod
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-    if (!m_palDecoder || !palFrameBuffer || !m_audioOutput || samples.size() > 10000000) {
+    if (!m_palDecoder || !m_audioDemodulator || !palFrameBuffer || !m_audioOutput) {
         return;
     }
 
     palFrameBuffer->addBuffer(samples);
-
-    // AUDIO PROCESSING - her 1/4 frame
-    qsizetype quarterFrameSize = palFrameBuffer->targetSize() / 4;
-    if (palFrameBuffer->size() >= quarterFrameSize) {
-        int expectedAudio = 0;
-        if (audioDemodulationInProgress.testAndSetAcquire(expectedAudio, 1)) {
-            auto audioSamples = palFrameBuffer->getSamples(quarterFrameSize);
-            if (!audioSamples.empty() && audioSamples.size() < 5000000) {
-                auto audioPtr = std::make_shared<std::vector<std::complex<float>>>(
-                    std::move(audioSamples)
-                    );
-                startPalAudioProcessing(audioPtr);
-            } else {
-                audioDemodulationInProgress.storeRelease(0);
-            }
-        }
-    }
 
     // VIDEO PROCESSING - tam frame (40ms = 1 PAL frame)
     if (palFrameBuffer->isFrameReady()) {
         int expectedVideo = 0;
         if (palDemodulationInProgress.testAndSetAcquire(expectedVideo, 1)) {
             auto fullFrame = palFrameBuffer->getFrame();
-            if (!fullFrame.empty() && fullFrame.size() < 10000000) {
+            if (!fullFrame.empty()) {
                 auto framePtr = std::make_shared<std::vector<std::complex<float>>>(
                     std::move(fullFrame)
                     );
@@ -1018,19 +1000,33 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
             }
         }
     }
+
+    if (m_audioDemodulator && m_audioDemodulator->getAudioEnabled()) {
+        // AUDIO PROCESSING - her 1/4 frame
+        qsizetype quarterFrameSize = palFrameBuffer->targetSize() / 4;
+        if (palFrameBuffer->size() >= quarterFrameSize) {
+            int expectedAudio = 0;
+            if (audioDemodulationInProgress.testAndSetAcquire(expectedAudio, 1)) {
+                auto audioSamples = palFrameBuffer->getSamples(quarterFrameSize);
+                if (!audioSamples.empty()) {
+                    auto audioPtr = std::make_shared<std::vector<std::complex<float>>>(
+                        std::move(audioSamples)
+                        );
+                    startPalAudioProcessing(audioPtr);
+                } else {
+                    audioDemodulationInProgress.storeRelease(0);
+                }
+            }
+        }
+    }
 }
 
 void MainWindow::startPalAudioProcessing(std::shared_ptr<std::vector<std::complex<float>>> audioPtr)
 {
     QtConcurrent::run(QThreadPool::globalInstance(), [this, audioPtr]() {
         AtomicGuard guard(audioDemodulationInProgress);
-
-        try {
-            if (audioPtr->size() > 5000000) {
-                qCritical() << "Audio frame too large:" << audioPtr->size();
-                return;
-            }
-            if (m_audioDemodulator && m_audioDemodulator->getAudioEnabled()) {
+        try {          
+            if (m_audioDemodulator) {
                 m_audioDemodulator->processSamples(*audioPtr);
             }
         }
@@ -1049,15 +1045,11 @@ void MainWindow::startPalVideoProcessing(std::shared_ptr<std::vector<std::comple
 {
     QtConcurrent::run(m_threadPool, [this, framePtr]() {
         AtomicGuard guard(palDemodulationInProgress);
-
-        try {
-            if (framePtr->size() > 10000000) {
-                qCritical() << "Video frame too large:" << framePtr->size();
-                return;
-            }
+        try {          
             if(m_palDecoder)
+            {
                 m_palDecoder->processSamples(*framePtr);
-
+            }
         }
         catch (const std::exception& e) {
             qCritical() << "PAL video demodulation error:" << e.what();
