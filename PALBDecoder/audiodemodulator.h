@@ -54,7 +54,6 @@ private:
     bool m_audioEnabled;
 
     // Stats
-    uint64_t m_totalSamples;
     uint64_t m_audioBuffersEmitted;
 
     // Helper functions

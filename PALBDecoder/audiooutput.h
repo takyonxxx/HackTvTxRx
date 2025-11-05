@@ -10,25 +10,25 @@
 #include <QWaitCondition>
 #include <vector>
 #include <atomic>
-#include <deque>
 
 class AudioOutput : public QObject
 {
     Q_OBJECT
+
 public:
     explicit AudioOutput(QObject *parent = nullptr);
     ~AudioOutput();
 
     bool initializeAudio();
     void stop();
+    void enqueueAudio(const std::vector<float>& samples);
 
     int queueSize() const;
     double queueDuration() const;
-    int sampleRate() const { return SAMPLE_RATE; }
+    int sampleRate() const { return m_format.sampleRate(); }
     bool isRunning() const { return m_running.load(); }
 
 public slots:
-    void enqueueAudio(const std::vector<float>& samples);
     void setVolume(int value);
 
 private slots:
@@ -36,31 +36,37 @@ private slots:
 
 private:
     void audioWriterLoop();
-    void processAudioChunk(const std::vector<float>& audioData);
+    void processAudio(const std::vector<float>& audioData);
 
     // Audio configuration
     static constexpr int SAMPLE_RATE = 48000;
     static constexpr int CHANNEL_COUNT = 2;
-    static constexpr int MIN_BUFFER_SAMPLES = 28800;  // 600ms @ 48kHz
-    static constexpr int CHUNK_SIZE = 2400;  // 50ms @ 48kHz
-    static constexpr int MAX_QUEUE_SIZE = 480000;  // 10s
+    static constexpr int MIN_BUFFER_SAMPLES = 14400;  // 300ms @ 48kHz
+    static constexpr int CHUNK_SIZE = 1920;  // 40ms @ 48kHz
+    static constexpr int MAX_QUEUE_SIZE = 480000;       // 10s
+    static constexpr int RESERVE_SIZE = 500000;         // Pre-allocate
 
     // Audio format and device
     QAudioFormat m_format;
+    QAudioFormat m_inputFormat;
     QScopedPointer<QAudioSink> m_audioOutput;
     QIODevice* audioDevice = nullptr;
 
-    // Thread-safe queue using deque
-    std::deque<float> audioQueue;
+    // High-performance circular buffer
+    std::vector<float> audioBuffer;
+    size_t writePos = 0;
+    size_t readPos = 0;
+    size_t bufferSize = 0;
+
     mutable QMutex mutex;
     QWaitCondition queueNotEmpty;
 
     // Worker thread
-    QThread* audioWriterThread;
+    QThread audioWriterThread;
     std::atomic_bool m_running{true};
 
-    // Pre-allocated conversion buffer
-    std::vector<qint16> conversionBuffer;
+    // Processing buffer (pre-allocated)
+    QByteArray outputBuffer;
 };
 
 #endif // AUDIOOUTPUT_H
