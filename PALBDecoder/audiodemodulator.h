@@ -20,6 +20,7 @@ public:
     // Processing functions
     void processSamples(const int8_t* data, size_t len);
     void processSamples(const std::vector<std::complex<float>>& samples);
+    std::vector<float> demodulateAudio(const std::vector<std::complex<float>>& samples);
 
     // Controls
     void setAudioGain(float gain) { m_audioGain = gain; }
@@ -27,6 +28,8 @@ public:
 
     float getAudioGain() const { return m_audioGain; }
     bool getAudioEnabled() const { return m_audioEnabled; }
+
+    double getSampleRate() const;
 
 signals:
     void audioReady(const std::vector<float>& audioSamples);
@@ -38,15 +41,11 @@ private:
     static constexpr int AUDIO_BUFFER_SIZE = 960;        // 20ms @ 48kHz
     static constexpr double AUDIO_CARRIER = 5.5e6;       // 5.5 MHz
     static constexpr double FM_DEVIATION = 6.0e6;        // 6 MHz
-
     // Audio decimation: 16 MHz → 48 kHz ≈ 333
     static constexpr int AUDIO_DECIM = 333;
-
-    // Filter taps
     static constexpr int FILTER_TAPS = 65;
 
     // Thread safety
-    QMutex m_processMutex;
 
     // Audio filters (FIR)
     std::vector<float> m_audioFilterTaps;
@@ -64,6 +63,12 @@ private:
     // Settings
     float m_audioGain;
     bool m_audioEnabled;
+
+    QMutex m_processMutex;
+    mutable QRecursiveMutex m_mutex;
+
+    double sampleRate;
+    double fmDeviation;
 
     // Helper functions
     void initFilters();

@@ -10,10 +10,12 @@
 
 AudioDemodulator::AudioDemodulator(QObject *parent)
     : QObject(parent)
-    , m_audioGain(1.0f)
-    , m_audioEnabled(true)
     , m_lastPhase(0.0f)
     , m_audioPhase(0.0)
+    , m_audioGain(1.0f)
+    , m_audioEnabled(true)
+    , sampleRate(SAMP_RATE)
+    , fmDeviation(FM_DEVIATION)
 {
     m_audioBuffer.reserve(AUDIO_BUFFER_SIZE + 100);
 
@@ -81,25 +83,48 @@ std::vector<float> AudioDemodulator::designLowPassFIR(
 // ============================================================================
 // FIR FILTER APPLICATION
 // ============================================================================
+
 std::vector<float> AudioDemodulator::applyFIRFilter(
     const std::vector<float>& signal,
     const std::vector<float>& coeffs)
 {
-    if (signal.empty() || coeffs.empty()) return signal;
+    if (signal.empty() || coeffs.empty()) {
+        return std::vector<float>();
+    }
 
-    std::vector<float> filtered(signal.size());
-    int half = coeffs.size() / 2;
+    const size_t signalSize = signal.size();
+    const size_t filterSize = coeffs.size();
+    const int halfTaps = filterSize / 2;
 
-    for (size_t i = 0; i < signal.size(); i++) {
+    std::vector<float> filtered(signalSize);
+
+    for (size_t i = 0; i < halfTaps && i < signalSize; i++) {
         float sum = 0.0f;
-
-        for (size_t j = 0; j < coeffs.size(); j++) {
-            int idx = static_cast<int>(i) - half + j;
-            if (idx >= 0 && idx < static_cast<int>(signal.size())) {
+        for (size_t j = 0; j < filterSize; j++) {
+            int idx = i - halfTaps + j;
+            if (idx >= 0 && idx < static_cast<int>(signalSize)) {
                 sum += signal[idx] * coeffs[j];
             }
         }
+        filtered[i] = sum;
+    }
 
+    for (size_t i = halfTaps; i < signalSize - halfTaps; i++) {
+        float sum = 0.0f;
+        for (size_t j = 0; j < filterSize; j++) {
+            sum += signal[i - halfTaps + j] * coeffs[j];
+        }
+        filtered[i] = sum;
+    }
+
+    for (size_t i = signalSize - halfTaps; i < signalSize; i++) {
+        float sum = 0.0f;
+        for (size_t j = 0; j < filterSize; j++) {
+            int idx = i - halfTaps + j;
+            if (idx >= 0 && idx < static_cast<int>(signalSize)) {
+                sum += signal[idx] * coeffs[j];
+            }
+        }
         filtered[i] = sum;
     }
 
@@ -109,6 +134,7 @@ std::vector<float> AudioDemodulator::applyFIRFilter(
 // ============================================================================
 // FREQUENCY SHIFT
 // ============================================================================
+
 std::vector<std::complex<float>> AudioDemodulator::frequencyShift(
     const std::vector<std::complex<float>>& signal,
     double shiftFreq)
@@ -116,20 +142,17 @@ std::vector<std::complex<float>> AudioDemodulator::frequencyShift(
     if (std::abs(shiftFreq) < 1.0) return signal;
 
     std::vector<std::complex<float>> shifted(signal.size());
-    double phaseInc = 2.0 * M_PI * shiftFreq / SAMP_RATE;
-    double phase = m_audioPhase;
+    double phaseInc = 2.0 * M_PI * shiftFreq / sampleRate;
+    double phase = 0.0;
 
     for (size_t i = 0; i < signal.size(); i++) {
         std::complex<float> shift(std::cos(phase), std::sin(phase));
         shifted[i] = signal[i] * shift;
         phase += phaseInc;
 
-        // Keep phase in range
         if (phase > 2.0 * M_PI) phase -= 2.0 * M_PI;
         if (phase < -2.0 * M_PI) phase += 2.0 * M_PI;
     }
-
-    m_audioPhase = phase; // Save phase for next call
 
     return shifted;
 }
@@ -150,6 +173,7 @@ float AudioDemodulator::unwrapPhase(float phase, float lastPhase)
 // ============================================================================
 // FM DEMODULATION - ATAN2 METHOD
 // ============================================================================
+
 std::vector<float> AudioDemodulator::fmDemodulateAtan2(
     const std::vector<std::complex<float>>& signal)
 {
@@ -157,16 +181,17 @@ std::vector<float> AudioDemodulator::fmDemodulateAtan2(
 
     std::vector<float> demod(signal.size());
 
-    for (size_t i = 0; i < signal.size(); i++) {
-        // Extract phase using atan2
-        float phase = std::atan2(signal[i].imag(), signal[i].real());
+    float maxMag = 0;
+    for (size_t i = 0; i < std::min<size_t>(1000, signal.size()); i++) {
+        float mag = std::abs(signal[i]);
+        maxMag = std::max(maxMag, mag);
+    }
 
-        // Unwrap phase to get continuous phase difference
+    for (size_t i = 0; i < signal.size(); i++) {
+        float phase = std::atan2(signal[i].imag(), signal[i].real());
         float delta = unwrapPhase(phase, m_lastPhase);
 
-        // Convert phase difference to frequency deviation
-        // Formula: f = (delta * sampleRate) / (2 * pi * fmDeviation)
-        demod[i] = delta * SAMP_RATE / (2.0f * M_PI * FM_DEVIATION);
+        demod[i] = delta * sampleRate / (2.0f * M_PI * fmDeviation);
 
         m_lastPhase = phase;
     }
@@ -177,13 +202,26 @@ std::vector<float> AudioDemodulator::fmDemodulateAtan2(
 // ============================================================================
 // LOW-PASS FILTER
 // ============================================================================
+
 std::vector<float> AudioDemodulator::lowPassFilter(
     const std::vector<float>& signal,
     float cutoffFreq)
 {
     if (signal.empty()) return signal;
 
-    return applyFIRFilter(signal, m_audioFilterTaps);
+    if (signal.size() > 10000000) {
+        qCritical() << "Signal too large for filtering:" << signal.size();
+        return std::vector<float>();
+    }
+
+    try {
+        std::vector<float> coeffs = designLowPassFIR(65, cutoffFreq, sampleRate);
+        return applyFIRFilter(signal, coeffs);
+    }
+    catch (const std::exception& e) {
+        qCritical() << "Filter error:" << e.what();
+        return std::vector<float>();
+    }
 }
 
 // ============================================================================
@@ -284,4 +322,29 @@ void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& sa
     } catch (const std::exception& e) {
         qCritical() << "Audio processing error:" << e.what();
     }
+}
+
+std::vector<float> AudioDemodulator::demodulateAudio(const std::vector<std::complex<float> > &samples)
+{
+    QMutexLocker lock(&m_mutex);
+
+    if (samples.empty() || AUDIO_CARRIER <= 0) {
+        return std::vector<float>();
+    }
+
+    auto audioSignal = frequencyShift(samples, -AUDIO_CARRIER);
+    auto audio = fmDemodulateAtan2(audioSignal);
+    audio = lowPassFilter(audio, 15000.0f);
+
+    if (sampleRate > 48000) {
+        int audioDecim = static_cast<int>(sampleRate / 48000);
+        audio = decimate(audio, audioDecim);
+    }
+
+    return audio;
+}
+
+double AudioDemodulator::getSampleRate() const
+{
+    return sampleRate;
 }

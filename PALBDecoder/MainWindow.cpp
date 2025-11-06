@@ -224,20 +224,18 @@ void MainWindow::setupUI()
 
     QSlider* volumeSlider = new QSlider(Qt::Horizontal, this);
     volumeSlider->setRange(0, 100);
-    volumeSlider->setValue(50);
+    volumeSlider->setValue(10);
     volumeSlider->setTickPosition(QSlider::TicksBelow);
     volumeSlider->setTickInterval(10);
-    connect(volumeSlider,  &QSlider::valueChanged,
-            [this](double value) {
-                 m_audioOutput->setVolume(value);
-            });
+    if(m_audioOutput)
+        m_audioOutput->setVolume(10);
 
-    QLabel* volumeLabel = new QLabel("50%", this);
+    QLabel* volumeLabel = new QLabel("10%", this);
     volumeLabel->setMinimumWidth(50);
     volumeLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-
-    connect(volumeSlider, &QSlider::valueChanged,
-            [volumeLabel](int value) {
+    connect(volumeSlider,  &QSlider::valueChanged,
+            [this, volumeLabel](int value) {
+                m_audioOutput->setVolume(value);
                 volumeLabel->setText(QString("%1%").arg(value));
             });
 
@@ -938,15 +936,7 @@ void MainWindow::initHackRF()
                 }, Qt::QueuedConnection);
         }
     });
-
-    qDebug() << "HackRF initialized:";
-    qDebug() << "  Sample rate:" << m_currentSampleRate << "Hz";
-    qDebug() << "  Frequency:" << m_currentFrequency << "Hz ("
-             << (m_currentFrequency / 1000000) << "MHz)";
-    qDebug() << "  Circular buffer size:" << (64 * 1024 * 1024) << "bytes";
-
     m_hackRfRunning = false;
-    qDebug() << "HackRF ready. Click 'Start HackRF' button to begin.";
 }
 
 void MainWindow::handleReceivedData(const int8_t* data, size_t len)
@@ -1028,6 +1018,10 @@ void MainWindow::startPalAudioProcessing(std::shared_ptr<std::vector<std::comple
         try {          
             if (m_audioDemodulator) {
                 m_audioDemodulator->processSamples(*audioPtr);
+                // auto audio = m_audioDemodulator->demodulateAudio(*audioPtr);
+                // if (!audio.empty()) {
+                //     m_audioOutput->enqueueAudio(std::move(audio));
+                // }
             }
         }
         catch (const std::exception& e) {
