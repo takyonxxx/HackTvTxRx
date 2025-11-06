@@ -31,6 +31,8 @@ public:
 
     double getSampleRate() const;
 
+    void setSampleRate(double newSampleRate);
+
 signals:
     void audioReady(const std::vector<float>& audioSamples);
 
@@ -38,7 +40,7 @@ private:
     // Constants (PAL-B specific)
     static constexpr int SAMP_RATE = 16000000;           // 16 MHz
     static constexpr int AUDIO_SAMP_RATE = 48000;        // 48 kHz output
-    static constexpr int AUDIO_BUFFER_SIZE = 960;        // 20ms @ 48kHz
+    static constexpr int AUDIO_BUFFER_SIZE = 480;        // 20ms @ 48kHz
     static constexpr double AUDIO_CARRIER = 5.5e6;       // 5.5 MHz
     static constexpr double FM_DEVIATION = 6.0e6;        // 6 MHz
     // Audio decimation: 16 MHz → 48 kHz ≈ 333
@@ -66,6 +68,7 @@ private:
 
     QMutex m_processMutex;
     mutable QRecursiveMutex m_mutex;
+    QMutex m_phaseMutex;
 
     double sampleRate;
     double fmDeviation;

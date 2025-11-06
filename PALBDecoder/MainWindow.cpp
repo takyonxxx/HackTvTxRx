@@ -16,7 +16,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_shuttingDown(false)
     , m_hackRfRunning(false)
     , m_currentFrequency(DEFAULT_FREQ)
-    , m_currentSampleRate(16000000)
+    , m_currentSampleRate(SAMP_RATE)
 {
     m_threadPool = new QThreadPool(this);
     if (m_threadPool) {
@@ -29,6 +29,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_palDecoder = std::make_shared<PALDecoder>(this);
     m_audioDemodulator = std::make_unique<AudioDemodulator>(this);
     m_audioOutput = std::make_unique<AudioOutput>();
+
+    m_audioDemodulator->setSampleRate(m_currentSampleRate);
 
     // Connect frame ready signal
     connect(m_palDecoder.get(), &PALDecoder::frameReady,

@@ -181,20 +181,23 @@ std::vector<float> AudioDemodulator::fmDemodulateAtan2(
 
     std::vector<float> demod(signal.size());
 
-    float maxMag = 0;
-    for (size_t i = 0; i < std::min<size_t>(1000, signal.size()); i++) {
-        float mag = std::abs(signal[i]);
-        maxMag = std::max(maxMag, mag);
-    }
+    // Thread-safe phase access
+    QMutexLocker phaseLock(&m_phaseMutex);
+    float currentPhase = m_lastPhase;
+    phaseLock.unlock();
 
     for (size_t i = 0; i < signal.size(); i++) {
         float phase = std::atan2(signal[i].imag(), signal[i].real());
-        float delta = unwrapPhase(phase, m_lastPhase);
+        float delta = unwrapPhase(phase, currentPhase);
 
         demod[i] = delta * sampleRate / (2.0f * M_PI * fmDeviation);
 
-        m_lastPhase = phase;
+        currentPhase = phase;
     }
+
+    // Save last phase for next batch
+    phaseLock.relock();
+    m_lastPhase = currentPhase;
 
     return demod;
 }
@@ -250,27 +253,25 @@ void AudioDemodulator::emitAudioBuffer(const std::vector<float>& audio)
 {
     if (audio.empty()) return;
 
-    static QElapsedTimer timer;
-    static bool timerStarted = false;
-
-    if (!timerStarted) {
-        timer.start();
-        timerStarted = true;
-    }
+    static constexpr int CHUNK_SIZE = 480; // 10ms @ 48kHz
 
     // Add to buffer
     for (float sample : audio) {
-        // Apply gain and clip
         float processed = sample * m_audioGain;
         processed = std::clamp(processed, -1.0f, 1.0f);
-
         m_audioBuffer.push_back(processed);
+    }
 
-        // Emit when buffer is full
-        if (m_audioBuffer.size() >= AUDIO_BUFFER_SIZE) {
-            emit audioReady(m_audioBuffer);
-            m_audioBuffer.clear();
-        }
+    // Emit fixed-size chunks
+    while (m_audioBuffer.size() >= CHUNK_SIZE) {
+        std::vector<float> chunk(m_audioBuffer.begin(),
+                                 m_audioBuffer.begin() + CHUNK_SIZE);
+        emit audioReady(chunk);
+
+        m_audioBuffer.erase(m_audioBuffer.begin(),
+                            m_audioBuffer.begin() + CHUNK_SIZE);
+
+        qDebug() << "✓ Emitted 480 samples (10ms), remaining:" << m_audioBuffer.size();
     }
 }
 
@@ -280,6 +281,8 @@ void AudioDemodulator::emitAudioBuffer(const std::vector<float>& audio)
 void AudioDemodulator::processSamples(const int8_t* data, size_t len)
 {
     if (!data || len == 0 || !m_audioEnabled) return;
+
+    QMutexLocker locker(&m_processMutex);
 
     // Convert int8_t to complex<float>
     std::vector<std::complex<float>> samples;
@@ -296,27 +299,38 @@ void AudioDemodulator::processSamples(const int8_t* data, size_t len)
 
 void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& samples)
 {
-    QMutexLocker locker(&m_processMutex); // THREAD-SAFE
+    if (!m_audioEnabled || samples.empty()) return;
 
     if (!m_audioEnabled || samples.empty()) return;
 
     try {
-        // EXACT SAME PIPELINE AS PALBDemodulator::demodulateAudioOnly!
+        static int callCount = 0;
+        callCount++;
 
-        // 1. Frequency shift to isolate audio carrier
+        qDebug() << "=== Audio Process #" << callCount << "===";
+        qDebug() << "Input samples:" << samples.size();
+
+        // 1. Frequency shift
         auto audioSignal = frequencyShift(samples, -AUDIO_CARRIER);
 
-        // 2. FM demodulate using atan2 method
+        // 2. FM demodulate
         auto audio = fmDemodulateAtan2(audioSignal);
+        qDebug() << "After demod:" << audio.size();
 
-        // 3. Low-pass filter (15 kHz)
+        // 3. Two-stage decimation
+        int stage1Factor = static_cast<int>(SAMP_RATE / 192000.0);
+        audio = lowPassFilter(audio, 76800.0f);
+        audio = decimate(audio, stage1Factor);
+        qDebug() << "After stage1 (÷" << stage1Factor << "):" << audio.size();
+
+        audio = lowPassFilter(audio, 19200.0f);
+        audio = decimate(audio, 4);
+        qDebug() << "After stage2 (÷4):" << audio.size();
+
         audio = lowPassFilter(audio, 15000.0f);
+        qDebug() << "Final audio samples:" << audio.size();
 
-        // 4. Decimate to 48 kHz
-        int audioDecim = static_cast<int>(SAMP_RATE / 48000.0);
-        audio = decimate(audio, audioDecim);
-
-        // 5. Emit audio buffer
+        // 5. Emit
         emitAudioBuffer(audio);
 
     } catch (const std::exception& e) {
@@ -324,7 +338,8 @@ void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& sa
     }
 }
 
-std::vector<float> AudioDemodulator::demodulateAudio(const std::vector<std::complex<float> > &samples)
+std::vector<float> AudioDemodulator::demodulateAudio(
+    const std::vector<std::complex<float>>& samples)
 {
     QMutexLocker lock(&m_mutex);
 
@@ -334,11 +349,29 @@ std::vector<float> AudioDemodulator::demodulateAudio(const std::vector<std::comp
 
     auto audioSignal = frequencyShift(samples, -AUDIO_CARRIER);
     auto audio = fmDemodulateAtan2(audioSignal);
-    audio = lowPassFilter(audio, 15000.0f);
 
     if (sampleRate > 48000) {
-        int audioDecim = static_cast<int>(sampleRate / 48000);
-        audio = decimate(audio, audioDecim);
+        // Multi-stage decimation
+        double currentRate = sampleRate;
+        const double targetRate = 48000.0;
+
+        while (currentRate > targetRate * 1.5) {
+            // Her adımda maksimum 16x decimate et
+            int factor = std::min(16, static_cast<int>(currentRate / targetRate));
+            if (factor < 2) break;
+
+            // Anti-aliasing filter
+            float cutoff = (currentRate / factor / 2.0f) * 0.8f;
+            audio = lowPassFilter(audio, cutoff);
+            audio = decimate(audio, factor);
+
+            currentRate /= factor;
+        }
+
+        // Final low-pass at 15 kHz
+        audio = lowPassFilter(audio, 15000.0f);
+    } else {
+        audio = lowPassFilter(audio, 15000.0f);
     }
 
     return audio;
@@ -347,4 +380,9 @@ std::vector<float> AudioDemodulator::demodulateAudio(const std::vector<std::comp
 double AudioDemodulator::getSampleRate() const
 {
     return sampleRate;
+}
+
+void AudioDemodulator::setSampleRate(double newSampleRate)
+{
+    sampleRate = newSampleRate;
 }
