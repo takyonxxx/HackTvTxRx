@@ -41,14 +41,14 @@ HackRfTcp.exe --sample-rate 10000000 -f 100000000
 ```
 
 The server will start with:
-- Data streaming on port **7355**
-- Control interface on port **7356**
+- Data streaming on port **5000**
+- Control interface on port **5001**
 
 ### 2. Control HackRF remotely
 
 **Using telnet:**
 ```bash
-telnet 192.168.1.100 7356
+telnet 192.168.1.100 5001
 SET_FREQ:433920000
 SET_SAMPLE_RATE:10000000
 SET_VGA_GAIN:30
@@ -60,7 +60,7 @@ GET_STATUS
 import socket
 
 s = socket.socket()
-s.connect(('192.168.1.100', 7356))
+s.connect(('192.168.1.100', 5001))
 s.send(b'SET_FREQ:433920000\n')
 print(s.recv(1024).decode())
 s.close()
@@ -72,7 +72,7 @@ import socket
 import numpy as np
 
 data_sock = socket.socket()
-data_sock.connect(('192.168.1.100', 7355))
+data_sock.connect(('192.168.1.100', 5000))
 
 while True:
     data = data_sock.recv(262144)
@@ -87,8 +87,8 @@ while True:
 HackRfTcp.exe [OPTIONS]
 
 Options:
-  -d, --data-port <port>       Data streaming port (default: 7355)
-  -c, --control-port <port>    Control port (default: 7356)
+  -d, --data-port <port>       Data streaming port (default: 5000)
+  -c, --control-port <port>    Control port (default: 5001)
   -f, --frequency <freq>       Initial frequency in Hz (default: 100000000)
   --sample-rate <rate>         Sample rate in Hz (default: 16000000)
   --vga-gain <gain>            VGA gain 0-62 (default: 40)
@@ -100,7 +100,7 @@ Options:
 
 ## Control Commands
 
-Connect to control port (7356) and send these commands:
+Connect to control port (5001) and send these commands:
 
 | Command | Description | Example |
 |---------|-------------|---------|
@@ -119,7 +119,7 @@ Connect to control port (7356) and send these commands:
 ```python
 import socket
 
-def control_hackrf(host, port=7356):
+def control_hackrf(host, port=5001):
     s = socket.socket()
     s.connect((host, port))
     
@@ -148,7 +148,7 @@ control_hackrf('192.168.1.100')
 import socket
 import numpy as np
 
-def receive_iq_data(host, port=7355, duration=10):
+def receive_iq_data(host, port=5000, duration=10):
     s = socket.socket()
     s.connect((host, port))
     
