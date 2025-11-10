@@ -203,7 +203,7 @@ MIT License - See LICENSE file for details
 
 ## Author
 
-Your Name - [GitHub](https://github.com/yourusername)
+Türkay Biliyor - [GitHub](https://github.com/takyonxxx)
 
 ## Contributing
 
