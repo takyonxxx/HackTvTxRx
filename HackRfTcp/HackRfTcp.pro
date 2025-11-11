@@ -46,6 +46,8 @@ qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
 #C:\Qt\6.10.0\mingw_64\bin\windeployqt.exe C:\Users\MSI\Desktop\buildHackRfTcp\release\HackRfTcp.exe
+#C:\Qt\6.10.0\mingw_64\bin\windeployqt.exe C:\Users\turka\Desktop\build-HackRfTcp\release\HackRfTcp.exe
+
 
 DISTFILES += \
     README.md
