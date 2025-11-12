@@ -104,7 +104,7 @@ typedef struct {
 
 class HACKTVLIB_EXPORT HackTvLib : public QObject
 {
-    Q_OBJECT  // ← Bu macro MOC için gerekli!
+    Q_OBJECT
 
 public:
     explicit HackTvLib(QObject *parent = nullptr);
@@ -132,35 +132,58 @@ public:
     void setTxAmpGain(unsigned int tx_amp_gain);
     void setRxAmpGain(unsigned int rx_amp_gain);
 
+    bool isInitialized() const {
+        return (s != nullptr);
+    }
+
+    bool isDeviceReady() const {
+        return (hackRfDevice != nullptr);
+    }
+
 private slots:
     void emitReceivedData(const int8_t *data, size_t data_len);
     void dataReceived(const int8_t* data, size_t data_len);
 
 private:
+    // ========================================
+    // MEMBER VARIABLES - INITIALIZATION ORDER MATTERS!
+    // Bunlar class definition order'ında initialize edilir
+    // ========================================
+
+    // Callbacks
     LogCallback m_logCallback;
     DataCallback m_dataCallback;
+
+    // Threading
     std::thread m_txThread;
     std::mutex m_mutex;
-    std::atomic<bool> m_abort;
-    std::atomic<int> m_signal;
+    std::atomic<bool> m_abort{false};
+    std::atomic<int> m_signal{0};
+
+    // Arguments
     std::vector<char*> m_argv;
 
-    // SADECE BU İKİ SATIR EKLENDİ (Global değişkenler sınıfa taşındı - DLL entry point sorunu için)
-    hacktv_t* s;
-    rxtx_mode m_rxTxMode;
+    // Configuration
+    hacktv_t* s = nullptr;
+    rxtx_mode m_rxTxMode = RX_MODE;
+    bool micEnabled = false;
+
+    // Devices - CRITICAL: Initialize to nullptr!
+    HackRfDevice* hackRfDevice = nullptr;
+    RTLSDRDevice* rtlSdrDevice = nullptr;
+
+    // ========================================
+    // PRIVATE METHODS
+    // ========================================
 
     bool openDevice();
     bool setVideo();
     bool initAv();
     bool parseArguments();
-    bool micEnabled = false;
     void log(const char* format, ...);
     void cleanupArgv();
     void rfTxLoop();
     void rfRxLoop();
-
-    HackRfDevice *hackRfDevice{};
-    RTLSDRDevice *rtlSdrDevice{};
 };
 
 #endif // HACKTVLIB_H

@@ -20,6 +20,24 @@ win32 {
     LIBS += -L$$WIN_LIB_DIR -lHackTvLib
 }
 
+macx {
+    # Path to the library directory for macOS
+    MACOS_LIB_DIR = $$absolute_path($$PARENT_DIR/lib/macos)
+    # Include path for headers
+    INCLUDEPATH += $$PARENT_DIR/HackTvLib
+    # Link to the library with full path
+    LIBS += -L$$MACOS_LIB_DIR -lHackTvLib
+}
+
+linux {
+    # Path to the library directory for Linux
+    LINUX_LIB_DIR = $$absolute_path($$PARENT_DIR/lib/linux)
+    # Include path for headers
+    INCLUDEPATH += $$PARENT_DIR/HackTvLib
+    # Link to the library with full path
+    LIBS += -L$$LINUX_LIB_DIR -lHackTvLib
+}
+
 SOURCES += \
     audiodemodulator.cpp \
     audiooutput.cpp \

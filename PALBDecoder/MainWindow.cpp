@@ -743,7 +743,7 @@ void MainWindow::toggleHackRF()
 {
     if (m_hackRfRunning) {
         // ========== STOP HackRF ==========
-        qDebug() << "Stopping HackRF...";
+        qDebug() << "=== STOPPING HackRF ===";
 
         if (m_hackTvLib) {
             m_hackTvLib->stop();
@@ -754,7 +754,7 @@ void MainWindow::toggleHackRF()
         // Reset sample rate to 16 MHz
         m_currentSampleRate = 16000000;
 
-        // Update combobox to 16 MHz
+        // Update combobox
         if (m_sampleRateComboBox) {
             for (int i = 0; i < m_sampleRateComboBox->count(); i++) {
                 if (m_sampleRateComboBox->itemData(i).toInt() == 16000000) {
@@ -766,18 +766,24 @@ void MainWindow::toggleHackRF()
             }
         }
 
-        qDebug() << "Sample rate reset to 16 MHz";
-
         m_startStopButton->setText("Start HackRF");
-        m_startStopButton->setStyleSheet("QPushButton { background-color: #55ff55; color: black; padding: 10px; font-weight: bold; }");
-        qDebug() << "HackRF stopped";
+        m_startStopButton->setStyleSheet(
+            "QPushButton { background-color: #55ff55; color: black; "
+            "padding: 10px; font-weight: bold; }");
+        qDebug() << "✓ HackRF stopped successfully";
 
     } else {
         // ========== START HackRF ==========
-        qDebug() << "Starting HackRF...";
+        qDebug() << "=== STARTING HackRF ===";
 
+        // ===== VALIDATION CHECKS =====
+
+        // 1. Check if library exists
         if (!m_hackTvLib) {
-            QMessageBox::critical(this, "Error", "HackTvLib not initialized!");
+            qCritical() << "❌ m_hackTvLib is NULL!";
+            QMessageBox::critical(this, "Error",
+                                  "HackTvLib not initialized!\n\n"
+                                  "This is a critical error. Please restart the application.");
             return;
         }
 
@@ -796,7 +802,7 @@ void MainWindow::toggleHackRF()
             }
         }
 
-        // Configure HackRF with 16 MHz sample rate
+        // Configure arguments
         QStringList args;
         args << "--rx-tx-mode" << "rx";
         args << "-a";
@@ -810,26 +816,59 @@ void MainWindow::toggleHackRF()
             stdArgs.push_back(arg.toStdString());
         }
 
+        qDebug() << "Setting arguments...";
         m_hackTvLib->setArguments(stdArgs);
 
-        // Start HackRF
-        qDebug() << "Starting HackRF device...";
-        if (m_hackTvLib->start()) {
+        // ===== START DEVICE =====
+
+        qDebug() << "Calling start()...";
+        qDebug() << "  Frequency:" << (m_currentFrequency / 1000000) << "MHz";
+        qDebug() << "  Sample rate:" << m_currentSampleRate << "Hz";
+
+        bool startSuccess = false;
+        try {
+            startSuccess = m_hackTvLib->start();
+        } catch (const std::exception& e) {
+            qCritical() << "❌ Exception calling start():" << e.what();
+            QMessageBox::critical(this, "Error",
+                                  QString("Failed to start HackRF!\n\nException: %1")
+                                      .arg(e.what()));
+            return;
+        } catch (...) {
+            qCritical() << "❌ Unknown exception calling start()";
+            QMessageBox::critical(this, "Error",
+                                  "Failed to start HackRF!\n\nUnknown exception occurred.");
+            return;
+        }
+
+        if (startSuccess) {
+            // SUCCESS!
             m_hackRfRunning = true;
 
+            // Set gains
             m_hackTvLib->setLnaGain(40);
             m_hackTvLib->setVgaGain(20);
             m_hackTvLib->setRxAmpGain(14);
 
             m_startStopButton->setText("Stop HackRF");
-            m_startStopButton->setStyleSheet("QPushButton { background-color: #ff5555; color: white; padding: 10px; font-weight: bold; }");
-            qDebug() << "HackRF started successfully";
-            qDebug() << "Frequency:" << (m_currentFrequency / 1000000) << "MHz";
-            qDebug() << "Sample rate:" << m_currentSampleRate << "Hz (16 MHz)";
+            m_startStopButton->setStyleSheet(
+                "QPushButton { background-color: #ff5555; color: white; "
+                "padding: 10px; font-weight: bold; }");
+
+            qDebug() << "✓✓✓ HackRF started successfully ✓✓✓";
+
         } else {
-            // Failed to start - stop processor thread
-            qWarning() << "Failed to start HackRF!";           
-            QMessageBox::critical(this, "Error", "Failed to start HackRF. Check device connection.");
+            // FAILED TO START
+            qCritical() << "❌ start() returned false";
+
+            QMessageBox::critical(this, "Error",
+                                  "Failed to start HackRF!\n\n"
+                                  "Possible causes:\n"
+                                  "• HackRF device not connected\n"
+                                  "• Device already in use\n"
+                                  "• USB permissions issue\n"
+                                  "• Driver problem\n\n"
+                                  "Check the console output for details.");
         }
     }
 }

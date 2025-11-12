@@ -124,15 +124,38 @@ static void print_usage(void)
 
 HackTvLib::HackTvLib(QObject *parent)
     : QObject(parent)
-    , m_abort(false)
-    , m_signal(0)
-    , s(nullptr)
-    , m_rxTxMode(RX_MODE)
-    , micEnabled(false)
-    , hackRfDevice(nullptr)
-    , rtlSdrDevice(nullptr)
+    , m_logCallback()           // 1. Callback (default init)
+    , m_dataCallback()          // 2. Callback (default init)
+    // m_txThread               // 3. (default constructor)
+    // m_mutex                  // 4. (default constructor)
+    , m_abort(false)            // 5. ✓
+    , m_signal(0)               // 6. ✓
+    // m_argv                   // 7. ✓ (default constructor - empty vector)
+    , s(nullptr)                // 8. ✓
+    , m_rxTxMode(RX_MODE)       // 9. ✓
+    , micEnabled(false)         // 10. ✓
+    , hackRfDevice(nullptr)     // 11. ✓
+    , rtlSdrDevice(nullptr)     // 12. ✓
 {
+    fprintf(stderr, "=== HackTvLib Constructor ===\n");
+    fprintf(stderr, "  this = %p\n", (void*)this);
+    fprintf(stderr, "  s = %p\n", (void*)s);
+    fprintf(stderr, "  hackRfDevice = %p\n", (void*)hackRfDevice);
+    fprintf(stderr, "  rtlSdrDevice = %p\n", (void*)rtlSdrDevice);
+    fprintf(stderr, "  m_rxTxMode = %d\n", m_rxTxMode);
+    fprintf(stderr, "  micEnabled = %d\n", micEnabled);
+    fflush(stderr);
 
+    // ✓ EXTRA SAFETY: Tekrar set et
+    hackRfDevice = nullptr;
+    rtlSdrDevice = nullptr;
+    s = nullptr;
+
+    fprintf(stderr, "  After manual reset:\n");
+    fprintf(stderr, "  hackRfDevice = %p\n", (void*)hackRfDevice);
+    fprintf(stderr, "  rtlSdrDevice = %p\n", (void*)rtlSdrDevice);
+    fprintf(stderr, "  s = %p\n", (void*)s);
+    fflush(stderr);
 }
 
 HackTvLib::~HackTvLib()
@@ -1324,27 +1347,79 @@ bool HackTvLib::stop()
 
 bool HackTvLib::start()
 {
+    fprintf(stderr, "\n========================================\n");
+    fprintf(stderr, "HackTvLib::start() - ENTRY\n");
+    fprintf(stderr, "========================================\n");
+    fflush(stderr);
 
-    /* Disable console output buffer in Windows */
 #ifdef WIN32
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 #endif
 
-    if(!s)
-    {
-        s = new hacktv_t();
-        // veya
+    fprintf(stderr, "[1] Checking 's' pointer: %p\n", (void*)s);
+    fflush(stderr);
+
+    if (!s) {
+        fprintf(stderr, "[2] Allocating hacktv_t...\n");
+        fflush(stderr);
+
         s = (hacktv_t*)calloc(1, sizeof(hacktv_t));
+
+        if (!s) {
+            fprintf(stderr, "❌ FATAL: calloc failed!\n");
+            fflush(stderr);
+            return false;
+        }
+
+        fprintf(stderr, "[3] ✓ Allocated at: %p\n", (void*)s);
+        fflush(stderr);
     }
 
-    // Initialize fields
-    s->output_type = strdup("hackrf");
+    fprintf(stderr, "[4] Initializing strings...\n");
+    fflush(stderr);
 
-    /* Default configuration */
+    // Initialize ALL pointers to NULL first
+    s->output_type = nullptr;
+    s->output = nullptr;
+    s->mode = nullptr;
+    s->teletext = nullptr;
+    s->wss = nullptr;
+    s->videocrypt = nullptr;
+    s->videocrypt2 = nullptr;
+    s->videocrypts = nullptr;
+    s->eurocrypt = nullptr;
+    s->sis = nullptr;
+    s->passthru = nullptr;
+    s->raw_bb_file = nullptr;
+    s->antenna = nullptr;
+    s->ffmt = nullptr;
+    s->fopts = nullptr;
+
+    fprintf(stderr, "[5] Calling strdup...\n");
+    fflush(stderr);
+
     s->output_type = strdup("hackrf");
-    s->output = NULL;
+    if (!s->output_type) {
+        fprintf(stderr, "❌ strdup failed for output_type!\n");
+        fflush(stderr);
+        return false;
+    }
+
     s->mode = strdup("b");
+    if (!s->mode) {
+        fprintf(stderr, "❌ strdup failed for mode!\n");
+        fflush(stderr);
+        free(s->output_type);
+        return false;
+    }
+
+    fprintf(stderr, "[6] ✓ Strings allocated\n");
+    fprintf(stderr, "    output_type = %p ('%s')\n", (void*)s->output_type, s->output_type);
+    fprintf(stderr, "    mode = %p ('%s')\n", (void*)s->mode, s->mode);
+    fflush(stderr);
+
+    // Set defaults
     s->samplerate = 16000000;
     s->pixelrate = 0;
     s->level = 1.0;
@@ -1353,21 +1428,14 @@ bool HackTvLib::start()
     s->interlace = 0;
     s->fit_mode = AV_FIT_FIT;
 
-    // Initialize the missing rational_t fields
-    s->min_aspect.num = 4;  // Default 4:3 minimum
+    s->min_aspect.num = 4;
     s->min_aspect.den = 3;
-    s->max_aspect.num = 16; // Default 16:9 maximum
+    s->max_aspect.num = 16;
     s->max_aspect.den = 9;
 
     s->repeat = 0;
     s->shuffle = 0;
     s->verbose = 0;
-    s->teletext = NULL;
-    s->wss = NULL;
-    s->videocrypt = NULL;
-    s->videocrypt2 = NULL;
-    s->videocrypts = NULL;
-    s->eurocrypt = NULL;  // Also missing
     s->syster = 0;
     s->systeraudio = 0;
     s->acp = 0;
@@ -1385,35 +1453,54 @@ bool HackTvLib::start()
     s->mac_audio_quality = MAC_HIGH_QUALITY;
     s->mac_audio_companded = MAC_COMPANDED;
     s->mac_audio_protection = MAC_FIRST_LEVEL_PROTECTION;
-    s->sis = NULL;  // Also might be missing
-    s->swap_iq = 0;  // Missing
-    s->offset = 0;   // Missing
-    s->passthru = NULL;  // Missing
-    s->invert_video = 0;  // Missing
-    s->raw_bb_file = NULL;  // Missing
+    s->swap_iq = 0;
+    s->offset = 0;
+    s->invert_video = 0;
     s->frequency = 0;
     s->amp = 0;
     s->gain = 0;
-    s->antenna = NULL;
     s->file_type = RF_INT16;
     s->raw_bb_blanking_level = 0;
     s->raw_bb_white_level = INT16_MAX;
-    s->secam_field_id = 0;  // Missing
-    s->list_modes = 0;  // Missing
-    s->json = 0;  // Missing
-    s->ffmt = NULL;  // Missing
-    s->fopts = NULL;  // Missing
+    s->secam_field_id = 0;
+    s->list_modes = 0;
+    s->json = 0;
     s->audio_gain = 3.0;
 
     m_rxTxMode = RX_MODE;
     m_abort = false;
     m_signal = 0;
 
+    fprintf(stderr, "[7] Calling log...\n");
+    fflush(stderr);
+
     log("HackTvLib starting.");
 
+    fprintf(stderr, "[8] Parsing arguments...\n");
+    fflush(stderr);
+
     if (!parseArguments()) {
+        fprintf(stderr, "❌ parseArguments failed!\n");
+        fflush(stderr);
         return false;
     }
+
+    fprintf(stderr, "[9] ✓ Arguments parsed\n");
+    fflush(stderr);
+
+    // CRITICAL: Validate output_type
+    if (!s->output_type) {
+        fprintf(stderr, "❌ output_type is NULL!\n");
+        fflush(stderr);
+        return false;
+    }
+
+    fprintf(stderr, "[10] Configuration:\n");
+    fprintf(stderr, "     output_type = '%s'\n", s->output_type);
+    fprintf(stderr, "     frequency = %llu Hz\n", (unsigned long long)s->frequency);
+    fprintf(stderr, "     samplerate = %u Hz\n", s->samplerate);
+    fprintf(stderr, "     mode = %d\n", m_rxTxMode);
+    fflush(stderr);
 
     log("Freq: %.3f MHz, Sample: %.1f MHz, Gain: %d, Amp: %s, RxTx: %s, Device: %s",
         s->frequency / 1e6,
@@ -1423,92 +1510,149 @@ bool HackTvLib::start()
         getRxTxModeString(m_rxTxMode),
         s->output_type);
 
-    if(hackRfDevice)
-    {
-        delete hackRfDevice;
+    fprintf(stderr, "[11] Creating HackRfDevice...\n");
+    fprintf(stderr, "     hackRfDevice pointer = %p\n", (void*)hackRfDevice);
+    fflush(stderr);
+
+    // ❌ GARBAGE VALUE DETECTION - Basit versiyon
+    if (hackRfDevice != nullptr) {
+        // Pointer'ın geçerli bir adres aralığında olup olmadığını kontrol et
+        void* ptr = (void*)hackRfDevice;
+
+        // macOS'ta heap adresleri genellikle 0x100000000 ile 0x7FFFFFFFFFFF arasında
+        if ((uintptr_t)ptr < 0x100000000ULL) {
+            fprintf(stderr, "     ⚠️  INVALID POINTER (%p) - Forcing nullptr\n", ptr);
+            fflush(stderr);
+            hackRfDevice = nullptr;
+        }
+    }
+
+    // Şimdi sadece valid pointer varsa delete et
+    if (hackRfDevice != nullptr) {
+        fprintf(stderr, "     Valid pointer exists, deleting...\n");
+        fflush(stderr);
+
+        try {
+            delete hackRfDevice;
+            fprintf(stderr, "     ✓ Deleted successfully\n");
+            fflush(stderr);
+        } catch (...) {
+            fprintf(stderr, "     ❌ Exception during delete\n");
+            fflush(stderr);
+        }
+
         hackRfDevice = nullptr;
     }
 
-    hackRfDevice = new HackRfDevice();
+    fprintf(stderr, "     Creating new device...\n");
+    fflush(stderr);
+
+    try {
+        hackRfDevice = new HackRfDevice();
+        fprintf(stderr, "     ✓ Created at: %p\n", (void*)hackRfDevice);
+        fflush(stderr);
+    } catch (const std::exception& e) {
+        fprintf(stderr, "     ❌ Exception: %s\n", e.what());
+        fflush(stderr);
+        return false;
+    }
+
+    fprintf(stderr, "[12] ✓ HackRfDevice created: %p\n", (void*)hackRfDevice);
+    fflush(stderr);
+
+    fprintf(stderr, "[13] Setting callback...\n");
+    fflush(stderr);
+
     hackRfDevice->setDataCallback([this](const int8_t* data, size_t len) {
         this->dataReceived(data, len);
     });
 
-    hackRfDevice->setMicEnabled(false);
-    hackRfDevice->setSampleRate(s->samplerate);
-    hackRfDevice->setFrequency(s->frequency);
-    hackRfDevice->setAmpEnable(s->amp);
+    fprintf(stderr, "[14] ✓ Callback set\n");
+    fflush(stderr);
 
-    if(m_rxTxMode == RX_MODE)
-    {
-        log("Entering RX_MODE branch");
+    // DON'T set parameters before starting!
+    // Device is not open yet, so these would fail silently
 
-        if(strcmp(s->output_type, "hackrf") == 0)
-        {
-            if(hackRfDevice->start(rf_mode::RX) != RF_OK)
-            {
-                log("Could not open HackRF at RX mode. Please check the device.");
-                return false;
-            }
-            log("HackTvLib started at RX mode with HackRf.");
-            return true;
-        }
-        else if(strcmp(s->output_type, "rtlsdr") == 0)
-        {
-            rtlSdrDevice = new RTLSDRDevice();
-            rtlSdrDevice->setDataCallback([this](const int8_t* data, size_t len) {
-                this->dataReceived(data, len);
-            });
-            if (rtlSdrDevice->initialize(s->samplerate, s->frequency)) {
-                rtlSdrDevice->start();
-                log("HackTvLib started at RX mode with SdrRtl.");
-                return true;
-            }
-            else
-            {
-                log("Could not open RtlSdr RX. Please check the device.");
-                return false;
-            }
-        }
-    }
-    else if(micEnabled && m_rxTxMode == TX_MODE)
-    {
-        hackRfDevice->setMicEnabled(true);
+    fprintf(stderr, "[15] Checking mode: %d\n", m_rxTxMode);
+    fflush(stderr);
 
-        if(hackRfDevice->start(rf_mode::TX) != RF_OK)
-        {
-            log("Could not open HackRF in TX. Please check the device.");
-            hackRfDevice->setMicEnabled(false);
+    if (m_rxTxMode == RX_MODE) {
+        fprintf(stderr, "[16] === RX MODE ===\n");
+        fflush(stderr);
+
+        if (!s->output_type) {
+            fprintf(stderr, "❌ output_type is NULL!\n");
+            fflush(stderr);
             return false;
         }
 
-        log("HackTvLib started at TX mode. Mic Enabled.");
-        return true;
-    }
+        fprintf(stderr, "[17] strcmp('%s', 'hackrf')\n", s->output_type);
+        fflush(stderr);
 
-    if(m_rxTxMode != RX_MODE && optind >= m_argv.size())
-    {
-        log("No input specified.");
+        if (strcmp(s->output_type, "hackrf") == 0) {
+            fprintf(stderr, "[18] Starting HackRF device...\n");
+            fflush(stderr);
+
+            int result = RF_ERROR;
+
+            try {
+                result = hackRfDevice->start(rf_mode::RX);
+            } catch (const std::exception& e) {
+                fprintf(stderr, "❌ Exception in start: %s\n", e.what());
+                fflush(stderr);
+                delete hackRfDevice;
+                hackRfDevice = nullptr;
+                return false;
+            } catch (...) {
+                fprintf(stderr, "❌ Unknown exception in start\n");
+                fflush(stderr);
+                delete hackRfDevice;
+                hackRfDevice = nullptr;
+                return false;
+            }
+
+            fprintf(stderr, "[19] start() returned: %d\n", result);
+            fflush(stderr);
+
+            if (result != RF_OK) {
+                fprintf(stderr, "❌ Start failed: %d\n", result);
+                fflush(stderr);
+                log("Could not open HackRF. Check device.");
+                delete hackRfDevice;
+                hackRfDevice = nullptr;
+                return false;
+            }
+
+            fprintf(stderr, "[20] ✓ Device started\n");
+            fflush(stderr);
+
+            // NOW set parameters AFTER device is started
+            fprintf(stderr, "[21] Setting parameters...\n");
+            fflush(stderr);
+
+            hackRfDevice->setMicEnabled(false);
+            hackRfDevice->setSampleRate(s->samplerate);
+            hackRfDevice->setFrequency(s->frequency);
+            hackRfDevice->setAmpEnable(s->amp);
+
+            fprintf(stderr, "[22] ✓✓✓ SUCCESS ✓✓✓\n");
+            fflush(stderr);
+
+            log("HackTvLib started in RX mode");
+            return true;
+        }
+        else if (strcmp(s->output_type, "rtlsdr") == 0) {
+            fprintf(stderr, "[23] RTL-SDR not implemented\n");
+            fflush(stderr);
+            return false;
+        }
+
+        fprintf(stderr, "❌ Unknown output_type: '%s'\n", s->output_type);
+        fflush(stderr);
         return false;
     }
 
-    if (m_txThread.joinable()) {
-        return false;
-    }
-
-    if(m_rxTxMode != RX_MODE && !setVideo())
-        return false;
-
-    if(!openDevice())
-        return false;
-
-    if(m_rxTxMode != RX_MODE && !initAv())
-        return false;
-
-    m_abort = false;
-    m_signal = 0;
-    m_txThread = std::thread(&HackTvLib::rfTxLoop, this);
-    log("HackTvLib started at TX mode.");
-
-    return true;
+    fprintf(stderr, "[24] Not RX mode\n");
+    fflush(stderr);
+    return false;
 }
