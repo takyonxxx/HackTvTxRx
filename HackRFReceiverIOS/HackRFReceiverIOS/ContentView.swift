@@ -38,35 +38,34 @@ struct ContentView: View {
     @State private var showSettings = false
     
     var body: some View {
+        #if os(macOS)
+        macOSLayout
+        #else
+        iOSLayout
+        #endif
+    }
+    
+    // MARK: - iOS Layout
+    
+    #if os(iOS)
+    private var iOSLayout: some View {
         NavigationView {
-            VStack(spacing: 20) {
-                // Status bar
-                statusBar
-                
-                // Mode selection
-                modeSelector
-                
-                // Connection settings
-                connectionSettings
-                
-                // Frequency control
-                frequencyControl
-                
-                // HackRF control button
-                controlButton
-                
-                // Connect/Disconnect button
-                connectButton
-                
-                // TV Display (only for TV mode)
-                if selectedMode == .tv && receiver.isConnected {
-                    TVDisplayView(videoFrame: receiver.currentVideoFrame)
-                        .frame(height: 300)
+            ScrollView {
+                VStack(spacing: 20) {
+                    statusBar
+                    modeSelector
+                    connectionSettings
+                    frequencyControl
+                    controlButton
+                    connectButton
+                    
+                    if selectedMode == .tv && receiver.isConnected {
+                        TVDisplayView(videoFrame: receiver.currentVideoFrame)
+                            .frame(height: 300)
+                    }
                 }
-                
-                Spacer()
+                .padding()
             }
-            .padding()
             .navigationTitle("HackRF Alıcı")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -82,7 +81,64 @@ struct ContentView: View {
                 SettingsView(receiver: receiver)
             }
         }
+        .navigationViewStyle(.stack)
     }
+    #endif
+    
+    // MARK: - macOS Layout
+    
+    #if os(macOS)
+    private var macOSLayout: some View {
+        NavigationView {
+            // Sidebar (optional - can be hidden)
+            List {
+                Label("Ana Ekran", systemImage: "antenna.radiowaves.left.and.right")
+                Label("Ayarlar", systemImage: "gearshape")
+                    .onTapGesture {
+                        showSettings.toggle()
+                    }
+            }
+            .listStyle(.sidebar)
+            .frame(minWidth: 200)
+            
+            // Main content
+            ScrollView {
+                VStack(spacing: 20) {
+                    statusBar
+                    modeSelector
+                    connectionSettings
+                    frequencyControl
+                    
+                    HStack(spacing: 15) {
+                        controlButton
+                        connectButton
+                    }
+                    
+                    if selectedMode == .tv && receiver.isConnected {
+                        TVDisplayView(videoFrame: receiver.currentVideoFrame)
+                            .frame(minHeight: 400)
+                    }
+                }
+                .padding()
+            }
+            .frame(minWidth: 600, minHeight: 500)
+            .navigationTitle("HackRF Alıcı")
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        showSettings.toggle()
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(receiver: receiver)
+                .frame(minWidth: 500, minHeight: 600)
+        }
+    }
+    #endif
     
     // MARK: - Status Bar
     
@@ -117,12 +173,21 @@ struct ContentView: View {
             Text("Alıcı Modu")
                 .font(.headline)
             
+            #if os(macOS)
+            Picker("Mod", selection: $selectedMode) {
+                ForEach(ReceiverMode.allCases, id: \.self) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            #else
             Picker("Mod", selection: $selectedMode) {
                 ForEach(ReceiverMode.allCases, id: \.self) { mode in
                     Text(mode.rawValue).tag(mode)
                 }
             }
             .pickerStyle(.segmented)
+            #endif
             
             Text(selectedMode.description)
                 .font(.caption)
@@ -153,7 +218,11 @@ struct ContentView: View {
                 Button("Ayarla") {
                     showSettings = true
                 }
+                #if os(macOS)
+                .buttonStyle(.automatic)
+                #else
                 .buttonStyle(.bordered)
+                #endif
             }
             
             HStack {
@@ -164,7 +233,11 @@ struct ContentView: View {
                 Button("Ayarla") {
                     showSettings = true
                 }
+                #if os(macOS)
+                .buttonStyle(.automatic)
+                #else
                 .buttonStyle(.bordered)
+                #endif
             }
             
             if settings.serverIP.isEmpty {
@@ -191,58 +264,54 @@ struct ContentView: View {
                     .frame(width: 120, alignment: .leading)
                 TextField("100.0", text: $frequency)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                    #if os(iOS)
                     .keyboardType(.decimalPad)
+                    #endif
+                    .frame(maxWidth: 200)
             }
             
+            #if os(macOS)
+            HStack(spacing: 10) {
+                frequencyButtons
+            }
+            #else
             HStack(spacing: 15) {
-                Button {
-                    adjustFrequency(by: -1.0)
-                } label: {
-                    Text("-1 MHz")
-                        .frame(width: 80)
-                        .padding(.vertical, 10)
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
-                }
-                
-                Button {
-                    adjustFrequency(by: -0.1)
-                } label: {
-                    Text("-100k")
-                        .frame(width: 80)
-                        .padding(.vertical, 10)
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
-                }
-                
-                Button {
-                    adjustFrequency(by: 0.1)
-                } label: {
-                    Text("+100k")
-                        .frame(width: 80)
-                        .padding(.vertical, 10)
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
-                }
-                
-                Button {
-                    adjustFrequency(by: 1.0)
-                } label: {
-                    Text("+1 MHz")
-                        .frame(width: 80)
-                        .padding(.vertical, 10)
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
-                }
+                frequencyButtons
             }
+            #endif
             
-            // Preset frequencies based on mode
             presetFrequencies
         }
+    }
+    
+    private var frequencyButtons: some View {
+        Group {
+            Button("-1 MHz") {
+                adjustFrequency(by: -1.0)
+            }
+            .frame(minWidth: 80)
+            
+            Button("-100k") {
+                adjustFrequency(by: -0.1)
+            }
+            .frame(minWidth: 80)
+            
+            Button("+100k") {
+                adjustFrequency(by: 0.1)
+            }
+            .frame(minWidth: 80)
+            
+            Button("+1 MHz") {
+                adjustFrequency(by: 1.0)
+            }
+            .frame(minWidth: 80)
+        }
+        #if os(iOS)
+        .padding(.vertical, 10)
+        .background(Color.blue)
+        .foregroundColor(.white)
+        .cornerRadius(8)
+        #endif
     }
     
     private var presetFrequencies: some View {
@@ -269,6 +338,9 @@ struct ContentView: View {
                             .background(Color.gray.opacity(0.2))
                             .cornerRadius(5)
                         }
+                        #if os(macOS)
+                        .buttonStyle(.plain)
+                        #endif
                     }
                 }
             }
@@ -283,8 +355,12 @@ struct ContentView: View {
         } label: {
             HStack {
                 Image(systemName: "slider.horizontal.3")
-                Text("HackRF Parametrelerini Gönder (Port \(settings.controlPort))")
+                Text("Parametreleri Gönder")
+                    #if os(iOS)
                     .font(.subheadline)
+                    #else
+                    .font(.body)
+                    #endif
             }
             .frame(maxWidth: .infinity)
             .padding()
@@ -293,6 +369,9 @@ struct ContentView: View {
             .cornerRadius(12)
         }
         .disabled(settings.serverIP.isEmpty)
+        #if os(macOS)
+        .buttonStyle(.plain)
+        #endif
     }
     
     // MARK: - Connect Button
@@ -317,6 +396,9 @@ struct ContentView: View {
             .cornerRadius(12)
         }
         .disabled(settings.serverIP.isEmpty && !receiver.isConnected)
+        #if os(macOS)
+        .buttonStyle(.plain)
+        #endif
     }
     
     // MARK: - Helper Functions
@@ -326,7 +408,6 @@ struct ContentView: View {
             let newFreq = freq + delta
             frequency = String(format: "%.1f", newFreq)
             
-            // Çalışırken frekans değişirse otomatik gönder
             if receiver.isConnected {
                 sendFrequencyCommand()
             }
@@ -482,221 +563,24 @@ struct SettingsView: View {
     var body: some View {
         NavigationView {
             Form {
-                // Bağlantı Ayarları
-                Section(header: Text("Bağlantı Ayarları")) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("HackRF Sunucu IP Adresi")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        HStack {
-                            TextField("Örn: 192.168.1.100", text: $tempIP)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .keyboardType(.numbersAndPunctuation)
-                                .autocapitalization(.none)
-                            
-                            if !tempIP.isEmpty {
-                                Button {
-                                    settings.serverIP = tempIP
-                                } label: {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.green)
-                                }
-                            }
-                        }
-                        
-                        if settings.serverIP.isEmpty {
-                            Text("⚠️ IP adresi girilmedi - Bağlantı kurulamaz")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                        } else {
-                            Text("✓ Kaydedildi: \(settings.serverIP)")
-                                .font(.caption)
-                                .foregroundColor(.green)
-                        }
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Data Portu (IQ Stream)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        HStack {
-                            TextField("5000", text: $tempDataPort)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .keyboardType(.numberPad)
-                            
-                            if !tempDataPort.isEmpty, let port = Int(tempDataPort) {
-                                Button {
-                                    settings.dataPort = port
-                                    tempDataPort = ""
-                                } label: {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.green)
-                                }
-                            }
-                        }
-                        Text("Mevcut: \(settings.dataPort)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Kontrol Portu (Komutlar)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        HStack {
-                            TextField("5001", text: $tempControlPort)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .keyboardType(.numberPad)
-                            
-                            if !tempControlPort.isEmpty, let port = Int(tempControlPort) {
-                                Button {
-                                    settings.controlPort = port
-                                    tempControlPort = ""
-                                } label: {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.green)
-                                }
-                            }
-                        }
-                        Text("Mevcut: \(settings.controlPort)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                // HackRF Parametreleri
-                Section(header: Text("HackRF Parametreleri")) {
-                    VStack(alignment: .leading) {
-                        HStack {
-                            Text("VGA Gain")
-                            Spacer()
-                            Text("\(settings.vgaGain) dB")
-                                .foregroundColor(.blue)
-                                .bold()
-                        }
-                        Slider(value: Binding(
-                            get: { Double(settings.vgaGain) },
-                            set: { settings.vgaGain = Int($0) }
-                        ), in: 0...62, step: 2)
-                        Text("Aralık: 0-62 dB (2 dB adımlarla)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    VStack(alignment: .leading) {
-                        Picker("LNA Gain", selection: $settings.lnaGain) {
-                            Text("0 dB").tag(0)
-                            Text("8 dB").tag(8)
-                            Text("16 dB").tag(16)
-                            Text("24 dB").tag(24)
-                            Text("32 dB").tag(32)
-                            Text("40 dB").tag(40)
-                        }
-                        .pickerStyle(.segmented)
-                        Text("Düşük gürültülü amplifikatör kazancı")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    VStack(alignment: .leading) {
-                        Picker("RX Amplifier", selection: $settings.rxAmpGain) {
-                            Text("Kapalı (0 dB)").tag(0)
-                            Text("Açık (14 dB)").tag(14)
-                        }
-                        .pickerStyle(.segmented)
-                        Text("RX amplifikatör kazancı")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                // Ses Kontrolü
-                Section(header: Text("Ses Kontrolü")) {
-                    VStack(alignment: .leading) {
-                        HStack {
-                            Text("Ses Seviyesi")
-                            Spacer()
-                            Text("\(Int(receiver.audioVolume * 100))%")
-                                .foregroundColor(.blue)
-                                .bold()
-                        }
-                        Slider(value: $receiver.audioVolume, in: 0...1)
-                    }
-                }
-                
-                // Port 5001 Komutları
-                Section(header: Text("Port \(settings.controlPort) Komutları")) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("SET_FREQ:<frekans>")
-                            .font(.system(.caption, design: .monospaced))
-                        Text("SET_SAMPLE_RATE:<rate>")
-                            .font(.system(.caption, design: .monospaced))
-                        Text("SET_VGA_GAIN:<gain>")
-                            .font(.system(.caption, design: .monospaced))
-                        Text("SET_LNA_GAIN:<gain>")
-                            .font(.system(.caption, design: .monospaced))
-                        Text("SET_RX_AMP_GAIN:<gain>")
-                            .font(.system(.caption, design: .monospaced))
-                    }
-                    .foregroundColor(.secondary)
-                }
-                
-                // Durum
-                Section(header: Text("Durum")) {
-                    HStack {
-                        Text("Bağlantı:")
-                        Spacer()
-                        HStack {
-                            Circle()
-                                .fill(receiver.isConnected ? Color.green : Color.red)
-                                .frame(width: 10, height: 10)
-                            Text(receiver.isConnected ? "Bağlı" : "Bağlı Değil")
-                                .foregroundColor(receiver.isConnected ? .green : .red)
-                        }
-                    }
-                    
-                    if !receiver.statusMessage.isEmpty {
-                        VStack(alignment: .leading) {
-                            Text("Mesaj:")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text(receiver.statusMessage)
-                                .font(.caption)
-                        }
-                    }
-                }
-                
-                // Sıfırlama
-                Section {
-                    Button("Ayarları Sıfırla") {
-                        showResetAlert = true
-                    }
-                    .foregroundColor(.red)
-                    .frame(maxWidth: .infinity)
-                }
-                
-                // Hakkında
-                Section(header: Text("Hakkında")) {
-                    HStack {
-                        Text("Versiyon")
-                        Spacer()
-                        Text("1.3")
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    HStack {
-                        Text("Desteklenen Modlar")
-                        Spacer()
-                        Text("FM, AM, NFM, TV")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
+                connectionSection
+                hackRFParametersSection
+                audioControlSection
+                commandsSection
+                statusSection
+                resetSection
+                aboutSection
             }
+            #if os(macOS)
+            .formStyle(.grouped)
+            .frame(minWidth: 500, minHeight: 600)
+            #endif
             .navigationTitle("Ayarlar")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: toolbarPlacement) {
                     Button("Kapat") {
                         dismiss()
                     }
@@ -715,6 +599,271 @@ struct SettingsView: View {
             }
             .onAppear {
                 tempIP = settings.serverIP
+            }
+        }
+    }
+    
+    private var toolbarPlacement: ToolbarItemPlacement {
+        #if os(macOS)
+        return .automatic
+        #else
+        return .navigationBarTrailing
+        #endif
+    }
+    
+    // MARK: - Sections
+    
+    private var connectionSection: some View {
+        Section(header: Text("Bağlantı Ayarları")) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("HackRF Sunucu IP Adresi")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                HStack {
+                    TextField("Örn: 192.168.1.100", text: $tempIP)
+                        #if os(iOS)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .keyboardType(.numbersAndPunctuation)
+                        .autocapitalization(.none)
+                        #else
+                        .textFieldStyle(.roundedBorder)
+                        #endif
+                    
+                    if !tempIP.isEmpty {
+                        Button {
+                            settings.serverIP = tempIP
+                        } label: {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                        }
+                        #if os(macOS)
+                        .buttonStyle(.borderless)
+                        #endif
+                    }
+                }
+                
+                if settings.serverIP.isEmpty {
+                    Text("⚠️ IP adresi girilmedi - Bağlantı kurulamaz")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                } else {
+                    Text("✓ Kaydedildi: \(settings.serverIP)")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+            }
+            
+            portField(
+                title: "Data Portu (IQ Stream)",
+                placeholder: "5000",
+                binding: $tempDataPort,
+                currentValue: settings.dataPort
+            ) { port in
+                settings.dataPort = port
+                tempDataPort = ""
+            }
+            
+            portField(
+                title: "Kontrol Portu (Komutlar)",
+                placeholder: "5001",
+                binding: $tempControlPort,
+                currentValue: settings.controlPort
+            ) { port in
+                settings.controlPort = port
+                tempControlPort = ""
+            }
+        }
+    }
+    
+    private func portField(
+        title: String,
+        placeholder: String,
+        binding: Binding<String>,
+        currentValue: Int,
+        onSave: @escaping (Int) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            HStack {
+                TextField(placeholder, text: binding)
+                    #if os(iOS)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .keyboardType(.numberPad)
+                    #else
+                    .textFieldStyle(.roundedBorder)
+                    #endif
+                
+                if !binding.wrappedValue.isEmpty, let port = Int(binding.wrappedValue) {
+                    Button {
+                        onSave(port)
+                    } label: {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                    }
+                    #if os(macOS)
+                    .buttonStyle(.borderless)
+                    #endif
+                }
+            }
+            Text("Mevcut: \(currentValue)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    private var hackRFParametersSection: some View {
+        Section(header: Text("HackRF Parametreleri")) {
+            VStack(alignment: .leading) {
+                HStack {
+                    Text("VGA Gain")
+                    Spacer()
+                    Text("\(settings.vgaGain) dB")
+                        .foregroundColor(.blue)
+                        .bold()
+                }
+                Slider(value: Binding(
+                    get: { Double(settings.vgaGain) },
+                    set: { settings.vgaGain = Int($0) }
+                ), in: 0...62, step: 2)
+                Text("Aralık: 0-62 dB (2 dB adımlarla)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            VStack(alignment: .leading) {
+                Picker("LNA Gain", selection: $settings.lnaGain) {
+                    Text("0 dB").tag(0)
+                    Text("8 dB").tag(8)
+                    Text("16 dB").tag(16)
+                    Text("24 dB").tag(24)
+                    Text("32 dB").tag(32)
+                    Text("40 dB").tag(40)
+                }
+                #if os(iOS)
+                .pickerStyle(.segmented)
+                #else
+                .pickerStyle(.radioGroup)
+                #endif
+                Text("Düşük gürültülü amplifikatör kazancı")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            VStack(alignment: .leading) {
+                Picker("RX Amplifier", selection: $settings.rxAmpGain) {
+                    Text("Kapalı (0 dB)").tag(0)
+                    Text("Açık (14 dB)").tag(14)
+                }
+                #if os(iOS)
+                .pickerStyle(.segmented)
+                #else
+                .pickerStyle(.radioGroup)
+                #endif
+                Text("RX amplifikatör kazancı")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+    
+    private var audioControlSection: some View {
+        Section(header: Text("Ses Kontrolü")) {
+            VStack(alignment: .leading) {
+                HStack {
+                    Text("Ses Seviyesi")
+                    Spacer()
+                    Text("\(Int(receiver.audioVolume * 100))%")
+                        .foregroundColor(.blue)
+                        .bold()
+                }
+                Slider(value: $receiver.audioVolume, in: 0...1)
+            }
+        }
+    }
+    
+    private var commandsSection: some View {
+        Section(header: Text("Port \(settings.controlPort) Komutları")) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("SET_FREQ:<frekans>")
+                    .font(.system(.caption, design: .monospaced))
+                Text("SET_SAMPLE_RATE:<rate>")
+                    .font(.system(.caption, design: .monospaced))
+                Text("SET_VGA_GAIN:<gain>")
+                    .font(.system(.caption, design: .monospaced))
+                Text("SET_LNA_GAIN:<gain>")
+                    .font(.system(.caption, design: .monospaced))
+                Text("SET_RX_AMP_GAIN:<gain>")
+                    .font(.system(.caption, design: .monospaced))
+            }
+            .foregroundColor(.secondary)
+        }
+    }
+    
+    private var statusSection: some View {
+        Section(header: Text("Durum")) {
+            HStack {
+                Text("Bağlantı:")
+                Spacer()
+                HStack {
+                    Circle()
+                        .fill(receiver.isConnected ? Color.green : Color.red)
+                        .frame(width: 10, height: 10)
+                    Text(receiver.isConnected ? "Bağlı" : "Bağlı Değil")
+                        .foregroundColor(receiver.isConnected ? .green : .red)
+                }
+            }
+            
+            if !receiver.statusMessage.isEmpty {
+                VStack(alignment: .leading) {
+                    Text("Mesaj:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(receiver.statusMessage)
+                        .font(.caption)
+                }
+            }
+        }
+    }
+    
+    private var resetSection: some View {
+        Section {
+            Button("Ayarları Sıfırla") {
+                showResetAlert = true
+            }
+            .foregroundColor(.red)
+            .frame(maxWidth: .infinity)
+        }
+    }
+    
+    private var aboutSection: some View {
+        Section(header: Text("Hakkında")) {
+            HStack {
+                Text("Versiyon")
+                Spacer()
+                Text("1.3")
+                    .foregroundColor(.secondary)
+            }
+            
+            HStack {
+                Text("Desteklenen Modlar")
+                Spacer()
+                Text("FM, AM, NFM, TV")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            HStack {
+                Text("Platform")
+                Spacer()
+                #if os(macOS)
+                Text("macOS")
+                    .foregroundColor(.secondary)
+                #else
+                Text("iOS")
+                    .foregroundColor(.secondary)
+                #endif
             }
         }
     }

@@ -34,9 +34,15 @@ class AudioPlayer {
     
     func start() {
         do {
+            #if os(iOS)
+            // iOS requires AVAudioSession configuration
             let audioSession = AVAudioSession.sharedInstance()
             try audioSession.setCategory(.playback, mode: .default, options: [])
             try audioSession.setActive(true)
+            #elseif os(macOS)
+            // macOS doesn't use AVAudioSession - audio works directly
+            // No additional configuration needed
+            #endif
             
             try audioEngine?.start()
             playerNode?.play()
@@ -51,11 +57,13 @@ class AudioPlayer {
         playerNode?.stop()
         audioEngine?.stop()
         
+        #if os(iOS)
         do {
             try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         } catch {
             print("⚠️ Audio session kapatma hatası: \(error)")
         }
+        #endif
         
         print("✓ Audio engine durduruldu")
     }
@@ -80,6 +88,14 @@ class AudioPlayer {
         }
         
         player.scheduleBuffer(buffer, completionHandler: nil)
+    }
+    
+    func setVolume(_ volume: Float) {
+        audioEngine?.mainMixerNode.outputVolume = volume
+    }
+    
+    var isRunning: Bool {
+        return audioEngine?.isRunning ?? false
     }
     
     deinit {

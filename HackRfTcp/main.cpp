@@ -159,50 +159,6 @@ int main(int argc, char *argv[])
     qDebug() << "Server is running on IP:" << localIP;
     qDebug() << "  Data Stream:    " << localIP << ":" << dataPort;
     qDebug() << "  Control:        " << localIP << ":" << controlPort;
-
-    qDebug() << "\n----------------------------------------";
-    qDebug() << "  CONTROL COMMANDS";
-    qDebug() << "----------------------------------------\n";
-
-    qDebug() << "Available commands (send via TCP to port" << controlPort << "):";
-    qDebug() << "";
-    qDebug() << "Frequency Control:";
-    qDebug() << "  SET_FREQ:100000000        - Set to 100 MHz";
-    qDebug() << "";
-    qDebug() << "Sample Rate Control:";
-    qDebug() << "  SET_SAMPLE_RATE:2000000   - Set to 2 MSPS";
-    qDebug() << "";
-    qDebug() << "Gain Control:";
-    qDebug() << "  SET_VGA_GAIN:20           - VGA gain (0-62)";
-    qDebug() << "  SET_LNA_GAIN:16           - LNA gain (0-40)";
-    qDebug() << "  SET_LNA_GAIN:32           - LNA gain medium";
-    qDebug() << "  SET_RX_AMP_GAIN:0         - RX amp off";
-    qDebug() << "  SET_RX_AMP_GAIN:14        - RX amp max";
-    qDebug() << "  SET_TX_AMP_GAIN:0         - TX amp off";
-    qDebug() << "  SET_TX_AMP_GAIN:47        - TX amp max";
-    qDebug() << "";
-    qDebug() << "Status:";
-    qDebug() << "  GET_STATUS                - Show all current settings";
-    qDebug() << "  HELP                      - Show help message";
-
-    qDebug() << "\n----------------------------------------";
-    qDebug() << "  USAGE EXAMPLES";
-    qDebug() << "----------------------------------------\n";
-
-    qDebug() << "1. Using Telnet (Windows/Linux):";
-    qDebug() << "   telnet" << localIP << controlPort;
-    qDebug() << "   SET_FREQ:433920000";
-    qDebug() << "   GET_STATUS";
-    qDebug() << "";
-    qDebug() << "2. Using Python:";
-    qDebug() << "   import socket";
-    qDebug() << "   s = socket.socket()";
-    qDebug() << "   s.connect(('" << localIP << "'," << controlPort << "))";
-    qDebug() << "   s.send(b'SET_FREQ:433920000\\n')";
-    qDebug() << "   print(s.recv(1024).decode())";
-    qDebug() << "   s.close()";
-    qDebug() << "";
-
     qDebug() << "\n========================================";
     qDebug() << "  Server Ready - Press Ctrl+C to stop";
     qDebug() << "========================================\n";

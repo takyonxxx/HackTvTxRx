@@ -83,6 +83,11 @@ win32 {
 }
 
 macx {
+
+    # sudo port selfupdate
+    # sudo port upgrade outdated
+    # sudo port -n upgrade --force ffmpeg
+
     # macOS specific configurations
     DEFINES += __APPLE__
 
@@ -95,7 +100,14 @@ macx {
 
     # Library paths
     LIBS += -L$$MACPORTS_PREFIX/lib
-    LIBS += -lwinpthread
+
+    # HOMEBREW_PREFIX = /opt/homebrew  # for Apple Silicon
+    # # HOMEBREW_PREFIX = /usr/local    # for Intel Macs
+
+    # INCLUDEPATH += $$HOMEBREW_PREFIX/include
+    # INCLUDEPATH += $$HOMEBREW_PREFIX/include/libusb-1.0
+
+    # LIBS += -L$$HOMEBREW_PREFIX/lib
 
     # Libraries
     LIBS += -lusb-1.0 -lhackrf -lfftw3f -lfdk-aac -lopus -lportaudio -lrtlsdr
@@ -125,6 +137,8 @@ macx {
                        ln -sf libHackTvLib.1.0.0.dylib libHackTvLib.1.dylib && \
                        ln -sf libHackTvLib.1.0.0.dylib libHackTvLib.1.0.dylib && \
                        install_name_tool -id @rpath/libHackTvLib.1.dylib libHackTvLib.1.0.0.dylib
+
+    QMAKE_MACOSX_DEPLOYMENT_TARGET = 12.0
 }
 
 linux {
