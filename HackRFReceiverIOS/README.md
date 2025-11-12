@@ -41,6 +41,18 @@ HackRF TCP sunucusundan sinyal alan, FM/AM radyo ve PAL-B/G TV decode eden iOS u
 ```
 **Sunucu:** 2 MHz sample rate
 
+#### AM Kullanım Alanları
+- **Orta Dalga:** 540-1700 kHz (radyo yayınları)
+- **Kısa Dalga:** 3-30 MHz (uluslararası yayınlar)
+- **Havacılık:** 118-137 MHz (pilot-kule konuşmaları) ✈️
+
+**Havacılık örnekleri (Türkiye):**
+- İstanbul Atatürk: 118.100 MHz
+- Sabiha Gökçen: 118.600 MHz
+- Esenboğa Ankara: 118.800 MHz
+- Antalya: 120.050 MHz
+- **Acil Durum:** 121.500 MHz
+
 ### NFM Telsiz (VHF/UHF)
 ```
 1-3. Yukarıdaki gibi
@@ -54,12 +66,13 @@ HackRF TCP sunucusundan sinyal alan, FM/AM radyo ve PAL-B/G TV decode eden iOS u
 **VHF (136-174 MHz):**
 - Amatör: 144-146 MHz
 - Denizcilik: 156-162 MHz
-- Havacılık: 118-137 MHz (AM kullanır)
 
 **UHF (400-470 MHz):**
 - Amatör: 430-440 MHz
 - PMR446: 446 MHz
 - İş telsizleri: 450-470 MHz
+
+**Not:** Havacılık (118-137 MHz) **AM Radyo** modunu kullanır, NFM değil!
 
 ### PAL-B/G TV
 ```
@@ -172,6 +185,9 @@ Python TCP sunucunuz şunları göndermeli:
 - Video + Ses aynı anda çalar
 
 ## Sık Sorulan Sorular
+
+**Q: Havacılık frekanslarını dinleyebilir miyim?**  
+A: Evet! 118-137 MHz havacılık bandı için **AM Radyo** modunu kullanın. Örnek: 118.1 MHz (İstanbul Atatürk Kule). Acil durum frekansı 121.500 MHz.
 
 **Q: TV'de neden ses yok?**  
 A: Ses +5.5 MHz'de otomatik. Frekans doğru, sinyal güçlü olmalı.
