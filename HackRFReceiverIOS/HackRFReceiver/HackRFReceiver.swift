@@ -16,9 +16,11 @@ class HackRFReceiver: ObservableObject {
     
     private var tcpClient: TCPClient?
     private var fmDemodulator: FMDemodulator?
+    private var amDemodulator: AMDemodulator?
+    private var nfmDemodulator: NFMDemodulator?
     private var palDecoder: PALDecoder?
     private var audioPlayer: AudioPlayer?
-    private var currentMode: ReceiverMode = .fm
+    private var currentMode: ReceiverMode = .fmRadio
     
     private var receiveQueue = DispatchQueue(label: "com.hackrf.receive", qos: .userInitiated)
     private var isReceiving = false
@@ -48,6 +50,11 @@ class HackRFReceiver: ObservableObject {
                     self.amDemodulator = AMDemodulator(sampleRate: 2_000_000, audioRate: 48_000)
                     self.audioPlayer?.start()
                     print("AM Radio mode initialized")
+                } else if mode == .nfmRadio {
+                    self.audioPlayer = AudioPlayer()
+                    self.nfmDemodulator = NFMDemodulator(sampleRate: 2_000_000, audioRate: 48_000)
+                    self.audioPlayer?.start()
+                    print("NFM Radio mode initialized (VHF/UHF)")
                 } else if mode == .tvPAL {
                     self.palDecoder = PALDecoder(sampleRate: 16_000_000)
                     self.audioPlayer = AudioPlayer()
@@ -78,6 +85,8 @@ class HackRFReceiver: ObservableObject {
             self.audioPlayer?.stop()
             self.audioPlayer = nil
             self.fmDemodulator = nil
+            self.amDemodulator = nil
+            self.nfmDemodulator = nil
             self.palDecoder = nil
             self.tcpClient?.disconnect()
             self.tcpClient = nil
@@ -112,9 +121,14 @@ class HackRFReceiver: ObservableObject {
                 self.samplesReceived += data.count
             }
             
-            if currentMode == .fm {
+            switch currentMode {
+            case .fmRadio:
                 processFMData(data)
-            } else {
+            case .amRadio:
+                processAMData(data)
+            case .nfmRadio:
+                processNFMData(data)
+            case .tvPAL:
                 processTVData(data)
             }
         }
@@ -122,6 +136,48 @@ class HackRFReceiver: ObservableObject {
     
     private func processFMData(_ data: Data) {
         guard let demodulator = fmDemodulator, let player = audioPlayer else { return }
+        
+        // Convert Data to [Int8]
+        let iqSamples = data.withUnsafeBytes { buffer in
+            Array(buffer.bindMemory(to: Int8.self))
+        }
+        
+        // Demodulate
+        if let audioSamples = demodulator.demodulate(iqSamples) {
+            // Play audio
+            player.play(audioSamples)
+        }
+    }
+    
+    private func processAMData(_ data: Data) {
+        guard let demodulator = amDemodulator, let player = audioPlayer else { return }
+        
+        // Convert Data to [Int8]
+        let iqSamples = data.withUnsafeBytes { buffer in
+            Array(buffer.bindMemory(to: Int8.self))
+        }
+        
+        // Demodulate AM (envelope detection)
+        if let audioSamples = demodulator.demodulate(iqSamples) {
+            // Play audio
+            player.play(audioSamples)
+        }
+    }
+    
+    private func processNFMData(_ data: Data) {
+        guard let demodulator = nfmDemodulator, let player = audioPlayer else { return }
+        
+        // Convert Data to [Int8]
+        let iqSamples = data.withUnsafeBytes { buffer in
+            Array(buffer.bindMemory(to: Int8.self))
+        }
+        
+        // Demodulate NFM (narrow FM for VHF/UHF)
+        if let audioSamples = demodulator.demodulate(iqSamples) {
+            // Play audio
+            player.play(audioSamples)
+        }
+    }
         
         // Convert Data to [Int8]
         let iqSamples = data.withUnsafeBytes { buffer in

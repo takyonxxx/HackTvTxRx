@@ -4,8 +4,9 @@ HackRF TCP sunucusundan sinyal alan, FM/AM radyo ve PAL-B/G TV decode eden iOS u
 
 ## Özellikler
 
-- **FM Radyo**: 88-108 MHz, faz demodülasyonu, 75µs de-emphasis
-- **AM Radyo**: 540-1700 kHz, zarf algılama  
+- **FM Radyo**: 88-108 MHz, geniş bant FM, 75µs de-emphasis
+- **AM Radyo**: 540-1700 kHz (OD/KD), zarf algılama
+- **NFM Telsiz**: VHF/UHF (136-174, 400-470 MHz), dar bant FM
 - **PAL-B/G TV**: Video (AM) + Ses (FM +5.5MHz), 720x576, 25fps
 - Gerçek zamanlı ses/video çıkışı
 - Frekans kontrolü (+/- butonları)
@@ -40,6 +41,26 @@ HackRF TCP sunucusundan sinyal alan, FM/AM radyo ve PAL-B/G TV decode eden iOS u
 ```
 **Sunucu:** 2 MHz sample rate
 
+### NFM Telsiz (VHF/UHF)
+```
+1-3. Yukarıdaki gibi
+4. "NFM Telsiz" seçin
+5. Frekans: 136-174 MHz (VHF) veya 400-470 MHz (UHF)
+6. Bağlan → Telsiz konuşmaları hoparlörden
+```
+**Sunucu:** 2 MHz sample rate
+
+#### NFM Frekans Örnekleri
+**VHF (136-174 MHz):**
+- Amatör: 144-146 MHz
+- Denizcilik: 156-162 MHz
+- Havacılık: 118-137 MHz (AM kullanır)
+
+**UHF (400-470 MHz):**
+- Amatör: 430-440 MHz
+- PMR446: 446 MHz
+- İş telsizleri: 450-470 MHz
+
 ### PAL-B/G TV
 ```
 1. IP/Port girin
@@ -62,8 +83,9 @@ HackRF TCP sunucusundan sinyal alan, FM/AM radyo ve PAL-B/G TV decode eden iOS u
 
 | Mod | Yöntem | Açıklama |
 |-----|--------|----------|
-| FM Radyo | Faz farklandırma | atan2 → unwrap → differentiate |
+| FM Radyo | Faz farklandırma | atan2 → unwrap → differentiate (geniş bant) |
 | AM Radyo | Zarf algılama | √(I²+Q²) |
+| NFM Telsiz | Faz farklandırma | atan2 → unwrap → differentiate (dar bant ±5kHz) |
 | TV Video | Zarf algılama | √(I²+Q²) |
 | TV Ses | FM (+5.5 MHz) | Frekans shift + FM demod |
 
@@ -81,8 +103,9 @@ HackRFReceiver/
 ├── ContentView.swift             (Ana UI)
 ├── HackRFReceiver.swift          (Koordinatör)
 ├── TCPClient.swift               (Network)
-├── FMDemodulator.swift           (FM işleme)
+├── FMDemodulator.swift           (Geniş bant FM)
 ├── AMDemodulator.swift           (AM işleme)
+├── NFMDemodulator.swift          (Dar bant FM - VHF/UHF)
 ├── AudioPlayer.swift             (Ses çıkışı)
 ├── PALDecoder.swift              (TV video + ses)
 └── TVDisplayView.swift           (Video görüntü)
@@ -135,6 +158,12 @@ Python TCP sunucunuz şunları göndermeli:
 - +/- butonlarla frekans ayarı
 - Yüksek ses kalitesi beklenir
 
+**NFM için:**
+- VHF: 136-174 MHz, UHF: 400-470 MHz
+- Dar bant (±5 kHz deviation)
+- Telsiz konuşmaları için
+- Sessizlikte squelch gürültüsü normal
+
 **TV için:**
 - Güçlü sinyal gerekir
 - Frekans çok hassas olmalı (±10 kHz)
@@ -162,13 +191,14 @@ Eğitim amaçlı demo projesi.
 
 ---
 
-**Versiyon:** 1.2  
+**Versiyon:** 1.3  
 **Platform:** iOS 16.0+  
 **Dil:** Swift 5.0  
 **Durum:** ✅ Hazır
 
 **Özellikler:**
-- ✅ 3 mod (FM, AM, TV)
+- ✅ 4 mod (FM, AM, NFM, TV)
+- ✅ VHF/UHF telsiz desteği
 - ✅ TV video + ses
 - ✅ Gerçek zamanlı
 - ✅ Türkçe arayüz

@@ -8,8 +8,10 @@
 import SwiftUI
 
 enum ReceiverMode: String, CaseIterable {
-    case fm = "FM Radio"
-    case tv = "PAL-B/G TV"
+    case fmRadio = "FM Radyo"
+    case amRadio = "AM Radyo"
+    case nfmRadio = "NFM Telsiz"
+    case tvPAL = "PAL-B/G TV"
 }
 
 struct ContentView: View {
@@ -17,7 +19,7 @@ struct ContentView: View {
     @State private var serverIP = "192.168.1.2"
     @State private var serverPort = "5000"
     @State private var frequency = "100.0"
-    @State private var mode: ReceiverMode = .fm
+    @State private var mode: ReceiverMode = .fmRadio
     @State private var showAlert = false
     @State private var alertMessage = ""
     
@@ -101,14 +103,15 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         StatusRow(label: "Connection:", value: receiver.isConnected ? "Connected" : "Disconnected", isGood: receiver.isConnected)
                         StatusRow(label: "Samples:", value: "\(receiver.samplesReceived)", isGood: receiver.samplesReceived > 0)
-                        StatusRow(label: "Sample Rate:", value: mode == .tv ? "16 MHz" : "2 MHz", isGood: true)
+                        StatusRow(label: "Sample Rate:", value: getSampleRateText(), isGood: true)
+                        StatusRow(label: "Demodülasyon:", value: getDemodTypeText(), isGood: true)
                     }
                     .padding(.vertical, 5)
                 }
                 .padding(.horizontal)
                 
                 // TV Display (only in TV mode)
-                if mode == .tv && receiver.isConnected {
+                if mode == .tvPAL && receiver.isConnected {
                     GroupBox(label: Label("TV Display", systemImage: "tv")) {
                         TVDisplayView(receiver: receiver)
                             .aspectRatio(4/3, contentMode: .fit)
@@ -178,6 +181,28 @@ struct ContentView: View {
         let newFreq = receiver.currentFrequency + Int(deltaMHz * 1_000_000)
         receiver.setFrequency(newFreq)
         frequency = String(format: "%.1f", Double(newFreq) / 1_000_000)
+    }
+    
+    private func getSampleRateText() -> String {
+        switch mode {
+        case .fmRadio, .amRadio, .nfmRadio:
+            return "2 MHz"
+        case .tvPAL:
+            return "16 MHz"
+        }
+    }
+    
+    private func getDemodTypeText() -> String {
+        switch mode {
+        case .fmRadio:
+            return "FM (Geniş bant)"
+        case .amRadio:
+            return "AM (Genlik)"
+        case .nfmRadio:
+            return "NFM (Dar bant)"
+        case .tvPAL:
+            return "AM+FM (Video+Ses)"
+        }
     }
     
     private func showError(_ message: String) {
