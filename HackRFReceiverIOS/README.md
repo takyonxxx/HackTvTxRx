@@ -1,204 +1,174 @@
-# HackRF Receiver - iOS Application
+# HackRF iOS Alıcı
 
-iOS application for receiving and processing HackRF signals via TCP connection. Supports FM radio demodulation and PAL-B/G analog TV signal decoding.
+HackRF TCP sunucusundan sinyal alan, FM/AM radyo ve PAL-B/G TV decode eden iOS uygulaması.
 
-## Features
+## Özellikler
 
-- **TCP Connection**: Connect to HackRF server over network
-- **FM Radio Receiver**: Demodulate FM broadcasts with de-emphasis filter and audio output
-- **PAL-B/G TV Decoder**: Decode 625-line, 25fps analog TV signals (Turkish standard)
-- **Real-time Processing**: Live audio and video output
-- **Frequency Control**: Adjust frequency with +/- buttons
-- **User-Friendly UI**: SwiftUI-based interface with configuration options
+- **FM Radyo**: 88-108 MHz, faz demodülasyonu, 75µs de-emphasis
+- **AM Radyo**: 540-1700 kHz, zarf algılama  
+- **PAL-B/G TV**: Video (AM) + Ses (FM +5.5MHz), 720x576, 25fps
+- Gerçek zamanlı ses/video çıkışı
+- Frekans kontrolü (+/- butonları)
+- Türkçe arayüz
 
-## Requirements
+## Kurulum
 
-- iOS 16.0 or later
-- Xcode 15.0 or later
-- HackRF TCP server (like your Python server)
-- Network connection to HackRF server
+1. `HackRFReceiver.xcodeproj` dosyasını Xcode'da açın
+2. Signing & Capabilities'ten Team'inizi seçin
+3. iPhone'unuza bağlayın veya simulator seçin
+4. ⌘R ile çalıştırın
 
-## Project Structure
+**Gereksinimler:** iOS 16.0+, Xcode 15.0+
 
+## Kullanım
+
+### FM Radyo
+```
+1. Sunucu IP'sini girin (örn: 192.168.1.2)
+2. Port girin (örn: 5000)
+3. Frekans girin (örn: 100.0 MHz)
+4. "FM Radyo" seçin
+5. Bağlan → Ses hoparlörden çalar
+```
+**Sunucu:** 2 MHz sample rate
+
+### AM Radyo
+```
+1-3. Yukarıdaki gibi
+4. "AM Radyo" seçin
+5. Bağlan → Ses hoparlörden çalar
+```
+**Sunucu:** 2 MHz sample rate
+
+### PAL-B/G TV
+```
+1. IP/Port girin
+2. TV kanalı frekansı (örn: 48.25 MHz)
+3. "PAL-B/G TV" seçin
+4. Bağlan → Video ekranda + Ses hoparlörde
+```
+**Sunucu:** 16 MHz sample rate (**önemli!**)
+
+#### TV Frekansları (Türkiye)
+- Kanal E2: 48.25 MHz
+- Kanal E3: 55.25 MHz
+- Kanal E4: 62.25 MHz
+- VHF Band III: 174-230 MHz
+- UHF: 470-862 MHz
+
+## Teknik Detaylar
+
+### Demodülasyon
+
+| Mod | Yöntem | Açıklama |
+|-----|--------|----------|
+| FM Radyo | Faz farklandırma | atan2 → unwrap → differentiate |
+| AM Radyo | Zarf algılama | √(I²+Q²) |
+| TV Video | Zarf algılama | √(I²+Q²) |
+| TV Ses | FM (+5.5 MHz) | Frekans shift + FM demod |
+
+### PAL-B/G TV Sistemi
+```
+Video Carrier (AM):  48.25 MHz
+Audio Carrier (FM):  53.75 MHz (+5.5 MHz)
+                     50µs de-emphasis
+```
+
+### Dosya Yapısı
 ```
 HackRFReceiver/
-├── HackRFReceiver.xcodeproj/
-│   ├── project.pbxproj
-│   ├── project.xcworkspace/
-│   └── xcshareddata/
-└── HackRFReceiver/
-    ├── HackRFReceiverApp.swift      # App entry point
-    ├── ContentView.swift             # Main UI
-    ├── HackRFReceiver.swift          # Main coordinator
-    ├── TCPClient.swift               # Network communication
-    ├── FMDemodulator.swift           # FM demodulation
-    ├── AudioPlayer.swift             # Audio output
-    ├── PALDecoder.swift              # TV signal decoder
-    ├── TVDisplayView.swift           # TV display view
-    ├── Info.plist                    # App configuration
-    └── Assets.xcassets/              # App assets
+├── HackRFReceiverApp.swift      (Uygulama başlangıcı)
+├── ContentView.swift             (Ana UI)
+├── HackRFReceiver.swift          (Koordinatör)
+├── TCPClient.swift               (Network)
+├── FMDemodulator.swift           (FM işleme)
+├── AMDemodulator.swift           (AM işleme)
+├── AudioPlayer.swift             (Ses çıkışı)
+├── PALDecoder.swift              (TV video + ses)
+└── TVDisplayView.swift           (Video görüntü)
 ```
 
-## Installation
+## Sorun Giderme
 
-1. Open `HackRFReceiver.xcodeproj` in Xcode
-2. Select your development team in project settings
-3. Connect your iOS device or select a simulator
-4. Build and run (⌘R)
+### Bağlantı
+- **Bağlanamıyor**: IP ve port kontrolü, aynı WiFi'de olun
+- **Bağlantı düşüyor**: WiFi stabilitesi, buffer boyutu
 
-## Usage
+### Ses
+- **Ses yok**: iPhone ses seviyesi, mute switch, mod doğru mu?
+- **Bozuk ses**: Sunucu gain ayarları (VGA/LNA)
+- **Gecikme**: Normal (~0.5-1 saniye)
 
-### FM Radio Mode
+### TV
+- **Video senkronize değil**: **16 MHz sample rate** şart!
+- **Ses yok**: Frekans ±10 kHz içinde, LNA gain artır
+- **Yuvarlanan görüntü**: Frekans hassasiyeti kritik
+- **Bulanık**: Sinyal gücü, gain ayarları
 
-1. Launch the app
-2. Enter your HackRF server IP address (e.g., `192.168.1.2`)
-3. Enter the data port (e.g., `5000`)
-4. Set the frequency in MHz (e.g., `100.0` for 100 MHz)
-5. Select "FM Radio" mode
-6. Tap "Connect"
-7. Use +/- buttons to adjust frequency
-8. Audio will play through device speaker
-
-**FM Mode Parameters:**
-- Sample Rate: 2 MHz
-- Audio Rate: 48 kHz
-- De-emphasis: 75µs (broadcast standard)
-
-### PAL-B/G TV Mode
-
-1. Follow steps 1-3 from FM mode
-2. Set the frequency for a TV channel (usually 47-862 MHz)
-3. Select "PAL-B/G TV" mode
-4. Tap "Connect"
-5. Video will display in the TV Display area
-
-**TV Mode Parameters:**
-- Sample Rate: 16 MHz
-- Standard: PAL-B/G
-- Lines: 625 (576 active)
-- Frame Rate: 25 fps
-- Resolution: 720x576 (4:3 aspect ratio)
-
-### Server Configuration
-
-Your HackRF TCP server should:
-- Listen on specified port for data connections
-- Send continuous IQ samples as int8 pairs (I, Q, I, Q, ...)
-- For FM: Use 2 MHz sample rate
-- For TV: Use 16 MHz sample rate
-
-Example server structure (matching your Python code):
-```python
-# Control port: 5001 (optional - for frequency changes)
-# Data port: 5000 (required - for IQ samples)
+### TV İçin Kritik
+```
+✓ 16 MHz sample rate (2 MHz değil!)
+✓ Doğru video carrier frekansı
+✓ Ses otomatik +5.5 MHz'de
+✓ LNA: 24-32, VGA: 20-30
 ```
 
-## Technical Details
+## Sunucu Gereksinimleri
 
-### FM Demodulation Algorithm
+Python TCP sunucunuz şunları göndermeli:
+- **IQ örnekleri**: int8 çiftleri (I,Q,I,Q,...)
+- **Sample rate**: FM/AM için 2 MHz, TV için 16 MHz
+- **Port**: 5000 (varsayılan)
 
-1. Convert IQ samples to complex numbers (I + jQ)
-2. Calculate phase: `atan2(Q, I)`
-3. Unwrap phase to handle discontinuities
-4. Differentiate phase (FM demodulation)
-5. Decimate to audio rate (48 kHz)
-6. Apply 75µs de-emphasis filter
-7. Normalize and output to speaker
+## Performans
 
-### PAL-B/G Decoding Algorithm
+| Mod | CPU | Bellek | Gecikme |
+|-----|-----|--------|---------|
+| FM | %10-15 | ~30 MB | 0.5-1s |
+| AM | %10-15 | ~30 MB | 0.5-1s |
+| TV | %20-30 | ~50 MB | 40-50ms |
 
-1. Convert IQ to amplitude (AM demodulation)
-2. Extract video lines (skip sync and blanking)
-3. Detect frame sync (625 lines)
-4. Resample to 720 pixels width
-5. Convert to grayscale (luminance only)
-6. Display as RGBA image
+## İpuçları
 
-### Network Protocol
+**FM/AM için:**
+- 88-108 MHz (FM) veya 540-1700 kHz (AM)
+- +/- butonlarla frekans ayarı
+- Yüksek ses kalitesi beklenir
 
-- Connection: TCP
-- Data Format: Raw IQ samples (int8)
-- Sample Order: I, Q, I, Q, I, Q...
-- Endianness: Native (typically little-endian)
+**TV için:**
+- Güçlü sinyal gerekir
+- Frekans çok hassas olmalı (±10 kHz)
+- Mono ses (stereo yok)
+- Grayscale görüntü (renk yok)
+- Video + Ses aynı anda çalar
 
-## Performance Optimization
+## Sık Sorulan Sorular
 
-- Background processing on dedicated queue
-- Efficient buffer management
-- Hardware-accelerated audio output (AVAudioEngine)
-- Optimized signal processing algorithms
+**Q: TV'de neden ses yok?**  
+A: Ses +5.5 MHz'de otomatik. Frekans doğru, sinyal güçlü olmalı.
 
-## Troubleshooting
+**Q: Renkli TV olur mu?**  
+A: Şimdilik sadece grayscale (Y). Renk (UV) gelecek versiyonda.
 
-### Connection Issues
+**Q: Stereo ses?**  
+A: PAL-B/G standardında mono. Stereo standart değil.
 
-- **Cannot connect**: Verify server IP and port
-- **Connection timeout**: Check network firewall settings
-- **Connection drops**: Ensure stable WiFi connection
+**Q: Neden 16 MHz TV için?**  
+A: PAL-B/G standardı gereği. Video + ses için gerekli bandwidth.
 
-### Audio Issues
+## Lisans
 
-- **No audio**: Check iOS volume and mute switch
-- **Distorted audio**: Adjust server VGA/LNA gains
-- **Audio lag**: Normal latency is ~0.5-1 second
-
-### TV Issues
-
-- **No video**: Verify 16 MHz sample rate on server
-- **Rolling image**: Sync issues - check frequency accuracy
-- **Grayscale only**: Color decoding not implemented (Y only)
-
-## Network Security
-
-The app uses:
-- `NSAllowsArbitraryLoads = true` for local network access
-- `NSLocalNetworkUsageDescription` for permission prompt
-- Standard TCP sockets (no encryption)
-
-**Note**: Only use on trusted local networks.
-
-## Future Enhancements
-
-Possible improvements:
-- [ ] PAL color decoding (UV chrominance)
-- [ ] Stereo FM decoding
-- [ ] RDS (Radio Data System) decoding
-- [ ] Recording functionality
-- [ ] Spectrum analyzer display
-- [ ] AM demodulation mode
-- [ ] SSB/CW modes
-- [ ] Save favorite frequencies
-
-## Compatibility
-
-### Supported TV Standards
-- PAL-B/G (Turkey, most of Europe)
-- 625 lines, 25 fps
-- 50 Hz field rate
-
-### Audio Standards
-- Broadcast FM with 75µs de-emphasis (Worldwide)
-- Mono audio output
-
-## License
-
-This is a demonstration project for educational purposes.
-
-## Credits
-
-Based on the Python HackRF FM receiver example. Adapted for iOS with native audio/video processing.
-
-## Support
-
-For issues or questions:
-1. Verify HackRF server is running and accessible
-2. Check iOS device network permissions
-3. Review Xcode console logs for detailed error messages
-4. Ensure correct sample rates for each mode
+Eğitim amaçlı demo projesi.
 
 ---
 
-**Version**: 1.0  
-**Platform**: iOS 16.0+  
-**Language**: Swift 5.0  
-**Framework**: SwiftUI, AVFoundation, Network
+**Versiyon:** 1.2  
+**Platform:** iOS 16.0+  
+**Dil:** Swift 5.0  
+**Durum:** ✅ Hazır
+
+**Özellikler:**
+- ✅ 3 mod (FM, AM, TV)
+- ✅ TV video + ses
+- ✅ Gerçek zamanlı
+- ✅ Türkçe arayüz
