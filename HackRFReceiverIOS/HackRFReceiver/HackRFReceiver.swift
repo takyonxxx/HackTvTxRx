@@ -38,12 +38,27 @@ class HackRFReceiver: ObservableObject {
                 }
                 
                 // Initialize appropriate processor
-                if mode == .fm {
+                if mode == .fmRadio {
                     self.audioPlayer = AudioPlayer()
                     self.fmDemodulator = FMDemodulator(sampleRate: 2_000_000, audioRate: 48_000)
                     self.audioPlayer?.start()
-                } else {
+                    print("FM Radio mode initialized")
+                } else if mode == .amRadio {
+                    self.audioPlayer = AudioPlayer()
+                    self.amDemodulator = AMDemodulator(sampleRate: 2_000_000, audioRate: 48_000)
+                    self.audioPlayer?.start()
+                    print("AM Radio mode initialized")
+                } else if mode == .tvPAL {
                     self.palDecoder = PALDecoder(sampleRate: 16_000_000)
+                    self.audioPlayer = AudioPlayer()
+                    self.audioPlayer?.start()
+                    
+                    // Connect PAL decoder audio output to audio player
+                    self.palDecoder?.audioCallback = { [weak self] audioSamples in
+                        self?.audioPlayer?.play(audioSamples)
+                    }
+                    
+                    print("PAL-B/G TV mode initialized (AM for video, FM for audio at +5.5 MHz)")
                 }
                 
                 self.isReceiving = true
