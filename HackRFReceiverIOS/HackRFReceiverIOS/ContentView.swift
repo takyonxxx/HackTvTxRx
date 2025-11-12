@@ -31,18 +31,11 @@ enum ReceiverMode: String, CaseIterable {
 
 struct ContentView: View {
     @StateObject private var receiver = HackRFReceiver()
+    @StateObject private var settings = SettingsManager.shared
     
-    @State private var serverIP = "192.168.1.2"
-    @State private var serverPort = "5000"
-    @State private var controlPort = "5001"
     @State private var frequency = "100.0"
     @State private var selectedMode: ReceiverMode = .fm
     @State private var showSettings = false
-    
-    // HackRF parametreleri
-    @State private var vgaGain = 30
-    @State private var lnaGain = 32
-    @State private var rxAmpGain = 14
     
     var body: some View {
         NavigationView {
@@ -86,13 +79,7 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $showSettings) {
-                SettingsView(
-                    vgaGain: $vgaGain,
-                    lnaGain: $lnaGain,
-                    rxAmpGain: $rxAmpGain,
-                    receiver: receiver,
-                    controlPort: $controlPort
-                )
+                SettingsView(receiver: receiver)
             }
         }
     }
@@ -160,25 +147,34 @@ struct ContentView: View {
             HStack {
                 Text("Sunucu IP:")
                     .frame(width: 100, alignment: .leading)
-                TextField("192.168.1.2", text: $serverIP)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .keyboardType(.numbersAndPunctuation)
+                Text(settings.serverIP.isEmpty ? "Ayarlanmadı" : settings.serverIP)
+                    .foregroundColor(settings.serverIP.isEmpty ? .red : .primary)
+                Spacer()
+                Button("Ayarla") {
+                    showSettings = true
+                }
+                .buttonStyle(.bordered)
             }
             
             HStack {
                 Text("Data Portu:")
                     .frame(width: 100, alignment: .leading)
-                TextField("5000", text: $serverPort)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .keyboardType(.numberPad)
+                Text("\(settings.dataPort)")
+                Spacer()
+                Button("Ayarla") {
+                    showSettings = true
+                }
+                .buttonStyle(.bordered)
             }
             
-            HStack {
-                Text("Kontrol Portu:")
-                    .frame(width: 100, alignment: .leading)
-                TextField("5001", text: $controlPort)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .keyboardType(.numberPad)
+            if settings.serverIP.isEmpty {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text("Lütfen ayarlardan IP adresini girin")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
             }
         }
     }
@@ -287,7 +283,7 @@ struct ContentView: View {
         } label: {
             HStack {
                 Image(systemName: "slider.horizontal.3")
-                Text("HackRF Parametrelerini Gönder (5001)")
+                Text("HackRF Parametrelerini Gönder (Port \(settings.controlPort))")
                     .font(.subheadline)
             }
             .frame(maxWidth: .infinity)
@@ -296,6 +292,7 @@ struct ContentView: View {
             .foregroundColor(.white)
             .cornerRadius(12)
         }
+        .disabled(settings.serverIP.isEmpty)
     }
     
     // MARK: - Connect Button
@@ -315,10 +312,11 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity)
             .padding()
-            .background(receiver.isConnected ? Color.red : Color.green)
+            .background(receiver.isConnected ? Color.red : (settings.serverIP.isEmpty ? Color.gray : Color.green))
             .foregroundColor(.white)
             .cornerRadius(12)
         }
+        .disabled(settings.serverIP.isEmpty && !receiver.isConnected)
     }
     
     // MARK: - Helper Functions
@@ -375,11 +373,10 @@ struct ContentView: View {
     private func sendFrequencyCommand() {
         guard let freq = Double(frequency) else { return }
         let freqHz = Int(freq * 1_000_000)
-        receiver.sendControlCommand("SET_FREQ:\(freqHz)", port: Int(controlPort) ?? 5001)
+        receiver.sendControlCommand("SET_FREQ:\(freqHz)", port: settings.controlPort, host: settings.serverIP)
     }
     
     private func sendControlParameters() {
-        guard let port = Int(controlPort) else { return }
         guard let freq = Double(frequency) else { return }
         
         let freqHz = Int(freq * 1_000_000)
@@ -388,91 +385,312 @@ struct ContentView: View {
         receiver.sendAllControlParameters(
             frequency: freqHz,
             sampleRate: sampleRate,
-            vgaGain: vgaGain,
-            lnaGain: lnaGain,
-            rxAmpGain: rxAmpGain,
-            port: port
+            vgaGain: settings.vgaGain,
+            lnaGain: settings.lnaGain,
+            rxAmpGain: settings.rxAmpGain,
+            port: settings.controlPort,
+            host: settings.serverIP
         )
     }
     
     private func connectToServer() {
-        guard let port = Int(serverPort) else { return }
         guard let freq = Double(frequency) else { return }
         
         let freqHz = Int(freq * 1_000_000)
         
         receiver.connect(
-            to: serverIP,
-            port: port,
+            to: settings.serverIP,
+            port: settings.dataPort,
             mode: selectedMode,
             frequency: freqHz
         )
     }
 }
 
+// MARK: - Settings Manager (UserDefaults)
+
+class SettingsManager: ObservableObject {
+    static let shared = SettingsManager()
+    
+    @Published var serverIP: String {
+        didSet {
+            UserDefaults.standard.set(serverIP, forKey: "serverIP")
+        }
+    }
+    
+    @Published var dataPort: Int {
+        didSet {
+            UserDefaults.standard.set(dataPort, forKey: "dataPort")
+        }
+    }
+    
+    @Published var controlPort: Int {
+        didSet {
+            UserDefaults.standard.set(controlPort, forKey: "controlPort")
+        }
+    }
+    
+    @Published var vgaGain: Int {
+        didSet {
+            UserDefaults.standard.set(vgaGain, forKey: "vgaGain")
+        }
+    }
+    
+    @Published var lnaGain: Int {
+        didSet {
+            UserDefaults.standard.set(lnaGain, forKey: "lnaGain")
+        }
+    }
+    
+    @Published var rxAmpGain: Int {
+        didSet {
+            UserDefaults.standard.set(rxAmpGain, forKey: "rxAmpGain")
+        }
+    }
+    
+    private init() {
+        self.serverIP = UserDefaults.standard.string(forKey: "serverIP") ?? ""
+        self.dataPort = UserDefaults.standard.integer(forKey: "dataPort") == 0 ? 5000 : UserDefaults.standard.integer(forKey: "dataPort")
+        self.controlPort = UserDefaults.standard.integer(forKey: "controlPort") == 0 ? 5001 : UserDefaults.standard.integer(forKey: "controlPort")
+        self.vgaGain = UserDefaults.standard.integer(forKey: "vgaGain") == 0 ? 30 : UserDefaults.standard.integer(forKey: "vgaGain")
+        self.lnaGain = UserDefaults.standard.integer(forKey: "lnaGain") == 0 ? 32 : UserDefaults.standard.integer(forKey: "lnaGain")
+        self.rxAmpGain = UserDefaults.standard.integer(forKey: "rxAmpGain") == 0 ? 14 : UserDefaults.standard.integer(forKey: "rxAmpGain")
+    }
+    
+    func resetToDefaults() {
+        serverIP = ""
+        dataPort = 5000
+        controlPort = 5001
+        vgaGain = 30
+        lnaGain = 32
+        rxAmpGain = 14
+    }
+}
+
 // MARK: - Settings View
 
 struct SettingsView: View {
-    @Binding var vgaGain: Int
-    @Binding var lnaGain: Int
-    @Binding var rxAmpGain: Int
+    @ObservedObject var settings = SettingsManager.shared
     @ObservedObject var receiver: HackRFReceiver
-    @Binding var controlPort: String
     @Environment(\.dismiss) var dismiss
+    
+    @State private var tempIP: String = ""
+    @State private var tempDataPort: String = ""
+    @State private var tempControlPort: String = ""
+    @State private var showResetAlert = false
     
     var body: some View {
         NavigationView {
             Form {
+                // Bağlantı Ayarları
+                Section(header: Text("Bağlantı Ayarları")) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("HackRF Sunucu IP Adresi")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        HStack {
+                            TextField("Örn: 192.168.1.100", text: $tempIP)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .keyboardType(.numbersAndPunctuation)
+                                .autocapitalization(.none)
+                            
+                            if !tempIP.isEmpty {
+                                Button {
+                                    settings.serverIP = tempIP
+                                } label: {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                }
+                            }
+                        }
+                        
+                        if settings.serverIP.isEmpty {
+                            Text("⚠️ IP adresi girilmedi - Bağlantı kurulamaz")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        } else {
+                            Text("✓ Kaydedildi: \(settings.serverIP)")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Data Portu (IQ Stream)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        HStack {
+                            TextField("5000", text: $tempDataPort)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .keyboardType(.numberPad)
+                            
+                            if !tempDataPort.isEmpty, let port = Int(tempDataPort) {
+                                Button {
+                                    settings.dataPort = port
+                                    tempDataPort = ""
+                                } label: {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                }
+                            }
+                        }
+                        Text("Mevcut: \(settings.dataPort)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Kontrol Portu (Komutlar)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        HStack {
+                            TextField("5001", text: $tempControlPort)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .keyboardType(.numberPad)
+                            
+                            if !tempControlPort.isEmpty, let port = Int(tempControlPort) {
+                                Button {
+                                    settings.controlPort = port
+                                    tempControlPort = ""
+                                } label: {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                }
+                            }
+                        }
+                        Text("Mevcut: \(settings.controlPort)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                // HackRF Parametreleri
                 Section(header: Text("HackRF Parametreleri")) {
                     VStack(alignment: .leading) {
-                        Text("VGA Gain: \(vgaGain) dB")
+                        HStack {
+                            Text("VGA Gain")
+                            Spacer()
+                            Text("\(settings.vgaGain) dB")
+                                .foregroundColor(.blue)
+                                .bold()
+                        }
                         Slider(value: Binding(
-                            get: { Double(vgaGain) },
-                            set: { vgaGain = Int($0) }
+                            get: { Double(settings.vgaGain) },
+                            set: { settings.vgaGain = Int($0) }
                         ), in: 0...62, step: 2)
+                        Text("Aralık: 0-62 dB (2 dB adımlarla)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                     
-                    Picker("LNA Gain", selection: $lnaGain) {
-                        Text("0 dB").tag(0)
-                        Text("8 dB").tag(8)
-                        Text("16 dB").tag(16)
-                        Text("24 dB").tag(24)
-                        Text("32 dB").tag(32)
-                        Text("40 dB").tag(40)
+                    VStack(alignment: .leading) {
+                        Picker("LNA Gain", selection: $settings.lnaGain) {
+                            Text("0 dB").tag(0)
+                            Text("8 dB").tag(8)
+                            Text("16 dB").tag(16)
+                            Text("24 dB").tag(24)
+                            Text("32 dB").tag(32)
+                            Text("40 dB").tag(40)
+                        }
+                        .pickerStyle(.segmented)
+                        Text("Düşük gürültülü amplifikatör kazancı")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                     
-                    Picker("RX Amp", selection: $rxAmpGain) {
-                        Text("Kapalı (0 dB)").tag(0)
-                        Text("Açık (14 dB)").tag(14)
+                    VStack(alignment: .leading) {
+                        Picker("RX Amplifier", selection: $settings.rxAmpGain) {
+                            Text("Kapalı (0 dB)").tag(0)
+                            Text("Açık (14 dB)").tag(14)
+                        }
+                        .pickerStyle(.segmented)
+                        Text("RX amplifikatör kazancı")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
                 
-                Section(header: Text("Kontrol Portu (5001)")) {
-                    HStack {
-                        Text("Port:")
-                        TextField("5001", text: $controlPort)
-                            .keyboardType(.numberPad)
-                    }
-                }
-                
+                // Ses Kontrolü
                 Section(header: Text("Ses Kontrolü")) {
                     VStack(alignment: .leading) {
-                        Text("Ses Seviyesi: \(Int(receiver.audioVolume * 100))%")
+                        HStack {
+                            Text("Ses Seviyesi")
+                            Spacer()
+                            Text("\(Int(receiver.audioVolume * 100))%")
+                                .foregroundColor(.blue)
+                                .bold()
+                        }
                         Slider(value: $receiver.audioVolume, in: 0...1)
                     }
                 }
                 
+                // Port 5001 Komutları
+                Section(header: Text("Port \(settings.controlPort) Komutları")) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("SET_FREQ:<frekans>")
+                            .font(.system(.caption, design: .monospaced))
+                        Text("SET_SAMPLE_RATE:<rate>")
+                            .font(.system(.caption, design: .monospaced))
+                        Text("SET_VGA_GAIN:<gain>")
+                            .font(.system(.caption, design: .monospaced))
+                        Text("SET_LNA_GAIN:<gain>")
+                            .font(.system(.caption, design: .monospaced))
+                        Text("SET_RX_AMP_GAIN:<gain>")
+                            .font(.system(.caption, design: .monospaced))
+                    }
+                    .foregroundColor(.secondary)
+                }
+                
+                // Durum
                 Section(header: Text("Durum")) {
                     HStack {
                         Text("Bağlantı:")
                         Spacer()
-                        Text(receiver.isConnected ? "Bağlı" : "Bağlı Değil")
-                            .foregroundColor(receiver.isConnected ? .green : .red)
+                        HStack {
+                            Circle()
+                                .fill(receiver.isConnected ? Color.green : Color.red)
+                                .frame(width: 10, height: 10)
+                            Text(receiver.isConnected ? "Bağlı" : "Bağlı Değil")
+                                .foregroundColor(receiver.isConnected ? .green : .red)
+                        }
                     }
                     
-                    Text(receiver.statusMessage)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    if !receiver.statusMessage.isEmpty {
+                        VStack(alignment: .leading) {
+                            Text("Mesaj:")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(receiver.statusMessage)
+                                .font(.caption)
+                        }
+                    }
+                }
+                
+                // Sıfırlama
+                Section {
+                    Button("Ayarları Sıfırla") {
+                        showResetAlert = true
+                    }
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity)
+                }
+                
+                // Hakkında
+                Section(header: Text("Hakkında")) {
+                    HStack {
+                        Text("Versiyon")
+                        Spacer()
+                        Text("1.3")
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    HStack {
+                        Text("Desteklenen Modlar")
+                        Spacer()
+                        Text("FM, AM, NFM, TV")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
             .navigationTitle("Ayarlar")
@@ -483,6 +701,20 @@ struct SettingsView: View {
                         dismiss()
                     }
                 }
+            }
+            .alert("Ayarları Sıfırla", isPresented: $showResetAlert) {
+                Button("İptal", role: .cancel) { }
+                Button("Sıfırla", role: .destructive) {
+                    settings.resetToDefaults()
+                    tempIP = ""
+                    tempDataPort = ""
+                    tempControlPort = ""
+                }
+            } message: {
+                Text("Tüm ayarlar varsayılan değerlere sıfırlanacak. Devam etmek istiyor musunuz?")
+            }
+            .onAppear {
+                tempIP = settings.serverIP
             }
         }
     }

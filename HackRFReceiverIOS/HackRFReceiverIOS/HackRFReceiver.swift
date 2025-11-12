@@ -65,8 +65,8 @@ class HackRFReceiver: ObservableObject {
     
     // MARK: - Port 5001 Control Commands
     
-    func sendControlCommand(_ command: String, port: Int) {
-        let controlClient = TCPClient(host: tcpClient?.host ?? "192.168.1.2", port: port)
+    func sendControlCommand(_ command: String, port: Int, host: String) {
+        let controlClient = TCPClient(host: host, port: port)
         
         controlClient.onStatusChanged = { connected, message in
             if connected {
@@ -85,7 +85,7 @@ class HackRFReceiver: ObservableObject {
         controlClient.connect()
     }
     
-    func sendAllControlParameters(frequency: Int, sampleRate: Int, vgaGain: Int, lnaGain: Int, rxAmpGain: Int, port: Int) {
+    func sendAllControlParameters(frequency: Int, sampleRate: Int, vgaGain: Int, lnaGain: Int, rxAmpGain: Int, port: Int, host: String) {
         DispatchQueue.main.async {
             self.statusMessage = "Parametreler gönderiliyor..."
         }
@@ -100,7 +100,7 @@ class HackRFReceiver: ObservableObject {
         
         for (index, command) in commands.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.2) {
-                self.sendControlCommand(command, port: port)
+                self.sendControlCommand(command, port: port, host: host)
                 
                 if index == commands.count - 1 {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
