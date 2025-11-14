@@ -13,7 +13,7 @@ AudioDemodulator::AudioDemodulator(QObject *parent)
     : QObject(parent)
     , m_lastPhase(0.0f)
     , m_audioPhase(0.0)
-    , m_audioGain(3.5f)
+    , m_audioGain(5.0f)
     , m_audioEnabled(true)
     , sampleRate(AUDIO_SAMP_RATE)
     , fmDeviation(FM_DEVIATION)
@@ -43,10 +43,10 @@ void AudioDemodulator::initFilters()
     m_audioFilterTaps = designLowPassFIR(FILTER_TAPS, 15000.0f, 48000.0f);
     
     // Pre-calculate decimation filter coefficients (PERFORMANCE OPTIMIZATION)
-    m_decimFilter1 = designLowPassFIR(FILTER_TAPS, 1280000.0f, 16000000.0f);  // 33→17
-    m_decimFilter2 = designLowPassFIR(FILTER_TAPS, 128000.0f, 3200000.0f);    // 33→17
-    m_decimFilter3 = designLowPassFIR(FILTER_TAPS, 64000.0f, 320000.0f);      // 33→17
-    m_decimFilter4 = designLowPassFIR(FILTER_TAPS, 21333.0f, 160000.0f);      // 33→17
+    m_decimFilter1 = designLowPassFIR(FILTER_TAPS, 1280000.0f, 16000000.0f);
+    m_decimFilter2 = designLowPassFIR(FILTER_TAPS, 128000.0f, 3200000.0f);
+    m_decimFilter3 = designLowPassFIR(FILTER_TAPS, 64000.0f, 320000.0f);
+    m_decimFilter4 = designLowPassFIR(FILTER_TAPS, 21333.0f, 160000.0f);
     
     qDebug() << "Audio filters initialized:";
     qDebug() << "  Final: 15kHz @ 48kHz";

@@ -37,7 +37,7 @@ private:
     // PAL-B/G TV Standard Constants
     static constexpr int SAMP_RATE = 16000000;           // 16 MHz (HackRF sample rate)
     static constexpr int AUDIO_SAMP_RATE = 48000;        // 48 kHz output
-    static constexpr int AUDIO_BUFFER_SIZE = 960;        // 20ms @ 48kHz (match AudioOutput)
+    static constexpr int AUDIO_BUFFER_SIZE = 480;        // 10ms @ 48kHz (match AudioOutput)
     
     // PAL-B Audio Specifications
     static constexpr double AUDIO_CARRIER = 5.5e6;       // 5.5 MHz (PAL-B standard)

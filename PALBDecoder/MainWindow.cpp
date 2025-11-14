@@ -198,14 +198,14 @@ void MainWindow::setupUI()
 
     m_audioGainSlider = new QSlider(Qt::Horizontal, this);
     m_audioGainSlider->setRange(0, 100);
-    m_audioGainSlider->setValue(10);  // 1.0x gain
+    m_audioGainSlider->setValue(50);  // 5.0x gain
     m_audioGainSlider->setTickPosition(QSlider::TicksBelow);
     m_audioGainSlider->setTickInterval(10);
 
     m_audioGainSpinBox = new QDoubleSpinBox(this);
     m_audioGainSpinBox->setRange(0.0, 10.0);
     m_audioGainSpinBox->setSingleStep(0.1);
-    m_audioGainSpinBox->setValue(1.0);
+    m_audioGainSpinBox->setValue(5.0);
     m_audioGainSpinBox->setDecimals(1);
     m_audioGainSpinBox->setMaximumWidth(80);
 
