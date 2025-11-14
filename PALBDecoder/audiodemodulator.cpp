@@ -1,6 +1,7 @@
 #include "AudioDemodulator.h"
 #include <QElapsedTimer>
 #include <QDebug>
+#include <QThread>
 #include <algorithm>
 #include <numeric>
 
@@ -12,9 +13,9 @@ AudioDemodulator::AudioDemodulator(QObject *parent)
     : QObject(parent)
     , m_lastPhase(0.0f)
     , m_audioPhase(0.0)
-    , m_audioGain(2.5f)  // Daha yüksek gain
+    , m_audioGain(3.5f)
     , m_audioEnabled(true)
-    , sampleRate(SAMP_RATE)
+    , sampleRate(AUDIO_SAMP_RATE)
     , fmDeviation(FM_DEVIATION)
 {
     m_audioBuffer.reserve(AUDIO_BUFFER_SIZE * 2);
@@ -38,8 +39,18 @@ AudioDemodulator::~AudioDemodulator()
 
 void AudioDemodulator::initFilters()
 {
+    // Audio bandwidth filter (15 kHz for PAL-B)
     m_audioFilterTaps = designLowPassFIR(FILTER_TAPS, 15000.0f, 48000.0f);
-    qDebug() << "Audio filter:" << m_audioFilterTaps.size() << "taps @ 15kHz";
+    
+    // Pre-calculate decimation filter coefficients (PERFORMANCE OPTIMIZATION)
+    m_decimFilter1 = designLowPassFIR(FILTER_TAPS, 1280000.0f, 16000000.0f);  // 33→17
+    m_decimFilter2 = designLowPassFIR(FILTER_TAPS, 128000.0f, 3200000.0f);    // 33→17
+    m_decimFilter3 = designLowPassFIR(FILTER_TAPS, 64000.0f, 320000.0f);      // 33→17
+    m_decimFilter4 = designLowPassFIR(FILTER_TAPS, 21333.0f, 160000.0f);      // 33→17
+    
+    qDebug() << "Audio filters initialized:";
+    qDebug() << "  Final: 15kHz @ 48kHz";
+    qDebug() << "  Decim filters: 4 stages cached";
 }
 
 std::vector<float> AudioDemodulator::designLowPassFIR(
@@ -251,7 +262,6 @@ void AudioDemodulator::emitAudioBuffer(const std::vector<float>& audio)
         return;
     }
 
-    static int totalEmitted = 0;
     static QElapsedTimer emitTimer;
     if (!emitTimer.isValid()) emitTimer.start();
 
@@ -261,9 +271,8 @@ void AudioDemodulator::emitAudioBuffer(const std::vector<float>& audio)
         m_audioBuffer.push_back(processed);
     }
 
-    static constexpr int CHUNK_SIZE = 960;
+    static constexpr int CHUNK_SIZE = 480;  // 10ms @ 48kHz (match AudioOutput)
 
-    int chunksEmitted = 0;
     while (m_audioBuffer.size() >= CHUNK_SIZE) {
         std::vector<float> chunk(m_audioBuffer.begin(),
                                  m_audioBuffer.begin() + CHUNK_SIZE);
@@ -271,28 +280,12 @@ void AudioDemodulator::emitAudioBuffer(const std::vector<float>& audio)
 
         m_audioBuffer.erase(m_audioBuffer.begin(),
                             m_audioBuffer.begin() + CHUNK_SIZE);
-        chunksEmitted++;
-        totalEmitted += CHUNK_SIZE;
-    }
-
-    if (emitTimer.elapsed() > 5000) {
-        qDebug() << "✓ Audio stats: emitted" << totalEmitted << "samples total,"
-                 << "buffer:" << m_audioBuffer.size();
-        emitTimer.restart();
     }
 }
 
 void AudioDemodulator::processSamples(const int8_t* data, size_t len)
 {
     if (!data || len == 0 || !m_audioEnabled) return;
-
-    static int callCount = 0;
-    callCount++;
-    
-    if (callCount <= 3) {
-        qDebug() << "[AudioDemod] processSamples called #" << callCount 
-                 << "- len:" << len << "bytes";
-    }
 
     QMutexLocker locker(&m_processMutex);
 
@@ -310,15 +303,8 @@ void AudioDemodulator::processSamples(const int8_t* data, size_t len)
 
 void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& samples)
 {
+
     if (!m_audioEnabled || samples.empty()) return;
-
-    static int callCount = 0;
-    static QElapsedTimer perfTimer;
-    if (!perfTimer.isValid()) perfTimer.start();
-    
-    callCount++;
-
-    QMutexLocker locker(&m_processMutex);
 
     try {
         // 1. Frequency shift to baseband
@@ -329,51 +315,32 @@ void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& sa
 
         double currentRate = SAMP_RATE;
 
-        // OPTIMIZED DECIMATION CHAIN: 16 MHz → 48 kHz
-        
         // Stage 1: 16 MHz → 3.2 MHz (÷5)
-        auto coeffs1 = designLowPassFIR(65, 1280000.0f, currentRate);
-        audio = applyFIRFilter(audio, coeffs1);
+        audio = applyFIRFilter(audio, m_decimFilter1);
         audio = decimate(audio, 5);
         currentRate = 3.2e6;
 
         // Stage 2: 3.2 MHz → 320 kHz (÷10)
-        auto coeffs2 = designLowPassFIR(65, 128000.0f, currentRate);
-        audio = applyFIRFilter(audio, coeffs2);
+        audio = applyFIRFilter(audio, m_decimFilter2);
         audio = decimate(audio, 10);
         currentRate = 320e3;
 
         // Stage 3: 320 kHz → 160 kHz (÷2)
-        auto coeffs3 = designLowPassFIR(65, 64000.0f, currentRate);
-        audio = applyFIRFilter(audio, coeffs3);
+        audio = applyFIRFilter(audio, m_decimFilter3);
         audio = decimate(audio, 2);
         currentRate = 160e3;
 
-        // Stage 4: 160 kHz → 48 kHz (÷3.333 via resampling)
-        // First decimate by 3: 160 kHz → 53.33 kHz
-        auto coeffs4 = designLowPassFIR(65, 21333.0f, currentRate);
-        audio = applyFIRFilter(audio, coeffs4);
+        // Stage 4: 160 kHz → 53.33 kHz (÷3)
+        audio = applyFIRFilter(audio, m_decimFilter4);
         audio = decimate(audio, 3);
-        currentRate = 160e3 / 3.0;  // 53.33 kHz
+        currentRate = 160e3 / 3.0;
 
-        // Final resample: 53.33 kHz → 48 kHz (downsample by 1.111)
+        // Final resample: 53.33 kHz → 48 kHz
         audio = resample(audio, currentRate, 48000.0);
         currentRate = 48000.0;
 
         // Final audio filter at 15 kHz
         audio = applyFIRFilter(audio, m_audioFilterTaps);
-
-        sampleRate = 48000.0;
-
-        // Log performance periodically
-        if (callCount <= 5 || perfTimer.elapsed() > 10000) {
-            qDebug() << "[AudioDemod] #" << callCount 
-                     << "- Input:" << samples.size() 
-                     << "→ Output:" << audio.size() 
-                     << "samples (" << (audio.size() * 1000.0 / 48000.0) << "ms)";
-            if (perfTimer.elapsed() > 10000) perfTimer.restart();
-        }
-
         // Emit
         emitAudioBuffer(audio);
 
@@ -394,30 +361,20 @@ std::vector<float> AudioDemodulator::demodulateAudio(
     auto audioSignal = frequencyShift(samples, -AUDIO_CARRIER);
     auto audio = fmDemodulateAtan2(audioSignal);
 
-    double currentRate = SAMP_RATE;
-
-    // Optimized chain
-    auto coeffs1 = designLowPassFIR(65, 1280000.0f, currentRate);
-    audio = applyFIRFilter(audio, coeffs1);
+    // Optimized chain with cached filters
+    audio = applyFIRFilter(audio, m_decimFilter1);
     audio = decimate(audio, 5);
-    currentRate = 3.2e6;
 
-    auto coeffs2 = designLowPassFIR(65, 128000.0f, currentRate);
-    audio = applyFIRFilter(audio, coeffs2);
+    audio = applyFIRFilter(audio, m_decimFilter2);
     audio = decimate(audio, 10);
-    currentRate = 320e3;
 
-    auto coeffs3 = designLowPassFIR(65, 64000.0f, currentRate);
-    audio = applyFIRFilter(audio, coeffs3);
+    audio = applyFIRFilter(audio, m_decimFilter3);
     audio = decimate(audio, 2);
-    currentRate = 160e3;
 
-    auto coeffs4 = designLowPassFIR(65, 21333.0f, currentRate);
-    audio = applyFIRFilter(audio, coeffs4);
+    audio = applyFIRFilter(audio, m_decimFilter4);
     audio = decimate(audio, 3);
-    currentRate = 160e3 / 3.0;
 
-    audio = resample(audio, currentRate, 48000.0);
+    audio = resample(audio, 160e3 / 3.0, 48000.0);
     audio = applyFIRFilter(audio, m_audioFilterTaps);
 
     return audio;

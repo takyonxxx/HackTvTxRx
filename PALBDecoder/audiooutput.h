@@ -22,7 +22,7 @@ public:
     bool initializeAudio();
     void stop();
     void enqueueAudio(const std::vector<float>& samples);
-    
+
     int queueSize() const;
     double queueDuration() const;
     int sampleRate() const { return m_format.sampleRate(); }
@@ -41,10 +41,11 @@ private:
     // Audio configuration
     static constexpr int SAMPLE_RATE = 48000;
     static constexpr int CHANNEL_COUNT = 2;
-    
+
     // Buffer configuration (optimized for stability)
-    static constexpr int MIN_BUFFER_SAMPLES = 19200;    // 400ms @ 48kHz (priming)
-    static constexpr int CHUNK_SIZE = 960;              // 20ms @ 48kHz (write chunks)
+    static constexpr int MIN_BUFFER_SAMPLES = 4800;    // 200ms @ 48kHz (priming)
+    static constexpr int RESTART_THRESHOLD = 2400;     // 100ms (re-prime threshold)
+    static constexpr int CHUNK_SIZE = 480;              // 10ms @ 48kHz (write chunks)
     static constexpr int MAX_QUEUE_SIZE = 480000;       // 10s maximum
     static constexpr int RESERVE_SIZE = 500000;         // Pre-allocated size
 

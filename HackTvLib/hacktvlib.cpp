@@ -137,6 +137,9 @@ HackTvLib::HackTvLib(QObject *parent)
     hackRfDevice = nullptr;
     rtlSdrDevice = nullptr;
     s = nullptr;
+
+    fprintf(stderr, "HackTvLib initialized.\n");
+    fflush(stderr);
 }
 
 HackTvLib::~HackTvLib()

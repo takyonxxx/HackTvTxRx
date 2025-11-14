@@ -37,22 +37,26 @@ private:
     // PAL-B/G TV Standard Constants
     static constexpr int SAMP_RATE = 16000000;           // 16 MHz (HackRF sample rate)
     static constexpr int AUDIO_SAMP_RATE = 48000;        // 48 kHz output
-    static constexpr int AUDIO_BUFFER_SIZE = 960;        // 20ms @ 48kHz
+    static constexpr int AUDIO_BUFFER_SIZE = 960;        // 20ms @ 48kHz (match AudioOutput)
     
     // PAL-B Audio Specifications
     static constexpr double AUDIO_CARRIER = 5.5e6;       // 5.5 MHz (PAL-B standard)
     static constexpr double FM_DEVIATION = 50e3;         // ±50 kHz (PAL standard)
     
     // Optimized decimation: 16MHz →÷5→ 3.2MHz →÷10→ 320kHz →÷2→ 160kHz →÷3.33→ 48kHz
-    static constexpr int FILTER_TAPS = 65;
+    static constexpr int FILTER_TAPS = 17;
 
     // Thread safety
     QMutex m_processMutex;
     mutable QRecursiveMutex m_mutex;
     QMutex m_phaseMutex;
 
-    // Audio filters (FIR)
+    // Audio filters (FIR) - CACHED
     std::vector<float> m_audioFilterTaps;
+    std::vector<float> m_decimFilter1;  // 1.28 MHz @ 16 MHz
+    std::vector<float> m_decimFilter2;  // 128 kHz @ 3.2 MHz
+    std::vector<float> m_decimFilter3;  // 64 kHz @ 320 kHz
+    std::vector<float> m_decimFilter4;  // 21.3 kHz @ 160 kHz
 
     // Audio buffer
     std::vector<float> m_audioBuffer;

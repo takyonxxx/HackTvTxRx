@@ -30,7 +30,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_audioDemodulator = std::make_unique<AudioDemodulator>(this);
     m_audioOutput = std::make_unique<AudioOutput>();
 
-    m_audioDemodulator->setSampleRate(m_currentSampleRate);
+    m_audioDemodulator->setSampleRate(48000);
 
     // Connect frame ready signal
     connect(m_palDecoder.get(), &PALDecoder::frameReady,
@@ -928,8 +928,6 @@ void MainWindow::updateStatus()
 
 void MainWindow::initHackRF()
 {
-    qDebug() << "Initializing HackRF...";
-
     m_hackTvLib = std::make_unique<HackTvLib>(this);
 
     palDemodulationInProgress.storeRelease(0);
@@ -1018,35 +1016,31 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 
     // VIDEO PROCESSING - tam frame (40ms = 1 PAL frame)
     if (palFrameBuffer->isFrameReady()) {
+
+        auto fullFrame = palFrameBuffer->getFrame();
+
         int expectedVideo = 0;
-        if (palDemodulationInProgress.testAndSetAcquire(expectedVideo, 1)) {
-            auto fullFrame = palFrameBuffer->getFrame();
+        if (palDemodulationInProgress.testAndSetAcquire(expectedVideo, 1)) {            
             if (!fullFrame.empty()) {
                 auto framePtr = std::make_shared<std::vector<std::complex<float>>>(
                     std::move(fullFrame)
                     );
                 startPalVideoProcessing(framePtr);
+                startPalAudioProcessing(framePtr);
             } else {
                 palDemodulationInProgress.storeRelease(0);
             }
         }
-    }
 
-    if (m_audioDemodulator && m_audioDemodulator->getAudioEnabled()) {
-        // AUDIO PROCESSING - her 1/4 frame
-        qsizetype quarterFrameSize = palFrameBuffer->targetSize() / 4;
-        if (palFrameBuffer->size() >= quarterFrameSize) {
-            int expectedAudio = 0;
-            if (audioDemodulationInProgress.testAndSetAcquire(expectedAudio, 1)) {
-                auto audioSamples = palFrameBuffer->getSamples(quarterFrameSize);
-                if (!audioSamples.empty()) {
-                    auto audioPtr = std::make_shared<std::vector<std::complex<float>>>(
-                        std::move(audioSamples)
-                        );
-                    startPalAudioProcessing(audioPtr);
-                } else {
-                    audioDemodulationInProgress.storeRelease(0);
-                }
+        int expectedAudio = 0;
+        if (audioDemodulationInProgress.testAndSetAcquire(expectedAudio, 1)) {
+            if (!fullFrame.empty()) {
+                auto framePtr = std::make_shared<std::vector<std::complex<float>>>(
+                    std::move(fullFrame)
+                    );
+                startPalAudioProcessing(framePtr);
+            } else {
+                audioDemodulationInProgress.storeRelease(0);
             }
         }
     }
@@ -1059,10 +1053,6 @@ void MainWindow::startPalAudioProcessing(std::shared_ptr<std::vector<std::comple
         try {          
             if (m_audioDemodulator) {
                 m_audioDemodulator->processSamples(*audioPtr);
-                // auto audio = m_audioDemodulator->demodulateAudio(*audioPtr);
-                // if (!audio.empty()) {
-                //     m_audioOutput->enqueueAudio(std::move(audio));
-                // }
             }
         }
         catch (const std::exception& e) {
