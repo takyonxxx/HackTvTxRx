@@ -228,12 +228,19 @@ void HackRfDevice::reset()
 
 int HackRfDevice::start(rf_mode _mode)
 {
+    fprintf(stderr, "HackRfDevice::start() ENTRY, mode=%d\n", _mode);
+    fflush(stderr);
+
     // Destroying kontrolü
     if (m_isDestroying.load()) {
+        fprintf(stderr, "Device is being destroyed, cannot start\n");
+        fflush(stderr);
         return RF_ERROR;
     }
 
     if (!m_deviceMutex) {
+        fprintf(stderr, "Device mutex is null\n");
+        fflush(stderr);
         return RF_ERROR;
     }
 
@@ -243,6 +250,7 @@ int HackRfDevice::start(rf_mode _mode)
         // Zaten çalışıyorsa hata döndür
         if (m_isRunning.load() || !m_isStopped.load()) {
             fprintf(stderr, "HackRF device is already running\n");
+            fflush(stderr);
             return RF_ERROR;
         }
 
@@ -250,27 +258,43 @@ int HackRfDevice::start(rf_mode _mode)
 
         if (device_serials.empty()) {
             fprintf(stderr, "No HackRF devices found\n");
+            fflush(stderr);
             return RF_ERROR;
         }
 
         // Device'ı aç
         if (!h_device) {
+            fprintf(stderr, "Opening HackRF device: %s\n", device_serials[0].c_str());
+            fflush(stderr);
+
             int r = hackrf_open_by_serial(device_serials[0].c_str(), &h_device);
             if (r != HACKRF_SUCCESS) {
                 fprintf(stderr, "hackrf_open() failed: %s (%d)\n",
                         hackrf_error_name(static_cast<hackrf_error>(r)), r);
+                fflush(stderr);
                 return RF_ERROR;
             }
+
+            fprintf(stderr, "HackRF device opened successfully\n");
+            fflush(stderr);
         }
 
         // Ayarları uygula
+        fprintf(stderr, "Applying settings...\n");
+        fflush(stderr);
+
         if (!applySettings()) {
             fprintf(stderr, "Failed to apply HackRF settings\n");
+            fflush(stderr);
             cleanup();
             return RF_ERROR;
         }
 
-        std::cout << "HackRF Amp enabled: " << m_ampEnable << std::endl;
+        fprintf(stderr, "Settings applied successfully\n");
+        fflush(stderr);
+
+        fprintf(stderr, "HackRF Amp enabled: %d\n", m_ampEnable);
+        fflush(stderr);
 
         // Running flag'ini set et (callback başlamadan önce)
         m_isStopped.store(false);
@@ -278,42 +302,55 @@ int HackRfDevice::start(rf_mode _mode)
 
         int r;
         if (mode == RX) {
+            fprintf(stderr, "Starting RX mode...\n");
+            fflush(stderr);
+
             r = hackrf_start_rx(h_device, _rx_callback, this);
             if (r != HACKRF_SUCCESS) {
                 fprintf(stderr, "hackrf_start_rx() failed: %s (%d)\n",
                         hackrf_error_name(static_cast<hackrf_error>(r)), r);
+                fflush(stderr);
                 m_isRunning.store(false);
                 m_isStopped.store(true);
                 cleanup();
                 return RF_ERROR;
             }
-            printf("hackrf_start_rx() ok\n");
+            fprintf(stderr, "hackrf_start_rx() ok\n");
+            fflush(stderr);
         }
         else if (mode == TX) {
+            fprintf(stderr, "Starting TX mode...\n");
+            fflush(stderr);
+
             r = hackrf_start_tx(h_device, _tx_callback, this);
             if (r != HACKRF_SUCCESS) {
                 fprintf(stderr, "hackrf_start_tx() failed: %s (%d)\n",
-                        hackrf_error_name(static_cast<hackrf_error>(r)), r);              
+                        hackrf_error_name(static_cast<hackrf_error>(r)), r);
+                fflush(stderr);
                 m_isRunning.store(false);
                 m_isStopped.store(true);
                 cleanup();
                 return RF_ERROR;
             }
-            printf("hackrf_start_tx() ok\n");
+            fprintf(stderr, "hackrf_start_tx() ok\n");
+            fflush(stderr);
         }
         else {
-            fprintf(stderr, "Invalid mode specified\n");
+            fprintf(stderr, "Invalid mode specified: %d\n", mode);
+            fflush(stderr);
             m_isRunning.store(false);
             m_isStopped.store(true);
             cleanup();
             return RF_ERROR;
         }
 
-        std::cout << "HackRF Started" << std::endl;
+        fprintf(stderr, "HackRF Started successfully\n");
+        fflush(stderr);
         return RF_OK;
     }
     catch (const std::exception& e) {
         fprintf(stderr, "Exception in start(): %s\n", e.what());
+        fflush(stderr);
         return RF_ERROR;
     }
 }
@@ -366,31 +403,6 @@ void HackRfDevice::cleanup()
     }
 }
 
-std::vector<float> HackRfDevice::readStreamToSize(size_t size)
-{
-    std::vector<float> float_buffer;
-    float_buffer.reserve(size);
-
-    while (float_buffer.size() < size && m_isRunning.load()) {
-        std::vector<float> temp_buffer = stream_tx.readBufferToVector();
-
-        if (temp_buffer.empty()) {
-            // Stream boşsa biraz bekle
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
-            continue;
-        }
-
-        size_t elements_needed = size - float_buffer.size();
-        size_t elements_to_add = std::min(elements_needed, temp_buffer.size());
-
-        float_buffer.insert(float_buffer.end(),
-                            temp_buffer.begin(),
-                            temp_buffer.begin() + elements_to_add);
-    }
-
-    return float_buffer;
-}
-
 int HackRfDevice::_tx_callback(hackrf_transfer *transfer)
 {
     HackRfDevice *device = static_cast<HackRfDevice*>(transfer->tx_ctx);
@@ -437,6 +449,45 @@ int HackRfDevice::_rx_callback(hackrf_transfer *transfer)
     }
 }
 
+std::vector<float> HackRfDevice::readStreamToSize(size_t size)
+{
+    std::vector<float> float_buffer;
+    float_buffer.reserve(size);
+
+    // CRITICAL: Add timeout to prevent infinite blocking
+    const int MAX_WAIT_MS = 100; // 100ms timeout
+    const auto start_time = std::chrono::steady_clock::now();
+
+    while (float_buffer.size() < size && m_isRunning.load()) {
+        // Check timeout
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - start_time
+                           ).count();
+
+        if (elapsed > MAX_WAIT_MS) {
+            // Timeout - return what we have (may be empty)
+            break;
+        }
+
+        std::vector<float> temp_buffer = stream_tx.readBufferToVector();
+
+        if (temp_buffer.empty()) {
+            // Stream boşsa biraz bekle
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            continue;
+        }
+
+        size_t elements_needed = size - float_buffer.size();
+        size_t elements_to_add = std::min(elements_needed, temp_buffer.size());
+
+        float_buffer.insert(float_buffer.end(),
+                            temp_buffer.begin(),
+                            temp_buffer.begin() + elements_to_add);
+    }
+
+    return float_buffer;
+}
+
 int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
 {
     if (!m_isRunning.load() || !buffer || length == 0) {
@@ -445,26 +496,39 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
 
     try {
         size_t desired_size = length / 2;
+
+        // CRITICAL: Check if stream has data available
+        // If stream is empty, send silence instead of blocking
+        if (stream_tx.isEmpty()) {
+            // Send silence (zeros) when no audio input available
+            std::memset(buffer, 0, length);
+            return 0;
+        }
+
         std::vector<float> float_buffer = readStreamToSize(desired_size);
 
-        if (float_buffer.size() < desired_size) {
-            // Buffer'ı sıfırla
+        // If we couldn't get enough samples (timeout or no data), fill with silence
+        if (float_buffer.empty() || float_buffer.size() < desired_size) {
             std::memset(buffer, 0, length);
             return 0;
         }
 
         // Amplitude uygula
         for (auto& sample : float_buffer) {
-            sample *= amplitude;
+            sample *= amplitude.load();
         }
 
         // FM modülasyonu uygula
         std::vector<std::complex<float>> modulated_signal(float_buffer.size());
-        FrequencyModulator modulator(modulation_index);
+        FrequencyModulator modulator(modulation_index.load());
         modulator.work(float_buffer.size(), float_buffer, modulated_signal);
 
         // Resampling
-        RationalResampler resampler(interpolation, decimation, filter_size);
+        float interp = interpolation.load();
+        int decim = decimation.load();
+        float filt_size = filter_size.load();
+
+        RationalResampler resampler(interp, decim, filt_size);
         std::vector<std::complex<float>> resampled_signal = resampler.resample(modulated_signal);
 
         // Buffer boyutu kontrolü
@@ -489,7 +553,17 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
     }
     catch (const std::exception& e) {
         fprintf(stderr, "Exception in apply_fm_modulation: %s\n", e.what());
-        return -1;
+        fflush(stderr);
+        // On error, send silence (don't stop the stream)
+        std::memset(buffer, 0, length);
+        return 0;
+    }
+    catch (...) {
+        fprintf(stderr, "Unknown exception in apply_fm_modulation\n");
+        fflush(stderr);
+        // On error, send silence
+        std::memset(buffer, 0, length);
+        return 0;
     }
 }
 

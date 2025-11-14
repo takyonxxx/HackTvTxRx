@@ -1,7 +1,6 @@
 #ifndef STREAM_TX_H
 #define STREAM_TX_H
 #pragma once
-
 #include <vector>
 #include <mutex>
 #include <condition_variable>
@@ -69,15 +68,28 @@ public:
         std::vector<float> result;
         int currentSize = dataSize.load();
         std::lock_guard<std::mutex> lock(bufferMutex);
+
         if (currentSize <= 0 || readBuf == nullptr) {
             return result;
         }
+
         result.reserve(currentSize * 2);
         for (int i = 0; i < currentSize; ++i) {
             result.push_back(readBuf[i].re);
             result.push_back(readBuf[i].im);
         }
+
         return result;
+    }
+
+    // NEW: Get current buffer size
+    int size() const {
+        return dataSize.load();
+    }
+
+    // NEW: Check if buffer is empty
+    bool isEmpty() const {
+        return dataSize.load() <= 0;
     }
 
     void free() {

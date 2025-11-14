@@ -25,9 +25,6 @@
 #include "meter.h"
 #include "audiooutput.h"
 #include "modulator.h"
-#include "tv_display.h"
-#include "tvdisplayadapter.h"
-#include "palbdemodulator.h"
 
 class MainWindow : public QMainWindow
 {
@@ -63,14 +60,12 @@ private slots:
     void onLnaSliderValueChanged(int value);
     void onVgaSliderValueChanged(int value);
     void onRxAmpSliderValueChanged(int value);
-    void updateDisplay(const QImage& image);
     void clear();
     void exitApp();
 
 private:
     void initializeHackTvLib();
     void setupUi();
-    void addVideoControls();
     void addOutputGroup();
     void addinputTypeGroup();
     void addModeGroup();
@@ -81,36 +76,13 @@ private:
     QStringList buildCommand();
     void setCurrentSampleRate(int sampleRate);
     void processFft(const std::vector<std::complex<float>>& samples);
-    void processDemod(const std::vector<std::complex<float>>& samples);
-    void startPalVideoProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr);
-    void startPalAudioProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr);
+    void processDemod(const std::vector<std::complex<float>>& samples);    
     void handleLog(const std::string& logMessage);
     void handleReceivedData(const int8_t *data, size_t len);
 
-    float m_videoBrightness = 0.2f;  // 0.0 normal, pozitif daha parlak
-    float m_videoContrast = 1.3f;    // 1.0 normal, >1.0 daha kontrastlı
-    float m_videoGamma = 0.8f;       // <1.0 daha parlak, >1.0 daha karanlık
-    float m_videoSync = 0.15f;       // <1.0
-
     QVBoxLayout *mainLayout;
 
-    // UI Elements
-    QGroupBox* videoGroup;
-    QLabel* brightLabel;
-    QLabel* contrastLabel;
-    QLabel* gammaLabel;
-    QLabel* syncLabel;
-    QSlider* brightSlider;
-    QSlider* contrastSlider;
-    QSlider* gammaSlider;
-    QSlider* syncSlider;
-    QLabel* brightValue;
-    QLabel* contrastValue;
-    QLabel* gammaValue ;
-    QLabel* syncValue ;
-
     // Invert checkbox in fourth row
-    QCheckBox* invertCheckBox;
     QComboBox *outputCombo, *channelCombo, *sampleRateCombo, *rxtxCombo, *inputTypeCombo, *modeCombo;
     QCheckBox *ampEnabled, *colorDisabled;
     QLineEdit *frequencyEdit, *inputFileEdit, *ffmpegOptionsEdit;
@@ -132,15 +104,11 @@ private:
     QGridLayout *txControlsLayout;
     QGroupBox *outputGroup, *inputTypeGroup, *modeGroup, *rxGroup;
 
-    // Member variables
-    TVDisplay *tvDisplay;
-    TVDisplayAdapter *m_tvAdapter;
+
     QTextBrowser *logBrowser;
     //std::unique_ptr<HackTvLib> m_hackTvLib;
     HackTvLib* m_hackTvLib;
     std::unique_ptr<AudioOutput> audioOutput;
-    PALBDemodulator *palbDemodulator;
-    FrameBuffer* palFrameBuffer;    
 
     QThreadPool* m_threadPool;
     QTimer *logTimer;
@@ -185,9 +153,6 @@ private:
     std::unique_ptr<RationalResampler> rationalResampler;
     std::unique_ptr<FMDemodulator> fmDemodulator;    
     QImage currentFrame;
-
-    QAtomicInt palDemodulationInProgress{0};
-    QAtomicInt audioDemodulationInProgress{0};
 
 
 protected:

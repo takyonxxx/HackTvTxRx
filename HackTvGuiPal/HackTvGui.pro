@@ -94,8 +94,7 @@ SOURCES += \
     freqctrl.cpp \
     main.cpp \
     mainwindow.cpp \
-    meter.cpp \
-    palbdemodulator.cpp
+    meter.cpp
 
 HEADERS += \
     audiooutput.h \
@@ -104,11 +103,7 @@ HEADERS += \
     freqctrl.h \
     mainwindow.h \
     meter.h \
-    modulator.h \
-    palbdemodulator.h \
-    tv_display.h \
-    tvdisplayadapter.h \
-    tvscreen.h
+    modulator.h
 
 FORMS += \
     mainwindow.ui
