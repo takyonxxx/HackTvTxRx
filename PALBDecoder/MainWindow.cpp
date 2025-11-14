@@ -362,12 +362,12 @@ void MainWindow::setupUI()
     lnaLayout->addWidget(new QLabel("LNA:", this));
     m_lnaGainSlider = new QSlider(Qt::Horizontal, this);
     m_lnaGainSlider->setRange(0, 40);
-    m_lnaGainSlider->setValue(40);
+    m_lnaGainSlider->setValue(32);
     m_lnaGainSlider->setTickPosition(QSlider::TicksBelow);
     m_lnaGainSlider->setTickInterval(8);
     m_lnaGainSpinBox = new QSpinBox(this);
     m_lnaGainSpinBox->setRange(0, 40);
-    m_lnaGainSpinBox->setValue(40);
+    m_lnaGainSpinBox->setValue(32);
     m_lnaGainSpinBox->setMaximumWidth(100);
     connect(m_lnaGainSlider, &QSlider::valueChanged, this, &MainWindow::onLnaGainChanged);
     connect(m_lnaGainSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
@@ -381,12 +381,12 @@ void MainWindow::setupUI()
     vgaLayout->addWidget(new QLabel("VGA:", this));
     m_vgaGainSlider = new QSlider(Qt::Horizontal, this);
     m_vgaGainSlider->setRange(0, 62);
-    m_vgaGainSlider->setValue(20);
+    m_vgaGainSlider->setValue(30);
     m_vgaGainSlider->setTickPosition(QSlider::TicksBelow);
     m_vgaGainSlider->setTickInterval(8);
     m_vgaGainSpinBox = new QSpinBox(this);
     m_vgaGainSpinBox->setRange(0, 62);
-    m_vgaGainSpinBox->setValue(20);
+    m_vgaGainSpinBox->setValue(30);
     m_vgaGainSpinBox->setMaximumWidth(100);
     connect(m_vgaGainSlider, &QSlider::valueChanged, this, &MainWindow::onVgaGainChanged);
     connect(m_vgaGainSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),

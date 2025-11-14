@@ -124,20 +124,16 @@ static void print_usage(void)
 
 HackTvLib::HackTvLib(QObject *parent)
     : QObject(parent)
-    , m_logCallback()           // 1. Callback (default init)
-    , m_dataCallback()          // 2. Callback (default init)
-    // m_txThread               // 3. (default constructor)
-    // m_mutex                  // 4. (default constructor)
-    , m_abort(false)            // 5. ✓
-    , m_signal(0)               // 6. ✓
-    // m_argv                   // 7. ✓ (default constructor - empty vector)
-    , s(nullptr)                // 8. ✓
-    , m_rxTxMode(RX_MODE)       // 9. ✓
-    , micEnabled(false)         // 10. ✓
-    , hackRfDevice(nullptr)     // 11. ✓
-    , rtlSdrDevice(nullptr)     // 12. ✓
+    , m_logCallback()
+    , m_dataCallback()
+    , m_abort(false)
+    , m_signal(0)
+    , s(nullptr)
+    , m_rxTxMode(RX_MODE)
+    , micEnabled(false)
+    , hackRfDevice(nullptr)
+    , rtlSdrDevice(nullptr)
 {
-    // ✓ EXTRA SAFETY: Tekrar set et
     hackRfDevice = nullptr;
     rtlSdrDevice = nullptr;
     s = nullptr;
@@ -145,25 +141,36 @@ HackTvLib::HackTvLib(QObject *parent)
 
 HackTvLib::~HackTvLib()
 {
-    // First stop any running operations
-    if (m_txThread.joinable()) {
-        m_abort = true;
-        m_txThread.join();
+    fprintf(stderr, "=== HackTvLib Destructor ===\n");
+    fflush(stderr);
+
+    // Only stop if not already stopped
+    if (m_txThread.joinable() || hackRfDevice || rtlSdrDevice) {
+        fprintf(stderr, "Calling stop() from destructor\n");
+        fflush(stderr);
+        stop();
+    } else {
+        fprintf(stderr, "Already stopped, skipping stop() call\n");
+        fflush(stderr);
     }
 
-    stop();
-
-    if(hackRfDevice)
-    {
+    // Final cleanup
+    if (hackRfDevice) {
+        fprintf(stderr, "Cleaning up hackRfDevice in destructor\n");
+        fflush(stderr);
         delete hackRfDevice;
         hackRfDevice = nullptr;
     }
 
-    if(rtlSdrDevice)
-    {
+    if (rtlSdrDevice) {
+        fprintf(stderr, "Cleaning up rtlSdrDevice in destructor\n");
+        fflush(stderr);
         delete rtlSdrDevice;
         rtlSdrDevice = nullptr;
     }
+
+    fprintf(stderr, "=== HackTvLib Destructor Complete ===\n");
+    fflush(stderr);
 }
 
 void HackTvLib::setLogCallback(LogCallback callback) {
@@ -1258,26 +1265,41 @@ void HackTvLib::rfTxLoop()
 
             while (!m_abort.load())
             {
-                // CRITICAL: Check abort flag frequently
+                // CRITICAL: Check abort flag at the START
                 if (m_abort.load()) {
                     break;
                 }
 
                 size_t samples;
-                int16_t* data = vid_next_line(&s->vid, &samples);
+                int16_t* data = nullptr;
+
+                // Wrap vid_next_line in try-catch
+                try {
+                    data = vid_next_line(&s->vid, &samples);
+                } catch (const std::exception& e) {
+
+                    break;
+                } catch (...) {
+                    break;
+                }
 
                 if (data == NULL) {
-                    fprintf(stderr, "[rfTxLoop] vid_next_line returned NULL (EOF or error)\n");
-                    fflush(stderr);
+                    break;
+                }
+
+                // Check abort BEFORE writing
+                if (m_abort.load()) {
                     break;
                 }
 
                 if (rf_write(&s->rf, data, samples) != RF_OK) {
-                    fprintf(stderr, "[rfTxLoop] rf_write failed\n");
-                    fflush(stderr);
                     break;
                 }
 
+                // Check abort AFTER writing
+                if (m_abort.load()) {
+                    break;
+                }
             }
 
             fflush(stderr);
@@ -1352,9 +1374,9 @@ bool HackTvLib::stop()
         fflush(stderr);
 
         if (!s) {
-            fprintf(stderr, "❌ 's' is NULL\n");
+            fprintf(stderr, "'s' is NULL, already stopped?\n");
             fflush(stderr);
-            return false;
+            return true; // Consider it success if already cleaned up
         }
 
         if (strcmp(s->output_type, "hackrf") == 0) {
@@ -1373,19 +1395,19 @@ bool HackTvLib::stop()
                     // Reset mic state
                     micEnabled = false;
 
-                    fprintf(stderr, "[4] ✓ HackRF stopped\n");
+                    fprintf(stderr, "[4] HackRF stopped\n");
                     fflush(stderr);
                     log("HackTvLib stopped.");
                     return true;
                 } else {
-                    fprintf(stderr, "❌ Failed to stop HackRF\n");
+                    fprintf(stderr, "Failed to stop HackRF\n");
                     fflush(stderr);
                     return false;
                 }
             } else {
-                fprintf(stderr, "⚠️  hackRfDevice is NULL\n");
+                fprintf(stderr, "hackRfDevice is NULL, already stopped?\n");
                 fflush(stderr);
-                return false;
+                return true; // Already stopped
             }
         }
         else if (strcmp(s->output_type, "rtlsdr") == 0) {
@@ -1397,18 +1419,18 @@ bool HackTvLib::stop()
                 delete rtlSdrDevice;
                 rtlSdrDevice = nullptr;
 
-                fprintf(stderr, "[6] ✓ RTL-SDR stopped\n");
+                fprintf(stderr, "[6]RTL-SDR stopped\n");
                 fflush(stderr);
                 log("RTL-SDR stopped.");
                 return true;
             } else {
-                fprintf(stderr, "⚠️  rtlSdrDevice is NULL\n");
+                fprintf(stderr, "rtlSdrDevice is NULL, already stopped?\n");
                 fflush(stderr);
-                return false;
+                return true; // Already stopped
             }
         }
 
-        fprintf(stderr, "❌ Unknown output type\n");
+        fprintf(stderr, "Unknown output type\n");
         fflush(stderr);
         return false;
     }
@@ -1419,47 +1441,125 @@ bool HackTvLib::stop()
     fprintf(stderr, "[7] Stopping VIDEO TX mode...\n");
     fflush(stderr);
 
-    std::lock_guard<std::mutex> lock(m_mutex);
-
+    // CRITICAL: Check if already stopped
     if (!m_txThread.joinable()) {
-        fprintf(stderr, "⚠️  TX thread not joinable\n");
+        fprintf(stderr, "TX thread not joinable (already stopped or never started)\n");
         fflush(stderr);
-        return false;
+
+        // Still set abort flag for safety
+        m_abort.store(true, std::memory_order_release);
+
+        // Return success - thread is already stopped
+        return true;
     }
 
+    // Set abort flag FIRST (before taking mutex)
     fprintf(stderr, "[8] Setting abort flag...\n");
     fflush(stderr);
-    m_abort.store(true, std::memory_order_relaxed);
+    m_abort.store(true, std::memory_order_release);
 
-    fprintf(stderr, "[9] Waiting for thread to finish...\n");
+    // Give thread time to see the flag
+    fprintf(stderr, "[8.5] Waiting for thread to notice abort flag...\n");
+    fflush(stderr);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Try to join with timeout
+    fprintf(stderr, "[9] Waiting for thread to finish (with timeout)...\n");
     fflush(stderr);
 
-    try {
-        m_txThread.join();
-        fprintf(stderr, "[10] ✓ Thread joined\n");
-        fflush(stderr);
-    } catch (const std::exception& e) {
-        fprintf(stderr, "❌ Exception joining thread: %s\n", e.what());
-        fflush(stderr);
-        return false;
+    bool joined = false;
+    const int TIMEOUT_SECONDS = 3;
+
+    // Simple polling approach
+    auto start_time = std::chrono::steady_clock::now();
+
+    while (m_txThread.joinable()) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - start_time
+        ).count();
+
+        if (elapsed >= TIMEOUT_SECONDS) {
+            fprintf(stderr, "Thread did not exit within %d seconds, forcing cleanup...\n", TIMEOUT_SECONDS);
+            fflush(stderr);
+            break;
+        }
+
+        if (elapsed > 0 && elapsed % 1 == 0) {
+            fprintf(stderr, "     Waiting... %lld/%d seconds\n", elapsed, TIMEOUT_SECONDS);
+            fflush(stderr);
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
+    // Check if thread is still joinable
+    if (m_txThread.joinable()) {
+        fprintf(stderr, "Thread still running after timeout, detaching...\n");
+        fflush(stderr);
+
+        // Last resort: detach the thread
+        try {
+            m_txThread.detach();
+            fprintf(stderr, "Thread detached (will terminate with process)\n");
+            fflush(stderr);
+        } catch (const std::exception& e) {
+            fprintf(stderr, "Failed to detach thread: %s\n", e.what());
+            fflush(stderr);
+        } catch (...) {
+            fprintf(stderr, "Failed to detach thread: unknown exception\n");
+            fflush(stderr);
+        }
+    } else {
+        // Thread finished, join it
+        fprintf(stderr, "[10] Thread is no longer joinable, attempting final join...\n");
+        fflush(stderr);
+
+        try {
+            // This should be a no-op if thread already finished
+            // But we need to call it to clean up thread resources
+            if (m_txThread.joinable()) {
+                m_txThread.join();
+                fprintf(stderr, "[10.5]Thread joined successfully\n");
+                fflush(stderr);
+            }
+            joined = true;
+        } catch (const std::exception& e) {
+            fprintf(stderr, "Exception joining thread: %s\n", e.what());
+            fflush(stderr);
+        } catch (...) {
+            fprintf(stderr, "Unknown exception joining thread\n");
+            fflush(stderr);
+        }
+    }
+
+    // Clean up resources
     fprintf(stderr, "[11] Cleaning up resources...\n");
     fflush(stderr);
 
     try {
-        rf_close(&s->rf);
-        vid_free(&s->vid);
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        if (s) {
+            rf_close(&s->rf);
+            vid_free(&s->vid);
+        }
         av_ffmpeg_deinit();
+
+        fprintf(stderr, "[12]Resources cleaned up\n");
+        fflush(stderr);
+    } catch (const std::exception& e) {
+        fprintf(stderr, "Exception during cleanup: %s\n", e.what());
+        fflush(stderr);
     } catch (...) {
-        fprintf(stderr, "⚠️  Exception during cleanup\n");
+        fprintf(stderr, "Unknown exception during cleanup\n");
         fflush(stderr);
     }
 
-    fprintf(stderr, "[12] ✓✓✓ VIDEO TX STOPPED ✓✓✓\n");
+    fprintf(stderr, "[13] VIDEO TX STOPPED\n");
     fflush(stderr);
+
     log("HackTvLib stopped.");
-    return true;
+    return true; // Always return true since thread is stopped
 }
 
 bool HackTvLib::start()
@@ -1485,12 +1585,12 @@ bool HackTvLib::start()
     // Allocate fresh hacktv_t
     s = (hacktv_t*)calloc(1, sizeof(hacktv_t));
     if (!s) {
-        fprintf(stderr, "❌ FATAL: calloc failed!\n");
+        fprintf(stderr, "FATAL: calloc failed!\n");
         fflush(stderr);
         return false;
     }
 
-    fprintf(stderr, "[2] ✓ Allocated hacktv_t at: %p\n", (void*)s);
+    fprintf(stderr, "[2]Allocated hacktv_t at: %p\n", (void*)s);
     fflush(stderr);
 
     // Default configuration
@@ -1566,12 +1666,12 @@ bool HackTvLib::start()
     fflush(stderr);
 
     if (!parseArguments()) {
-        fprintf(stderr, "❌ parseArguments failed!\n");
+        fprintf(stderr, "parseArguments failed!\n");
         fflush(stderr);
         return false;
     }
 
-    fprintf(stderr, "[4] ✓ Arguments parsed\n");
+    fprintf(stderr, "[4]Arguments parsed\n");
     fprintf(stderr, "     mode = %d (%s)\n", m_rxTxMode, getRxTxModeString(m_rxTxMode));
     fprintf(stderr, "     micEnabled = %d\n", micEnabled);
     fprintf(stderr, "     output_type = '%s'\n", s->output_type ? s->output_type : "NULL");
@@ -1603,7 +1703,7 @@ bool HackTvLib::start()
                 try {
                     delete hackRfDevice;
                 } catch (...) {
-                    fprintf(stderr, "     ⚠️  Exception during delete\n");
+                    fprintf(stderr, "     Exception during delete\n");
                     fflush(stderr);
                 }
                 hackRfDevice = nullptr;
@@ -1612,10 +1712,10 @@ bool HackTvLib::start()
             // Create new device
             try {
                 hackRfDevice = new HackRfDevice();
-                fprintf(stderr, "     ✓ Created HackRfDevice: %p\n", (void*)hackRfDevice);
+                fprintf(stderr, "     Created HackRfDevice: %p\n", (void*)hackRfDevice);
                 fflush(stderr);
             } catch (const std::exception& e) {
-                fprintf(stderr, "❌ Exception creating HackRfDevice: %s\n", e.what());
+                fprintf(stderr, "Exception creating HackRfDevice: %s\n", e.what());
                 fflush(stderr);
                 return false;
             }
@@ -1630,7 +1730,7 @@ bool HackTvLib::start()
             fflush(stderr);
 
             if (hackRfDevice->start(rf_mode::RX) != RF_OK) {
-                fprintf(stderr, "❌ Failed to start HackRF\n");
+                fprintf(stderr, "Failed to start HackRF\n");
                 fflush(stderr);
                 log("Could not open HackRF in RX. Please check the device.");
                 delete hackRfDevice;
@@ -1644,7 +1744,7 @@ bool HackTvLib::start()
             hackRfDevice->setFrequency(s->frequency);
             hackRfDevice->setAmpEnable(s->amp);
 
-            fprintf(stderr, "[8] ✓✓✓ RX SUCCESS ✓✓✓\n");
+            fprintf(stderr, "[8]RX SUCCESS \n");
             fflush(stderr);
             log("HackTvLib started in RX mode with HackRF.");
             return true;
@@ -1676,7 +1776,7 @@ bool HackTvLib::start()
             }
         }
 
-        fprintf(stderr, "❌ Unknown output device: %s\n", s->output_type);
+        fprintf(stderr, "Unknown output device: %s\n", s->output_type);
         fflush(stderr);
         return false;
     }
@@ -1699,13 +1799,13 @@ bool HackTvLib::start()
                     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
                     delete hackRfDevice;
-                    fprintf(stderr, "     ✓ Deleted old device\n");
+                    fprintf(stderr, "    Deleted old device\n");
                     fflush(stderr);
                 } catch (const std::exception& e) {
-                    fprintf(stderr, "     ⚠️  Exception during delete: %s\n", e.what());
+                    fprintf(stderr, "     Exception during delete: %s\n", e.what());
                     fflush(stderr);
                 } catch (...) {
-                    fprintf(stderr, "     ⚠️  Unknown exception during delete\n");
+                    fprintf(stderr, "     Unknown exception during delete\n");
                     fflush(stderr);
                 }
                 hackRfDevice = nullptr;
@@ -1717,15 +1817,15 @@ bool HackTvLib::start()
 
             try {
                 hackRfDevice = new HackRfDevice();
-                fprintf(stderr, "     ✓ Created HackRfDevice: %p\n", (void*)hackRfDevice);
+                fprintf(stderr, "    Created HackRfDevice: %p\n", (void*)hackRfDevice);
                 fflush(stderr);
             } catch (const std::exception& e) {
-                fprintf(stderr, "❌ Exception creating HackRfDevice: %s\n", e.what());
+                fprintf(stderr, "Exception creating HackRfDevice: %s\n", e.what());
                 fflush(stderr);
                 log("Failed to create HackRF device: %s", e.what());
                 return false;
             } catch (...) {
-                fprintf(stderr, "❌ Unknown exception creating HackRfDevice\n");
+                fprintf(stderr, "Unknown exception creating HackRfDevice\n");
                 fflush(stderr);
                 log("Failed to create HackRF device: unknown error");
                 return false;
@@ -1742,14 +1842,14 @@ bool HackTvLib::start()
                 fprintf(stderr, "     hackRfDevice->start() completed\n");
                 fflush(stderr);
             } catch (const std::exception& e) {
-                fprintf(stderr, "❌ Exception in start(): %s\n", e.what());
+                fprintf(stderr, "Exception in start(): %s\n", e.what());
                 fflush(stderr);
                 log("Failed to start HackRF: %s", e.what());
                 delete hackRfDevice;
                 hackRfDevice = nullptr;
                 return false;
             } catch (...) {
-                fprintf(stderr, "❌ Unknown exception in start()\n");
+                fprintf(stderr, "Unknown exception in start()\n");
                 fflush(stderr);
                 log("Failed to start HackRF: unknown exception");
                 delete hackRfDevice;
@@ -1761,7 +1861,7 @@ bool HackTvLib::start()
             fflush(stderr);
 
             if (result != RF_OK) {
-                fprintf(stderr, "❌ Failed to start HackRF in TX mode (result=%d)\n", result);
+                fprintf(stderr, "Failed to start HackRF in TX mode (result=%d)\n", result);
                 fflush(stderr);
                 log("Could not open HackRF in TX. Please check the device. Error code: %d", result);
 
@@ -1769,14 +1869,14 @@ bool HackTvLib::start()
                 try {
                     delete hackRfDevice;
                 } catch (...) {
-                    fprintf(stderr, "     ⚠️  Exception during cleanup\n");
+                    fprintf(stderr, "     Exception during cleanup\n");
                     fflush(stderr);
                 }
                 hackRfDevice = nullptr;
                 return false;
             }
 
-            fprintf(stderr, "[13] ✓ Device started successfully\n");
+            fprintf(stderr, "[13]Device started successfully\n");
             fflush(stderr);
 
             // Set basic parameters first
@@ -1796,7 +1896,7 @@ bool HackTvLib::start()
                 fflush(stderr);
                 hackRfDevice->setAmpEnable(s->amp);
 
-                fprintf(stderr, "[15] ✓ Parameters set\n");
+                fprintf(stderr, "[15]Parameters set\n");
                 fflush(stderr);
 
                 // NOW enable microphone AFTER device is fully running
@@ -1812,11 +1912,11 @@ bool HackTvLib::start()
 
                 hackRfDevice->setMicEnabled(true);
 
-                fprintf(stderr, "[17] ✓ Microphone enabled\n");
+                fprintf(stderr, "[17]Microphone enabled\n");
                 fflush(stderr);
 
             } catch (const std::exception& e) {
-                fprintf(stderr, "❌ Exception setting parameters: %s\n", e.what());
+                fprintf(stderr, "Exception setting parameters: %s\n", e.what());
                 fflush(stderr);
                 log("Failed to configure HackRF: %s", e.what());
 
@@ -1824,13 +1924,13 @@ bool HackTvLib::start()
                     hackRfDevice->stop();
                     delete hackRfDevice;
                 } catch (...) {
-                    fprintf(stderr, "     ⚠️  Exception during cleanup\n");
+                    fprintf(stderr, "     Exception during cleanup\n");
                     fflush(stderr);
                 }
                 hackRfDevice = nullptr;
                 return false;
             } catch (...) {
-                fprintf(stderr, "❌ Unknown exception setting parameters\n");
+                fprintf(stderr, "Unknown exception setting parameters\n");
                 fflush(stderr);
                 log("Failed to configure HackRF: unknown error");
 
@@ -1838,20 +1938,20 @@ bool HackTvLib::start()
                     hackRfDevice->stop();
                     delete hackRfDevice;
                 } catch (...) {
-                    fprintf(stderr, "     ⚠️  Exception during cleanup\n");
+                    fprintf(stderr, "     Exception during cleanup\n");
                     fflush(stderr);
                 }
                 hackRfDevice = nullptr;
                 return false;
             }
 
-            fprintf(stderr, "[18] ✓✓✓ FM TX SUCCESS ✓✓✓\n");
+            fprintf(stderr, "[18]FM TX SUCCESS \n");
             fflush(stderr);
             log("HackTvLib started in TX mode. Mic Enabled.");
             return true;
         }
 
-        fprintf(stderr, "❌ FM Transmitter only supports HackRF\n");
+        fprintf(stderr, "FM Transmitter only supports HackRF\n");
         fflush(stderr);
         log("FM Transmitter mode requires HackRF device");
         return false;
@@ -1865,7 +1965,7 @@ bool HackTvLib::start()
 
     // Validate input
     if (optind >= m_argv.size()) {
-        fprintf(stderr, "❌ No input specified\n");
+        fprintf(stderr, "No input specified\n");
         fflush(stderr);
         log("No input specified.");
         return false;
@@ -1873,7 +1973,7 @@ bool HackTvLib::start()
 
     // Check if already running
     if (m_txThread.joinable()) {
-        fprintf(stderr, "❌ TX thread already running\n");
+        fprintf(stderr, "TX thread already running\n");
         fflush(stderr);
         return false;
     }
@@ -1884,17 +1984,17 @@ bool HackTvLib::start()
 
     try {
         if (!setVideo()) {
-            fprintf(stderr, "❌ setVideo() failed\n");
+            fprintf(stderr, "setVideo() failed\n");
             fflush(stderr);
             return false;
         }
     } catch (const std::exception& e) {
-        fprintf(stderr, "❌ Exception in setVideo(): %s\n", e.what());
+        fprintf(stderr, "Exception in setVideo(): %s\n", e.what());
         fflush(stderr);
         return false;
     }
 
-    fprintf(stderr, "[21] ✓ Video encoder ready\n");
+    fprintf(stderr, "[21]Video encoder ready\n");
     fflush(stderr);
 
     // Initialize AV
@@ -1903,19 +2003,19 @@ bool HackTvLib::start()
 
     try {
         if (!initAv()) {
-            fprintf(stderr, "❌ initAv() failed\n");
+            fprintf(stderr, "initAv() failed\n");
             fflush(stderr);
             vid_free(&s->vid);
             return false;
         }
     } catch (const std::exception& e) {
-        fprintf(stderr, "❌ Exception in initAv(): %s\n", e.what());
+        fprintf(stderr, "Exception in initAv(): %s\n", e.what());
         fflush(stderr);
         vid_free(&s->vid);
         return false;
     }
 
-    fprintf(stderr, "[23] ✓ AV initialized\n");
+    fprintf(stderr, "[23]AV initialized\n");
     fflush(stderr);
 
     // Open output device
@@ -1924,19 +2024,19 @@ bool HackTvLib::start()
 
     try {
         if (!openDevice()) {
-            fprintf(stderr, "❌ openDevice() failed\n");
+            fprintf(stderr, "openDevice() failed\n");
             fflush(stderr);
             vid_free(&s->vid);
             return false;
         }
     } catch (const std::exception& e) {
-        fprintf(stderr, "❌ Exception in openDevice(): %s\n", e.what());
+        fprintf(stderr, "Exception in openDevice(): %s\n", e.what());
         fflush(stderr);
         vid_free(&s->vid);
         return false;
     }
 
-    fprintf(stderr, "[25] ✓ Device opened\n");
+    fprintf(stderr, "[25]Device opened\n");
     fflush(stderr);
 
     // Start TX thread
@@ -1965,12 +2065,12 @@ bool HackTvLib::start()
             fflush(stderr);
         });
 
-        fprintf(stderr, "[27] ✓✓✓ VIDEO TX SUCCESS ✓✓✓\n");
+        fprintf(stderr, "[27]VIDEO TX SUCCESS \n");
         fflush(stderr);
         log("HackTvLib started in TX mode.");
         return true;
     } catch (const std::exception& e) {
-        fprintf(stderr, "❌ Failed to start TX thread: %s\n", e.what());
+        fprintf(stderr, "Failed to start TX thread: %s\n", e.what());
         fflush(stderr);
         rf_close(&s->rf);
         vid_free(&s->vid);

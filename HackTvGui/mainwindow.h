@@ -59,7 +59,7 @@ private slots:
     void onVolumeSliderValueChanged(int value);
     void onLnaSliderValueChanged(int value);
     void onVgaSliderValueChanged(int value);
-    void onRxAmpSliderValueChanged(int value);   
+    void onRxAmpSliderValueChanged(int value);
     void clear();
     void exitApp();
 
@@ -73,20 +73,16 @@ private:
     void saveSettings();
     void loadSettings();
     void populateChannelCombo();
-    QStringList createArgs();
+    QStringList buildCommand();
     void setCurrentSampleRate(int sampleRate);
     void processFft(const std::vector<std::complex<float>>& samples);
-    void processDemod(const std::vector<std::complex<float>>& samples);   
+    void processDemod(const std::vector<std::complex<float>>& samples);    
     void handleLog(const std::string& logMessage);
     void handleReceivedData(const int8_t *data, size_t len);
 
-    float m_videoBrightness = 0.2f;  // 0.0 normal, pozitif daha parlak
-    float m_videoContrast = 1.3f;    // 1.0 normal, >1.0 daha kontrastlı
-    float m_videoGamma = 0.8f;       // <1.0 daha parlak, >1.0 daha karanlık
-    float m_videoSync = 0.15f;       // <1.0
-
     QVBoxLayout *mainLayout;
 
+    // Invert checkbox in fourth row
     QComboBox *outputCombo, *channelCombo, *sampleRateCombo, *rxtxCombo, *inputTypeCombo, *modeCombo;
     QCheckBox *ampEnabled, *colorDisabled;
     QLineEdit *frequencyEdit, *inputFileEdit, *ffmpegOptionsEdit;
@@ -107,6 +103,7 @@ private:
     // Layouts and Groups
     QGridLayout *txControlsLayout;
     QGroupBox *outputGroup, *inputTypeGroup, *modeGroup, *rxGroup;
+
 
     QTextBrowser *logBrowser;
     //std::unique_ptr<HackTvLib> m_hackTvLib;
@@ -157,7 +154,9 @@ private:
     std::unique_ptr<FMDemodulator> fmDemodulator;    
     QImage currentFrame;
 
-    QAtomicInt audioDemodulationInProgress{0};
+
+protected:
+    void closeEvent(QCloseEvent *event) override;
 
 };
 

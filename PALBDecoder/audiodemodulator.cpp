@@ -12,43 +12,36 @@ AudioDemodulator::AudioDemodulator(QObject *parent)
     : QObject(parent)
     , m_lastPhase(0.0f)
     , m_audioPhase(0.0)
-    , m_audioGain(1.0f)
+    , m_audioGain(2.5f)  // Daha yüksek gain
     , m_audioEnabled(true)
     , sampleRate(SAMP_RATE)
     , fmDeviation(FM_DEVIATION)
 {
-    m_audioBuffer.reserve(AUDIO_BUFFER_SIZE + 100);
-
-    // Calculate phase increment for audio carrier frequency shift
+    m_audioBuffer.reserve(AUDIO_BUFFER_SIZE * 2);
     m_audioPhaseIncrement = -2.0 * M_PI * AUDIO_CARRIER / SAMP_RATE;
 
     initFilters();
 
-    qDebug() << "AudioDemodulator initialized:";
-    qDebug() << "  Sample rate:" << SAMP_RATE << "Hz → 48 kHz";
-    qDebug() << "  Decimation:" << AUDIO_DECIM;
-    qDebug() << "  Buffer size:" << AUDIO_BUFFER_SIZE << "samples (100ms)";
-    qDebug() << "  FM method: atan2 + unwrapPhase";
-    qDebug() << "  Audio carrier:" << AUDIO_CARRIER / 1e6 << "MHz";
-    qDebug() << "  FM deviation:" << FM_DEVIATION / 1e3 << "kHz";
-    qDebug() << "  Filter: 65-tap FIR, 15 kHz cutoff";
+    qDebug() << "========================================";
+    qDebug() << "AudioDemodulator initialized (PAL-B):";
+    qDebug() << "  Sample rate: 16 MHz → 48 kHz (÷333.33)";
+    qDebug() << "  Decimation: 16MHz →÷5→ 3.2MHz →÷10→ 320kHz →÷2→ 160kHz →÷10/3→ 48kHz";
+    qDebug() << "  Audio carrier: 5.5 MHz";
+    qDebug() << "  FM deviation: ±50 kHz";
+    qDebug() << "  Audio gain:" << m_audioGain;
+    qDebug() << "========================================";
 }
 
 AudioDemodulator::~AudioDemodulator()
 {
-
 }
 
 void AudioDemodulator::initFilters()
 {
-    // 15 kHz lowpass filter
-    m_audioFilterTaps = designLowPassFIR(FILTER_TAPS, 15000.0f, SAMP_RATE);
-    qDebug() << "Audio filter initialized:" << m_audioFilterTaps.size() << "taps";
+    m_audioFilterTaps = designLowPassFIR(FILTER_TAPS, 15000.0f, 48000.0f);
+    qDebug() << "Audio filter:" << m_audioFilterTaps.size() << "taps @ 15kHz";
 }
 
-// ============================================================================
-// FIR FILTER DESIGN
-// ============================================================================
 std::vector<float> AudioDemodulator::designLowPassFIR(
     int numTaps,
     float cutoffFreq,
@@ -66,12 +59,10 @@ std::vector<float> AudioDemodulator::designLowPassFIR(
             coeffs[i] = std::sin(2.0f * M_PI * fc * n) / (M_PI * n);
         }
 
-        // Hamming window
         float window = 0.54f - 0.46f * std::cos(2.0f * M_PI * i / (numTaps - 1));
         coeffs[i] *= window;
     }
 
-    // Normalize
     float sum = std::accumulate(coeffs.begin(), coeffs.end(), 0.0f);
     if (sum != 0) {
         for (auto& c : coeffs) c /= sum;
@@ -79,10 +70,6 @@ std::vector<float> AudioDemodulator::designLowPassFIR(
 
     return coeffs;
 }
-
-// ============================================================================
-// FIR FILTER APPLICATION
-// ============================================================================
 
 std::vector<float> AudioDemodulator::applyFIRFilter(
     const std::vector<float>& signal,
@@ -131,10 +118,6 @@ std::vector<float> AudioDemodulator::applyFIRFilter(
     return filtered;
 }
 
-// ============================================================================
-// FREQUENCY SHIFT
-// ============================================================================
-
 std::vector<std::complex<float>> AudioDemodulator::frequencyShift(
     const std::vector<std::complex<float>>& signal,
     double shiftFreq)
@@ -143,23 +126,21 @@ std::vector<std::complex<float>> AudioDemodulator::frequencyShift(
 
     std::vector<std::complex<float>> shifted(signal.size());
     double phaseInc = 2.0 * M_PI * shiftFreq / sampleRate;
-    double phase = 0.0;
+    double phase = m_audioPhase;
 
     for (size_t i = 0; i < signal.size(); i++) {
         std::complex<float> shift(std::cos(phase), std::sin(phase));
         shifted[i] = signal[i] * shift;
         phase += phaseInc;
-
-        if (phase > 2.0 * M_PI) phase -= 2.0 * M_PI;
-        if (phase < -2.0 * M_PI) phase += 2.0 * M_PI;
+        
+        if (phase > M_PI) phase -= 2.0 * M_PI;
+        if (phase < -M_PI) phase += 2.0 * M_PI;
     }
 
+    m_audioPhase = phase;
     return shifted;
 }
 
-// ============================================================================
-// PHASE UNWRAP
-// ============================================================================
 float AudioDemodulator::unwrapPhase(float phase, float lastPhase)
 {
     float delta = phase - lastPhase;
@@ -170,10 +151,6 @@ float AudioDemodulator::unwrapPhase(float phase, float lastPhase)
     return delta;
 }
 
-// ============================================================================
-// FM DEMODULATION - ATAN2 METHOD
-// ============================================================================
-
 std::vector<float> AudioDemodulator::fmDemodulateAtan2(
     const std::vector<std::complex<float>>& signal)
 {
@@ -181,7 +158,6 @@ std::vector<float> AudioDemodulator::fmDemodulateAtan2(
 
     std::vector<float> demod(signal.size());
 
-    // Thread-safe phase access
     QMutexLocker phaseLock(&m_phaseMutex);
     float currentPhase = m_lastPhase;
     phaseLock.unlock();
@@ -195,16 +171,11 @@ std::vector<float> AudioDemodulator::fmDemodulateAtan2(
         currentPhase = phase;
     }
 
-    // Save last phase for next batch
     phaseLock.relock();
     m_lastPhase = currentPhase;
 
     return demod;
 }
-
-// ============================================================================
-// LOW-PASS FILTER
-// ============================================================================
 
 std::vector<float> AudioDemodulator::lowPassFilter(
     const std::vector<float>& signal,
@@ -227,9 +198,6 @@ std::vector<float> AudioDemodulator::lowPassFilter(
     }
 }
 
-// ============================================================================
-// DECIMATION
-// ============================================================================
 std::vector<float> AudioDemodulator::decimate(
     const std::vector<float>& signal,
     int factor)
@@ -237,7 +205,7 @@ std::vector<float> AudioDemodulator::decimate(
     if (factor <= 1) return signal;
 
     std::vector<float> decimated;
-    decimated.reserve(signal.size() / factor);
+    decimated.reserve(signal.size() / factor + 1);
 
     for (size_t i = 0; i < signal.size(); i += factor) {
         decimated.push_back(signal[i]);
@@ -246,23 +214,56 @@ std::vector<float> AudioDemodulator::decimate(
     return decimated;
 }
 
-// ============================================================================
-// EMIT AUDIO BUFFER
-// ============================================================================
+// Simple linear interpolation resampler
+std::vector<float> AudioDemodulator::resample(
+    const std::vector<float>& signal,
+    double inputRate,
+    double outputRate)
+{
+    if (signal.empty() || inputRate <= 0 || outputRate <= 0) {
+        return signal;
+    }
+
+    double ratio = inputRate / outputRate;
+    size_t outputSize = static_cast<size_t>(signal.size() / ratio);
+    std::vector<float> resampled;
+    resampled.reserve(outputSize);
+
+    for (size_t i = 0; i < outputSize; i++) {
+        double srcPos = i * ratio;
+        size_t idx = static_cast<size_t>(srcPos);
+        
+        if (idx + 1 < signal.size()) {
+            double frac = srcPos - idx;
+            float interpolated = signal[idx] * (1.0 - frac) + signal[idx + 1] * frac;
+            resampled.push_back(interpolated);
+        } else if (idx < signal.size()) {
+            resampled.push_back(signal[idx]);
+        }
+    }
+
+    return resampled;
+}
+
 void AudioDemodulator::emitAudioBuffer(const std::vector<float>& audio)
 {
-    if (audio.empty()) return;
+    if (audio.empty()) {
+        return;
+    }
 
-    static constexpr int CHUNK_SIZE = 480; // 10ms @ 48kHz
+    static int totalEmitted = 0;
+    static QElapsedTimer emitTimer;
+    if (!emitTimer.isValid()) emitTimer.start();
 
-    // Add to buffer
     for (float sample : audio) {
         float processed = sample * m_audioGain;
         processed = std::clamp(processed, -1.0f, 1.0f);
         m_audioBuffer.push_back(processed);
     }
 
-    // Emit fixed-size chunks
+    static constexpr int CHUNK_SIZE = 960;
+
+    int chunksEmitted = 0;
     while (m_audioBuffer.size() >= CHUNK_SIZE) {
         std::vector<float> chunk(m_audioBuffer.begin(),
                                  m_audioBuffer.begin() + CHUNK_SIZE);
@@ -270,21 +271,31 @@ void AudioDemodulator::emitAudioBuffer(const std::vector<float>& audio)
 
         m_audioBuffer.erase(m_audioBuffer.begin(),
                             m_audioBuffer.begin() + CHUNK_SIZE);
+        chunksEmitted++;
+        totalEmitted += CHUNK_SIZE;
+    }
 
-        qDebug() << "✓ Emitted 480 samples (10ms), remaining:" << m_audioBuffer.size();
+    if (emitTimer.elapsed() > 5000) {
+        qDebug() << "✓ Audio stats: emitted" << totalEmitted << "samples total,"
+                 << "buffer:" << m_audioBuffer.size();
+        emitTimer.restart();
     }
 }
 
-// ============================================================================
-// MAIN PROCESSING - THREAD-SAFE WITH MUTEX
-// ============================================================================
 void AudioDemodulator::processSamples(const int8_t* data, size_t len)
 {
     if (!data || len == 0 || !m_audioEnabled) return;
 
+    static int callCount = 0;
+    callCount++;
+    
+    if (callCount <= 3) {
+        qDebug() << "[AudioDemod] processSamples called #" << callCount 
+                 << "- len:" << len << "bytes";
+    }
+
     QMutexLocker locker(&m_processMutex);
 
-    // Convert int8_t to complex<float>
     std::vector<std::complex<float>> samples;
     samples.reserve(len / 2);
 
@@ -301,36 +312,69 @@ void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& sa
 {
     if (!m_audioEnabled || samples.empty()) return;
 
-    if (!m_audioEnabled || samples.empty()) return;
+    static int callCount = 0;
+    static QElapsedTimer perfTimer;
+    if (!perfTimer.isValid()) perfTimer.start();
+    
+    callCount++;
+
+    QMutexLocker locker(&m_processMutex);
 
     try {
-        static int callCount = 0;
-        callCount++;
-
-        qDebug() << "=== Audio Process #" << callCount << "===";
-        qDebug() << "Input samples:" << samples.size();
-
-        // 1. Frequency shift
+        // 1. Frequency shift to baseband
         auto audioSignal = frequencyShift(samples, -AUDIO_CARRIER);
 
         // 2. FM demodulate
         auto audio = fmDemodulateAtan2(audioSignal);
-        qDebug() << "After demod:" << audio.size();
 
-        // 3. Two-stage decimation
-        int stage1Factor = static_cast<int>(SAMP_RATE / 192000.0);
-        audio = lowPassFilter(audio, 76800.0f);
-        audio = decimate(audio, stage1Factor);
-        qDebug() << "After stage1 (÷" << stage1Factor << "):" << audio.size();
+        double currentRate = SAMP_RATE;
 
-        audio = lowPassFilter(audio, 19200.0f);
-        audio = decimate(audio, 4);
-        qDebug() << "After stage2 (÷4):" << audio.size();
+        // OPTIMIZED DECIMATION CHAIN: 16 MHz → 48 kHz
+        
+        // Stage 1: 16 MHz → 3.2 MHz (÷5)
+        auto coeffs1 = designLowPassFIR(65, 1280000.0f, currentRate);
+        audio = applyFIRFilter(audio, coeffs1);
+        audio = decimate(audio, 5);
+        currentRate = 3.2e6;
 
-        audio = lowPassFilter(audio, 15000.0f);
-        qDebug() << "Final audio samples:" << audio.size();
+        // Stage 2: 3.2 MHz → 320 kHz (÷10)
+        auto coeffs2 = designLowPassFIR(65, 128000.0f, currentRate);
+        audio = applyFIRFilter(audio, coeffs2);
+        audio = decimate(audio, 10);
+        currentRate = 320e3;
 
-        // 5. Emit
+        // Stage 3: 320 kHz → 160 kHz (÷2)
+        auto coeffs3 = designLowPassFIR(65, 64000.0f, currentRate);
+        audio = applyFIRFilter(audio, coeffs3);
+        audio = decimate(audio, 2);
+        currentRate = 160e3;
+
+        // Stage 4: 160 kHz → 48 kHz (÷3.333 via resampling)
+        // First decimate by 3: 160 kHz → 53.33 kHz
+        auto coeffs4 = designLowPassFIR(65, 21333.0f, currentRate);
+        audio = applyFIRFilter(audio, coeffs4);
+        audio = decimate(audio, 3);
+        currentRate = 160e3 / 3.0;  // 53.33 kHz
+
+        // Final resample: 53.33 kHz → 48 kHz (downsample by 1.111)
+        audio = resample(audio, currentRate, 48000.0);
+        currentRate = 48000.0;
+
+        // Final audio filter at 15 kHz
+        audio = applyFIRFilter(audio, m_audioFilterTaps);
+
+        sampleRate = 48000.0;
+
+        // Log performance periodically
+        if (callCount <= 5 || perfTimer.elapsed() > 10000) {
+            qDebug() << "[AudioDemod] #" << callCount 
+                     << "- Input:" << samples.size() 
+                     << "→ Output:" << audio.size() 
+                     << "samples (" << (audio.size() * 1000.0 / 48000.0) << "ms)";
+            if (perfTimer.elapsed() > 10000) perfTimer.restart();
+        }
+
+        // Emit
         emitAudioBuffer(audio);
 
     } catch (const std::exception& e) {
@@ -350,29 +394,31 @@ std::vector<float> AudioDemodulator::demodulateAudio(
     auto audioSignal = frequencyShift(samples, -AUDIO_CARRIER);
     auto audio = fmDemodulateAtan2(audioSignal);
 
-    if (sampleRate > 48000) {
-        // Multi-stage decimation
-        double currentRate = sampleRate;
-        const double targetRate = 48000.0;
+    double currentRate = SAMP_RATE;
 
-        while (currentRate > targetRate * 1.5) {
-            // Her adımda maksimum 16x decimate et
-            int factor = std::min(16, static_cast<int>(currentRate / targetRate));
-            if (factor < 2) break;
+    // Optimized chain
+    auto coeffs1 = designLowPassFIR(65, 1280000.0f, currentRate);
+    audio = applyFIRFilter(audio, coeffs1);
+    audio = decimate(audio, 5);
+    currentRate = 3.2e6;
 
-            // Anti-aliasing filter
-            float cutoff = (currentRate / factor / 2.0f) * 0.8f;
-            audio = lowPassFilter(audio, cutoff);
-            audio = decimate(audio, factor);
+    auto coeffs2 = designLowPassFIR(65, 128000.0f, currentRate);
+    audio = applyFIRFilter(audio, coeffs2);
+    audio = decimate(audio, 10);
+    currentRate = 320e3;
 
-            currentRate /= factor;
-        }
+    auto coeffs3 = designLowPassFIR(65, 64000.0f, currentRate);
+    audio = applyFIRFilter(audio, coeffs3);
+    audio = decimate(audio, 2);
+    currentRate = 160e3;
 
-        // Final low-pass at 15 kHz
-        audio = lowPassFilter(audio, 15000.0f);
-    } else {
-        audio = lowPassFilter(audio, 15000.0f);
-    }
+    auto coeffs4 = designLowPassFIR(65, 21333.0f, currentRate);
+    audio = applyFIRFilter(audio, coeffs4);
+    audio = decimate(audio, 3);
+    currentRate = 160e3 / 3.0;
+
+    audio = resample(audio, currentRate, 48000.0);
+    audio = applyFIRFilter(audio, m_audioFilterTaps);
 
     return audio;
 }

@@ -13,7 +13,7 @@
 #endif
 
 MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent),    
+    : QMainWindow(parent),   
     logBrowser(nullptr),
     m_hackTvLib(nullptr),
     m_threadPool(nullptr),
@@ -23,8 +23,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_LowCutFreq(-1*int(DEFAULT_CUT_OFF)),
     m_HiCutFreq(DEFAULT_CUT_OFF),
     m_shuttingDown(false),
-    m_isProcessing(false),
-    audioDemodulationInProgress(0)
+    m_isProcessing(false)
 {
     QString homePath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
     m_sSettingsFile = homePath + "/hacktv_settings.ini";
@@ -42,6 +41,7 @@ MainWindow::MainWindow(QWidget *parent)
         qDebug() << "Exception caught:" << e.what();
     }
 
+
     logBrowser = new QTextBrowser(this);
     audioOutput = std::make_unique<AudioOutput>();
     // Set audio volume if available
@@ -55,6 +55,10 @@ MainWindow::MainWindow(QWidget *parent)
     }
 
     setupUi();
+
+    rxtxCombo->setCurrentIndex(0);
+    onRxTxTypeChanged(0);
+    setCurrentSampleRate(DEFAULT_SAMPLE_RATE);
 
     logTimer = new QTimer(this);
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
@@ -103,7 +107,7 @@ void MainWindow::setupUi()
     addOutputGroup();
     addRxGroup();
     addModeGroup();
-    addinputTypeGroup();   
+    addinputTypeGroup();
     setCentralWidget(centralWidget);
 
     frequencyEdit->setText(QString::number(m_frequency));
@@ -121,8 +125,8 @@ void MainWindow::setupUi()
     connect(sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onSampleRateChanged);
 
-    onRxTxTypeChanged(0);
-    setCurrentSampleRate(DEFAULT_SAMPLE_RATE);
+    //setFixedWidth(1024);
+    //showMaximized();
 }
 
 void MainWindow::setCurrentSampleRate(int sampleRate)
@@ -192,40 +196,24 @@ void MainWindow::handleReceivedData(const int8_t *data, size_t len)
 
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-    constexpr double FM_BAND_LOW = 87e6;
-    constexpr double FM_BAND_HIGH = 108e6;
-    constexpr double PAL_BAND_LOW = 45e6;
-    constexpr double PAL_BAND_HIGH = 860e6;
-
-    // FM Radio DEMODULATION
-    //if (m_frequency >= FM_BAND_LOW && m_frequency <= FM_BAND_HIGH)
+    if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
     {
-        if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
-        {
-            try {
-                auto filteredSamples = lowPassFilter->apply(samples);
-                auto resampledSamples = rationalResampler->resample(std::move(filteredSamples));
-                auto demodulatedAudio = fmDemodulator->demodulate(std::move(resampledSamples));
+        try {
+            auto filteredSamples = lowPassFilter->apply(samples);
+            auto resampledSamples = rationalResampler->resample(std::move(filteredSamples));
+            auto demodulatedAudio = fmDemodulator->demodulate(std::move(resampledSamples));
 
-                if (!demodulatedAudio.empty()) {
-                    // Kazanç ve kesme (clipping)
-                    for (auto& sample : demodulatedAudio) {
-                        sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
-                    }
-                    audioOutput->enqueueAudio(std::move(demodulatedAudio));
+            if (!demodulatedAudio.empty()) {
+                // Kazanç ve kesme (clipping)
+                for (auto& sample : demodulatedAudio) {
+                    sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
                 }
-            }
-            catch (const std::exception& e) {
-                qCritical() << "Exception in FM signal processing:" << e.what();
+                audioOutput->enqueueAudio(std::move(demodulatedAudio));
             }
         }
-        return;
-    }
-
-    // Analog TV DEMODULATION
-    if (m_frequency >= PAL_BAND_LOW && m_frequency <= PAL_BAND_HIGH)
-    {
-
+        catch (const std::exception& e) {
+            qCritical() << "Exception in FM signal processing:" << e.what();
+        }
     }
 }
 
@@ -554,8 +542,6 @@ void MainWindow::addinputTypeGroup()
     buttonLayout->addWidget(executeButton);
     buttonLayout->addWidget(clearButton);
     buttonLayout->addWidget(exitButton);
-
-    mainLayout->addWidget(logBrowser);
 
     mainLayout->addLayout(buttonLayout);
 
@@ -913,6 +899,7 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
 
 void MainWindow::executeCommand()
 {
+
     if (executeButton->text() == "Start")
     {
         if (!m_hackTvLib) {
@@ -921,7 +908,7 @@ void MainWindow::executeCommand()
             return;
         }
 
-        QStringList args = createArgs();
+        QStringList args = buildCommand();
 
         if(mode == "rx")
         {
@@ -977,7 +964,7 @@ void MainWindow::executeCommand()
         m_isProcessing.store(true);
     }
     else if (executeButton->text() == "Stop")
-    {        
+    {       
         m_isProcessing.store(false);
 
         if (m_hackTvLib) {
@@ -991,7 +978,7 @@ void MainWindow::executeCommand()
     }
 }
 
-QStringList MainWindow::createArgs()
+QStringList MainWindow::buildCommand()
 {
     QStringList args;
 
@@ -1153,7 +1140,7 @@ void MainWindow::onRxTxTypeChanged(int index)
     txInterpolationSpinBox->setVisible(isTx);
     txAmpSlider->setVisible(isTx);
     txAmpSpinBox->setVisible(isTx);
-    tx_line->setVisible(isTx);   
+    tx_line->setVisible(isTx);
 
     // Also hide/show labels
     for (int i = 0; i < txControlsLayout->rowCount(); ++i) {
@@ -1178,7 +1165,7 @@ void MainWindow::onSampleRateChanged(int index)
         cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
         cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
         m_hackTvLib->setSampleRate(m_sampleRate);
-        saveSettings();
+        saveSettings();       
     }
 }
 
@@ -1289,6 +1276,13 @@ void MainWindow::onChannelChanged(int index)
     }
     saveSettings();
 }
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    event->ignore(); // Prevent default close
+    exitApp();
+}
+
 void MainWindow::exitApp()
 {
     m_shuttingDown.store(true);
@@ -1296,6 +1290,7 @@ void MainWindow::exitApp()
     if (m_hackTvLib) {
         m_hackTvLib->clearCallbacks();
         m_hackTvLib->stop();
+        // Qt otomatik siler (parent-child)
     }
 
     try {
@@ -1307,19 +1302,21 @@ void MainWindow::exitApp()
             TerminateProcess(hProcess, 0);
             CloseHandle(hProcess);
         }
-#else
+#else \
+    // FIXED: Use Qt's proper shutdown instead of exit(0)
         QApplication::quit();
 #endif
-    }
-    catch (const std::exception& e) {
-        qDebug() << "Exception during shutdown:" << e.what();
+
+    } catch (const std::exception& e) {
+        qDebug() << "Exception in exitApp:" << e.what();
 #ifdef Q_OS_WIN
-        std::exit(1);   // Force exit on Windows
-#else
-        QApplication::quit();  // Graceful quit on Linux/macOS
+        // Force exit on Windows if there's an exception
+        std::exit(1);
+#else \
+    // Use Qt quit on Linux even if there's an exception
+        QApplication::quit();
 #endif
-    }
-    catch (...) {
+    } catch (...) {
         qDebug() << "Unknown exception during shutdown";
         std::exit(0);
     }

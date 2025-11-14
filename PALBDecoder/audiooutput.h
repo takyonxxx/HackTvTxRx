@@ -8,13 +8,13 @@
 #include <QAudioFormat>
 #include <QIODevice>
 #include <QWaitCondition>
+#include <QElapsedTimer>
 #include <vector>
 #include <atomic>
 
 class AudioOutput : public QObject
 {
     Q_OBJECT
-
 public:
     explicit AudioOutput(QObject *parent = nullptr);
     ~AudioOutput();
@@ -22,7 +22,7 @@ public:
     bool initializeAudio();
     void stop();
     void enqueueAudio(const std::vector<float>& samples);
-
+    
     int queueSize() const;
     double queueDuration() const;
     int sampleRate() const { return m_format.sampleRate(); }
@@ -41,10 +41,12 @@ private:
     // Audio configuration
     static constexpr int SAMPLE_RATE = 48000;
     static constexpr int CHANNEL_COUNT = 2;
-    static constexpr int MIN_BUFFER_SAMPLES = 14400;  // 300ms @ 48kHz
-    static constexpr int CHUNK_SIZE = 960;  // 20ms @ 48kHz
-    static constexpr int MAX_QUEUE_SIZE = 480000;       // 10s
-    static constexpr int RESERVE_SIZE = 500000;         // Pre-allocate
+    
+    // Buffer configuration (optimized for stability)
+    static constexpr int MIN_BUFFER_SAMPLES = 19200;    // 400ms @ 48kHz (priming)
+    static constexpr int CHUNK_SIZE = 960;              // 20ms @ 48kHz (write chunks)
+    static constexpr int MAX_QUEUE_SIZE = 480000;       // 10s maximum
+    static constexpr int RESERVE_SIZE = 500000;         // Pre-allocated size
 
     // Audio format and device
     QAudioFormat m_format;
@@ -58,6 +60,7 @@ private:
     size_t readPos = 0;
     size_t bufferSize = 0;
 
+    // Thread synchronization
     mutable QMutex mutex;
     QWaitCondition queueNotEmpty;
 
@@ -65,7 +68,7 @@ private:
     QThread audioWriterThread;
     std::atomic_bool m_running{true};
 
-    // Processing buffer (pre-allocated)
+    // Pre-allocated output buffer
     QByteArray outputBuffer;
 };
 

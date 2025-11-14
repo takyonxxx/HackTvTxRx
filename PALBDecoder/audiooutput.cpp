@@ -8,7 +8,7 @@ AudioOutput::AudioOutput(QObject *parent)
 {
     // Pre-allocate circular buffer
     audioBuffer.resize(RESERVE_SIZE);
-    outputBuffer.resize(CHUNK_SIZE * 2 * sizeof(qint16));  // Pre-allocate output buffer
+    outputBuffer.resize(CHUNK_SIZE * 2 * sizeof(qint16));
 
     initializeAudio();
 
@@ -59,7 +59,8 @@ bool AudioOutput::initializeAudio()
         m_audioOutput.reset(new QAudioSink(defaultDevice, m_format));
         if (!m_audioOutput) return false;
 
-        m_audioOutput->setBufferSize(2 * 1024 * 1024);
+        // Larger buffer for stability
+        m_audioOutput->setBufferSize(4 * 1024 * 1024);  // 4 MB
 
         connect(m_audioOutput.get(), &QAudioSink::stateChanged,
                 this, &AudioOutput::handleAudioOutputStateChanged);
@@ -71,7 +72,12 @@ bool AudioOutput::initializeAudio()
             return false;
         }
 
-        qDebug() << "Audio initialized: 48kHz, 2ch, buffer:" << m_audioOutput->bufferSize();
+        qDebug() << "Audio initialized:";
+        qDebug() << "  Format: 48kHz, 2ch, Int16";
+        qDebug() << "  Buffer:" << m_audioOutput->bufferSize() / 1024 << "KB";
+        qDebug() << "  Chunk size:" << CHUNK_SIZE << "samples (" 
+                 << (CHUNK_SIZE * 1000 / SAMPLE_RATE) << "ms)";
+        
         return true;
 
     } catch (const std::exception& e) {
@@ -82,10 +88,21 @@ bool AudioOutput::initializeAudio()
 
 void AudioOutput::handleAudioOutputStateChanged(QAudio::State newState)
 {
-    if (newState == QAudio::StoppedState) {
+    switch (newState) {
+    case QAudio::IdleState:
+        qDebug() << "Audio: Idle";
+        break;
+    case QAudio::ActiveState:
+        // Normal operation
+        break;
+    case QAudio::SuspendedState:
+        qWarning() << "Audio: Suspended";
+        break;
+    case QAudio::StoppedState:
         if (m_audioOutput && m_audioOutput->error() != QAudio::NoError) {
             qCritical() << "Audio error:" << m_audioOutput->error();
         }
+        break;
     }
 }
 
@@ -108,15 +125,19 @@ void AudioOutput::enqueueAudio(const std::vector<float>& samples)
 
     size_t samplesToAdd = samples.size();
 
-    // Check overflow
+    // Check overflow - drop oldest samples if buffer full
     if (bufferSize + samplesToAdd > MAX_QUEUE_SIZE) {
-        // Remove oldest samples (advance read position)
         size_t overflow = (bufferSize + samplesToAdd) - MAX_QUEUE_SIZE;
         readPos = (readPos + overflow) % RESERVE_SIZE;
         bufferSize -= overflow;
+        
+        static int dropCount = 0;
+        if (++dropCount % 100 == 0) {
+            qWarning() << "Audio buffer overflow! Dropped" << overflow << "samples";
+        }
     }
 
-    // FAST BATCH COPY - split into two memcpy if wrapping
+    // Fast batch copy - handle wraparound
     size_t firstChunk = std::min(samplesToAdd, RESERVE_SIZE - writePos);
     std::copy(samples.begin(), samples.begin() + firstChunk,
               audioBuffer.begin() + writePos);
@@ -133,7 +154,10 @@ void AudioOutput::enqueueAudio(const std::vector<float>& samples)
 
     bufferSize += samplesToAdd;
 
-    queueNotEmpty.wakeOne();
+    // Wake up writer thread
+    if (bufferSize >= MIN_BUFFER_SAMPLES) {
+        queueNotEmpty.wakeOne();
+    }
 }
 
 void AudioOutput::audioWriterLoop()
@@ -141,6 +165,12 @@ void AudioOutput::audioWriterLoop()
     bool bufferPrimed = false;
     std::vector<float> chunk;
     chunk.reserve(CHUNK_SIZE);
+    
+    int underrunCount = 0;
+    QElapsedTimer statsTimer;
+    statsTimer.start();
+
+    qDebug() << "Audio writer thread started";
 
     while (m_running) {
         chunk.clear();
@@ -148,23 +178,42 @@ void AudioOutput::audioWriterLoop()
         {
             QMutexLocker locker(&mutex);
 
-            // Buffer priming
+            // Initial buffer priming - wait for sufficient data
             if (!bufferPrimed) {
                 if (bufferSize < MIN_BUFFER_SAMPLES) {
-                    queueNotEmpty.wait(&mutex, 100);
+                    queueNotEmpty.wait(&mutex, 200);  // Wait up to 200ms
                     continue;
                 }
                 bufferPrimed = true;
+                qDebug() << "Audio buffer primed with" << bufferSize << "samples ("
+                         << (bufferSize * 1000.0 / SAMPLE_RATE) << "ms)";
             }
 
-            // Underrun check
+            // Check for underrun
             if (bufferSize < CHUNK_SIZE) {
-                bufferPrimed = false;
-                queueNotEmpty.wait(&mutex, 50);
+                underrunCount++;
+                
+                if (underrunCount % 10 == 1) {
+                    qWarning() << "Audio underrun!" << bufferSize << "samples available,"
+                               << CHUNK_SIZE << "needed";
+                }
+                
+                // Reset priming if persistent underruns
+                if (underrunCount > 5) {
+                    bufferPrimed = false;
+                    qWarning() << "Too many underruns, restarting buffer priming";
+                }
+                
+                queueNotEmpty.wait(&mutex, 100);
                 continue;
             }
 
-            // FAST BATCH READ - circular buffer
+            // Reset underrun counter on successful read
+            if (underrunCount > 0) {
+                underrunCount = 0;
+            }
+
+            // Fast batch read from circular buffer
             size_t firstChunk = std::min<size_t>(CHUNK_SIZE, RESERVE_SIZE - readPos);
             chunk.insert(chunk.end(),
                          audioBuffer.begin() + readPos,
@@ -182,12 +231,21 @@ void AudioOutput::audioWriterLoop()
             }
 
             bufferSize -= CHUNK_SIZE;
+            
+            // Periodic stats
+            if (statsTimer.elapsed() > 10000) {  // Every 10 seconds
+                qDebug() << "Audio buffer:" << bufferSize << "samples ("
+                         << (bufferSize * 1000.0 / SAMPLE_RATE) << "ms)";
+                statsTimer.restart();
+            }
         }
 
         if (!chunk.empty()) {
             processAudio(chunk);
         }
     }
+
+    qDebug() << "Audio writer thread stopped";
 }
 
 void AudioOutput::processAudio(const std::vector<float>& audioData)
@@ -202,21 +260,24 @@ void AudioOutput::processAudio(const std::vector<float>& audioData)
 
     qint16* output = reinterpret_cast<qint16*>(outputBuffer.data());
 
-    // FAST CONVERSION - mono to stereo
+    // Fast conversion: mono to stereo with clipping
     for (size_t i = 0; i < audioData.size(); ++i) {
-        qint16 sample = static_cast<qint16>(
-            std::clamp(audioData[i], -1.0f, 1.0f) * 32767.0f
-            );
-        output[i * 2] = sample;      // Left
-        output[i * 2 + 1] = sample;  // Right
+        // Clamp and convert to 16-bit
+        float sample = std::clamp(audioData[i], -1.0f, 1.0f);
+        qint16 intSample = static_cast<qint16>(sample * 32767.0f);
+        
+        output[i * 2] = intSample;      // Left
+        output[i * 2 + 1] = intSample;  // Right
     }
 
     qint64 bytesToWrite = audioData.size() * 2 * sizeof(qint16);
     qint64 bytesWritten = 0;
 
-    // Blocking write
+    // Write to audio device
     while (bytesWritten < bytesToWrite && m_running) {
-        if (m_audioOutput->bytesFree() < bytesToWrite) {
+        // Wait for space in output buffer
+        qint64 freeBytes = m_audioOutput->bytesFree();
+        if (freeBytes < (bytesToWrite - bytesWritten)) {
             QThread::msleep(5);
             continue;
         }
@@ -232,6 +293,7 @@ void AudioOutput::processAudio(const std::vector<float>& audioData)
             qCritical() << "Audio write error!";
             break;
         } else {
+            // No space available, wait a bit
             QThread::msleep(1);
         }
     }

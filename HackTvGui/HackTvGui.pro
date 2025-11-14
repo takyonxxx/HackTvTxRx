@@ -118,4 +118,4 @@ RESOURCES += \
 #sudo apt install qt6-multimedia-dev gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
 #sudo apt install gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
 #export QT_MEDIA_BACKEND=gstreamer
-
+#https://repo.radio/VE7UWU/sdrangel/src/commit/b2be9f6a0d4d4b161b190ca296fae6f0232c103d/plugins/channelrx/demodatv
