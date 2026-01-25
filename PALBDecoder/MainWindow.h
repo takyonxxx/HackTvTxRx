@@ -57,6 +57,7 @@ private slots:
     void updateChannelLabel(uint64_t frequency);
     void onInvertVideoChanged(int state);
     void onColorModeChanged(int state);
+    void onChromaGainChanged(int value);
     void onSyncThresholdChanged(int value);
     void onSyncStatsUpdated(float syncRate, float peakLevel, float minLevel);
     void onSampleRateChanged(int index);
@@ -100,6 +101,8 @@ private:
     QPushButton* m_startStopButton;
     QCheckBox* m_invertVideoCheckBox;
     QCheckBox* m_colorModeCheckBox;
+    QSlider* m_chromaGainSlider;
+    QDoubleSpinBox* m_chromaGainSpinBox;
     QComboBox* m_sampleRateComboBox;
 
     // Core components
@@ -142,9 +145,15 @@ private:
     static constexpr size_t MAX_AUDIO_QUEUE = 10; // Max 10 chunk
 
     // Constants
-    static constexpr uint64_t UHF_MIN_FREQ = 470000000ULL;
+    static constexpr uint64_t VHF_BAND1_MIN_FREQ = 47000000ULL;   // VHF Band I (E2-E4)
+    static constexpr uint64_t VHF_BAND1_MAX_FREQ = 68000000ULL;
+    static constexpr uint64_t VHF_BAND3_MIN_FREQ = 174000000ULL;  // VHF Band III (E5-E12)
+    static constexpr uint64_t VHF_BAND3_MAX_FREQ = 230000000ULL;
+    static constexpr uint64_t UHF_MIN_FREQ = 470000000ULL;        // UHF Band IV/V (E21-E69)
     static constexpr uint64_t UHF_MAX_FREQ = 862000000ULL;
-    static constexpr uint64_t DEFAULT_FREQ = 478000000ULL;
+    static constexpr uint64_t MIN_FREQ = VHF_BAND1_MIN_FREQ;
+    static constexpr uint64_t MAX_FREQ = UHF_MAX_FREQ;
+    static constexpr uint64_t DEFAULT_FREQ = 478000000ULL;        // UHF E21
     static constexpr uint32_t SAMP_RATE = 16000000;
 };
 

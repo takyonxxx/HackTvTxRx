@@ -416,21 +416,19 @@ void PALDecoder::finalizeLine()
                     U = U1 + (U2 - U1) * frac;
                     V = V1 + (V2 - V1) * frac;
                     
-                    // PAL Delay Line (Comb Filter)
-                    // İki ardışık satırı birleştir
-                    if (!m_prevLineU.empty() && x < (int)m_prevLineU.size()) {
-                        // V fazı her satırda ters olduğu için:
-                        U = (U + m_prevLineU[x]) * 0.5f;
-                        V = (V - m_prevLineV[x]) * 0.5f; // V ters faz
-                    }
-                    
-                    // Chroma gain uygula
-                    U *= m_chromaGain;
-                    V *= m_chromaGain;
-                    
-                    // Mevcut satırı sakla
+                    // Önce currentLine'a kaydet (chromaGain uygulanmadan)
                     currentLineU[x] = U;
                     currentLineV[x] = V;
+                    
+                    // PAL Delay Line (Comb Filter)
+                    if (!m_prevLineU.empty() && x < (int)m_prevLineU.size()) {
+                        U = (U + m_prevLineU[x]) * 0.5f;
+                        V = (V - m_prevLineV[x]) * 0.5f;
+                    }
+                    
+                    // Chroma gain uygula (comb filter'dan SONRA)
+                    U *= m_chromaGain;
+                    V *= m_chromaGain;
                 }
 
                 yuv2rgb(Y, U, V, r, g, b);

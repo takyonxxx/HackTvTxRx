@@ -185,6 +185,32 @@ void MainWindow::setupUI()
             this, &MainWindow::onColorModeChanged);
     videoControlLayout->addWidget(m_colorModeCheckBox);
 
+    // Chroma Gain Control
+    QHBoxLayout* chromaGainLayout = new QHBoxLayout();
+    chromaGainLayout->addWidget(new QLabel("Chroma Gain:", this));
+
+    m_chromaGainSlider = new QSlider(Qt::Horizontal, this);
+    m_chromaGainSlider->setRange(0, 200);
+    m_chromaGainSlider->setValue(75);
+    m_chromaGainSlider->setMinimumWidth(200);
+    chromaGainLayout->addWidget(m_chromaGainSlider);
+
+    m_chromaGainSpinBox = new QDoubleSpinBox(this);
+    m_chromaGainSpinBox->setRange(0.0, 2.0);
+    m_chromaGainSpinBox->setSingleStep(0.01);
+    m_chromaGainSpinBox->setValue(0.75);
+    m_chromaGainSpinBox->setDecimals(2);
+    chromaGainLayout->addWidget(m_chromaGainSpinBox);
+
+    connect(m_chromaGainSlider, &QSlider::valueChanged,
+            this, &MainWindow::onChromaGainChanged);
+    connect(m_chromaGainSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            [this](double value) {
+                m_chromaGainSlider->setValue(static_cast<int>(value * 100));
+            });
+
+    videoControlLayout->addLayout(chromaGainLayout);
+
     leftColumn->addWidget(videoControlGroup);
 
     // Audio Controls (NEW - BELOW VIDEO CONTROLS)
@@ -309,7 +335,7 @@ void MainWindow::setupUI()
 
     QHBoxLayout* freqTopLayout = new QHBoxLayout();
     m_frequencySpinBox = new QDoubleSpinBox(this);
-    m_frequencySpinBox->setRange(470.0, 862.0);
+    m_frequencySpinBox->setRange(47.0, 862.0);
     m_frequencySpinBox->setValue(478.0);
     m_frequencySpinBox->setSingleStep(0.1);
     m_frequencySpinBox->setDecimals(3);
@@ -338,11 +364,11 @@ void MainWindow::setupUI()
     freqLayout->addLayout(freqTopLayout);
 
     QHBoxLayout* sliderLayout = new QHBoxLayout();
-    QLabel* minLabel = new QLabel("470", this);
+    QLabel* minLabel = new QLabel("47", this);
     sliderLayout->addWidget(minLabel);
 
     m_frequencySlider = new QSlider(Qt::Horizontal, this);
-    m_frequencySlider->setRange(470, 862);
+    m_frequencySlider->setRange(47, 862);
     m_frequencySlider->setValue(478);
     m_frequencySlider->setTickPosition(QSlider::TicksBelow);
     m_frequencySlider->setTickInterval(8);
@@ -665,22 +691,55 @@ void MainWindow::onColorModeChanged(int state)
 
     qDebug() << "Color mode:" << (colorMode ? "COLOR" : "B&W");
 }
+
+void MainWindow::onChromaGainChanged(int value)
+{
+    float chromaGain = value / 100.0f;
+    
+    m_chromaGainSpinBox->blockSignals(true);
+    m_chromaGainSpinBox->setValue(chromaGain);
+    m_chromaGainSpinBox->blockSignals(false);
+
+    if (m_palDecoder) {
+        m_palDecoder->setChromaGain(chromaGain);
+    }
+
+    qDebug() << "Chroma gain:" << chromaGain;
+}
 void MainWindow::updateChannelLabel(uint64_t frequency)
 {
-    // UHF TV kanalı hesapla
-    // UHF kanal formülü: Kanal = (Frekans - 306 MHz) / 8 MHz
-    // Örnek: 474 MHz = Kanal 21
-
     int64_t freqMHz = frequency / 1000000;
     int channel = -1;
+    QString band;
 
-    if (freqMHz >= 470 && freqMHz <= 862) {
+    // VHF Band I (E2-E4): 47-68 MHz
+    if (freqMHz >= 47 && freqMHz <= 68) {
+        if (freqMHz >= 46 && freqMHz <= 50) {
+            channel = 2;
+        } else if (freqMHz >= 53 && freqMHz <= 57) {
+            channel = 3;
+        } else if (freqMHz >= 60 && freqMHz <= 64) {
+            channel = 4;
+        }
+        band = "VHF-I";
+    }
+    // VHF Band III (E5-E12): 174-230 MHz
+    else if (freqMHz >= 174 && freqMHz <= 230) {
+        channel = ((freqMHz - 175) / 8) + 5;
+        if (channel < 5 || channel > 12) channel = -1;
+        band = "VHF-III";
+    }
+    // UHF Band IV/V (E21-E69): 470-862 MHz
+    else if (freqMHz >= 470 && freqMHz <= 862) {
         channel = (freqMHz - 306) / 8;
+        if (channel < 21 || channel > 69) channel = -1;
+        band = "UHF";
     }
 
     QString text;
-    if (channel >= 21 && channel <= 69) {
-        text = QString("<b>UHF Channel %1</b><br>%2 MHz")
+    if (channel > 0) {
+        text = QString("<b>%1 Channel E%2</b><br>%3 MHz")
+                   .arg(band)
                    .arg(channel)
                    .arg(freqMHz);
     } else {
