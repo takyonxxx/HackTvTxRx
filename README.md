@@ -19,7 +19,7 @@ You can compile HackTvGui with these libraries, they will be automaticaly copied
 
 ![HackTvGui Screenshot](hacktvgui_screen.png)
 
-![PALBDecoder Screenshot](paltv_screen.png)
+![PALBDecoder Screenshot](paldecoder.jpg)
 
 ## Installation Instructions for Windows
 
