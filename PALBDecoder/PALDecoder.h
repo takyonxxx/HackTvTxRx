@@ -26,12 +26,14 @@ public:
     void setVideoInvert(bool invert) { m_videoInvert = invert; }
     void setSyncThreshold(float threshold) { m_syncThreshold = threshold; }
     void setColorMode(bool color) { m_colorMode = color; }
+    void setChromaGain(float gain) { m_chromaGain = gain; }
 
     float getVideoGain() const { return m_videoGain; }
     float getVideoOffset() const { return m_videoOffset; }
     bool getVideoInvert() const { return m_videoInvert; }
     float getSyncThreshold() const { return m_syncThreshold; }
     bool getColorMode() const { return m_colorMode; }
+    float getChromaGain() const { return m_chromaGain; }
 
 signals:
     void frameReady(const QImage& frame);
@@ -92,7 +94,8 @@ private:
     float m_videoOffset;
     bool m_videoInvert;
     float m_syncThreshold;
-    bool m_colorMode;  
+    bool m_colorMode;
+    float m_chromaGain;
 
     uint64_t m_totalSamples;
     uint64_t m_frameCount;
@@ -109,6 +112,10 @@ private:
     float m_burstPhaseError;
     std::deque<float> m_burstHistory;
     static constexpr int BURST_SAMPLES = 25;
+
+    // PAL delay line (comb filter)
+    std::vector<float> m_prevLineU;
+    std::vector<float> m_prevLineV;
 
     void initFilters();
     std::vector<float> designLowPassFIR(float cutoff, float sampleRate, int numTaps);

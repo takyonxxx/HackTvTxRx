@@ -25,7 +25,8 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_videoOffset(0.0f)
     , m_videoInvert(false)
     , m_syncThreshold(-0.2f)
-    , m_colorMode(true)   
+    , m_colorMode(true)
+    , m_chromaGain(1.0f)
     , m_totalSamples(0)
     , m_frameCount(0)
     , m_linesProcessed(0)
@@ -56,6 +57,7 @@ PALDecoder::PALDecoder(QObject *parent)
     qDebug() << "PAL-B/G Color Decoder:";
     qDebug() << "  625 lines, 25 fps, Color subcarrier:" << COLOR_CARRIER_FREQ << "Hz";
     qDebug() << "  Resolution:" << VIDEO_WIDTH << "x" << VIDEO_HEIGHT;
+    qDebug() << "  PAL Comb Filter: ENABLED";
 }
 
 PALDecoder::~PALDecoder()
@@ -381,25 +383,54 @@ void PALDecoder::finalizeLine()
         int y = (lineIndex * VIDEO_HEIGHT) / VISIBLE_LINES;
 
         int samplesToUse = std::min(static_cast<int>(m_lineBuffer.size()), SAMPLES_PER_LINE);
+        
+        // Geçici U/V buffer (comb filter için)
+        std::vector<float> currentLineU(VIDEO_WIDTH, 0.0f);
+        std::vector<float> currentLineV(VIDEO_WIDTH, 0.0f);
 
         for (int x = 0; x < VIDEO_WIDTH; x++) {
             float srcX = (x * SAMPLES_PER_LINE) / (float)VIDEO_WIDTH;
             int idx = static_cast<int>(srcX);
+            float frac = srcX - idx;
 
             uint8_t r, g, b;
             if (idx >= samplesToUse) {
                 r = g = b = m_videoInvert ? 255 : 0;
             } else {
+                // Luma
                 float Y = (m_lineBuffer[idx] + 1.0f) * 0.5f;
                 Y = Y * m_videoGain + m_videoOffset;
                 Y = clipValue(Y, 0.0f, 1.0f);
 
                 float U = 0.0f, V = 0.0f;
+                
                 if (m_colorMode && idx < (int)m_lineBufferU.size()) {
-                    // U = m_lineBufferU[idx];
-                    // V = m_lineBufferV[idx];
-                    U = m_lineBufferU[idx] * 0.5f;
-                    V = m_lineBufferV[idx] * 0.5f;
+                    // Bilinear interpolasyon
+                    int idx2 = std::min(idx + 1, (int)m_lineBufferU.size() - 1);
+                    
+                    float U1 = m_lineBufferU[idx];
+                    float U2 = m_lineBufferU[idx2];
+                    float V1 = m_lineBufferV[idx];
+                    float V2 = m_lineBufferV[idx2];
+                    
+                    U = U1 + (U2 - U1) * frac;
+                    V = V1 + (V2 - V1) * frac;
+                    
+                    // PAL Delay Line (Comb Filter)
+                    // İki ardışık satırı birleştir
+                    if (!m_prevLineU.empty() && x < (int)m_prevLineU.size()) {
+                        // V fazı her satırda ters olduğu için:
+                        U = (U + m_prevLineU[x]) * 0.5f;
+                        V = (V - m_prevLineV[x]) * 0.5f; // V ters faz
+                    }
+                    
+                    // Chroma gain uygula
+                    U *= m_chromaGain;
+                    V *= m_chromaGain;
+                    
+                    // Mevcut satırı sakla
+                    currentLineU[x] = U;
+                    currentLineV[x] = V;
                 }
 
                 yuv2rgb(Y, U, V, r, g, b);
@@ -417,6 +448,10 @@ void PALDecoder::finalizeLine()
             m_frameBuffer[offset + 2] = r;
             m_frameBuffer[offset + 3] = 255;
         }
+        
+        // Bir sonraki satır için sakla
+        m_prevLineU = currentLineU;
+        m_prevLineV = currentLineV;
     }
 
     m_lineBuffer.clear();
@@ -426,6 +461,8 @@ void PALDecoder::finalizeLine()
     if (m_currentLine >= LINES_PER_FRAME) {
         buildFrame();
         m_currentLine = 0;
+        m_prevLineU.clear();
+        m_prevLineV.clear();
     }
 }
 
