@@ -56,6 +56,7 @@ private slots:
     void onFrequencySpinBoxChanged(double value);
     void updateChannelLabel(uint64_t frequency);
     void onInvertVideoChanged(int state);
+    void onColorModeChanged(int state);
     void onSyncThresholdChanged(int value);
     void onSyncStatsUpdated(float syncRate, float peakLevel, float minLevel);
     void onSampleRateChanged(int index);
@@ -98,6 +99,7 @@ private:
 
     QPushButton* m_startStopButton;
     QCheckBox* m_invertVideoCheckBox;
+    QCheckBox* m_colorModeCheckBox;
     QComboBox* m_sampleRateComboBox;
 
     // Core components

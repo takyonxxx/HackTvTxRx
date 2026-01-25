@@ -177,6 +177,14 @@ void MainWindow::setupUI()
             this, &MainWindow::onInvertVideoChanged);
     videoControlLayout->addWidget(m_invertVideoCheckBox);
 
+    // Color Mode checkbox
+    m_colorModeCheckBox = new QCheckBox("Color Mode (Renkli)", this);
+    m_colorModeCheckBox->setChecked(true);
+    m_colorModeCheckBox->setStyleSheet("QCheckBox { font-weight: bold; }");
+    connect(m_colorModeCheckBox, &QCheckBox::stateChanged,
+            this, &MainWindow::onColorModeChanged);
+    videoControlLayout->addWidget(m_colorModeCheckBox);
+
     leftColumn->addWidget(videoControlGroup);
 
     // Audio Controls (NEW - BELOW VIDEO CONTROLS)
@@ -646,6 +654,17 @@ void MainWindow::onInvertVideoChanged(int state)
     qDebug() << "Video invert:" << (invert ? "ON" : "OFF");
 }
 
+
+void MainWindow::onColorModeChanged(int state)
+{
+    bool colorMode = (state == Qt::Checked);
+
+    if (m_palDecoder) {
+        m_palDecoder->setColorMode(colorMode);
+    }
+
+    qDebug() << "Color mode:" << (colorMode ? "COLOR" : "B&W");
+}
 void MainWindow::updateChannelLabel(uint64_t frequency)
 {
     // UHF TV kanalı hesapla
@@ -1084,3 +1103,4 @@ void MainWindow::startPalVideoProcessing(std::shared_ptr<std::vector<std::comple
         }
     });
 }
+

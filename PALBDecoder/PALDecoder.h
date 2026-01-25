@@ -25,11 +25,13 @@ public:
     void setVideoOffset(float offset) { m_videoOffset = offset; }
     void setVideoInvert(bool invert) { m_videoInvert = invert; }
     void setSyncThreshold(float threshold) { m_syncThreshold = threshold; }
+    void setColorMode(bool color) { m_colorMode = color; }
 
     float getVideoGain() const { return m_videoGain; }
     float getVideoOffset() const { return m_videoOffset; }
     bool getVideoInvert() const { return m_videoInvert; }
     float getSyncThreshold() const { return m_syncThreshold; }
+    bool getColorMode() const { return m_colorMode; }
 
 signals:
     void frameReady(const QImage& frame);
@@ -47,7 +49,7 @@ private:
     static constexpr int VIDEO_HEIGHT = 384;
     
     static constexpr float COLOR_CARRIER_FREQ = 4433618.75f;
-    static constexpr float CHROMA_BANDWIDTH = 1.3e6f;
+    static constexpr float CHROMA_BANDWIDTH = 1.5e6f;
 
     mutable QMutex m_processMutex;
 
@@ -89,7 +91,8 @@ private:
     float m_videoGain;
     float m_videoOffset;
     bool m_videoInvert;
-    float m_syncThreshold;  
+    float m_syncThreshold;
+    bool m_colorMode;  
 
     uint64_t m_totalSamples;
     uint64_t m_frameCount;
@@ -102,6 +105,10 @@ private:
     std::vector<float> m_colorCarrierSin;
     std::vector<float> m_colorCarrierCos;
     int m_colorCarrierIndex;
+    
+    float m_burstPhaseError;
+    std::deque<float> m_burstHistory;
+    static constexpr int BURST_SAMPLES = 25;
 
     void initFilters();
     std::vector<float> designLowPassFIR(float cutoff, float sampleRate, int numTaps);

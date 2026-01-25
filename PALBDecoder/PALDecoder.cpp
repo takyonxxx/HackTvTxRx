@@ -24,7 +24,8 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_videoGain(1.5f)
     , m_videoOffset(0.0f)
     , m_videoInvert(false)
-    , m_syncThreshold(-0.2f)   
+    , m_syncThreshold(-0.2f)
+    , m_colorMode(true)   
     , m_totalSamples(0)
     , m_frameCount(0)
     , m_linesProcessed(0)
@@ -32,6 +33,7 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_colorPhase(0.0f)
     , m_vPhaseAlternate(false)
     , m_colorCarrierIndex(0)
+    , m_burstPhaseError(0.0f)
 {
     m_resampleDecim = 3;
 
@@ -66,7 +68,7 @@ PALDecoder::~PALDecoder()
 void PALDecoder::initFilters()
 {
     m_videoFilterTaps = designLowPassFIR(5.5e6f, SAMP_RATE, 33);
-    m_lumaFilterTaps = designLowPassFIR(3.0e6f, VIDEO_SAMP_RATE, 33);
+    m_lumaFilterTaps = designLowPassFIR(3.2e6f, VIDEO_SAMP_RATE, 33);
     m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, CHROMA_BANDWIDTH, VIDEO_SAMP_RATE, 65);
 }
 
@@ -308,8 +310,8 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
                 m_colorCarrierIndex = 0;
             }
 
-            float u = applyChromaFilterU(chromaSin) * 2.0f;
-            float v = applyChromaFilterV(chromaCos) * 2.0f * (m_vPhaseAlternate ? -1.0f : 1.0f);
+            float u = applyChromaFilterU(chromaSin) * 2.5f;
+            float v = applyChromaFilterV(chromaCos) * 2.5f * (m_vPhaseAlternate ? -1.0f : 1.0f);
 
             m_sampleHistory.push_front(luma);
             if (m_sampleHistory.size() > HISTORY_SIZE) {
@@ -348,6 +350,7 @@ void PALDecoder::processVideoSample(float sample)
         m_samplesSinceSync = 0;
         m_samplesInCurrentLine = 0;
         m_vPhaseAlternate = !m_vPhaseAlternate;
+        m_colorCarrierIndex = 0;
         return;
     }
 
@@ -357,6 +360,7 @@ void PALDecoder::processVideoSample(float sample)
         m_samplesSinceSync = 0;
         m_samplesInCurrentLine = 0;
         m_vPhaseAlternate = !m_vPhaseAlternate;
+        m_colorCarrierIndex = 0;
         return;
     }
 
@@ -391,7 +395,9 @@ void PALDecoder::finalizeLine()
                 Y = clipValue(Y, 0.0f, 1.0f);
 
                 float U = 0.0f, V = 0.0f;
-                if (idx < (int)m_lineBufferU.size()) {
+                if (m_colorMode && idx < (int)m_lineBufferU.size()) {
+                    // U = m_lineBufferU[idx];
+                    // V = m_lineBufferV[idx];
                     U = m_lineBufferU[idx] * 0.5f;
                     V = m_lineBufferV[idx] * 0.5f;
                 }
@@ -459,8 +465,8 @@ float PALDecoder::clipValue(float value, float min, float max)
 void PALDecoder::yuv2rgb(float y, float u, float v, uint8_t& r, uint8_t& g, uint8_t& b)
 {
     float rf = y + 1.140f * v;
-    float gf = y - 0.395f * u - 0.581f * v;
-    float bf = y + 2.032f * u;
+    float gf = y - 0.396f * u - 0.581f * v;
+    float bf = y + 2.029f * u;
 
     r = static_cast<uint8_t>(clipValue(rf * 255.0f, 0.0f, 255.0f));
     g = static_cast<uint8_t>(clipValue(gf * 255.0f, 0.0f, 255.0f));
