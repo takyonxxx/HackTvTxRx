@@ -73,10 +73,13 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     m_shuttingDown.store(true);
+    m_isProcessing.store(false);
 
     if (m_hackTvLib) {
         m_hackTvLib->clearCallbacks();
         m_hackTvLib->stop();
+        delete m_hackTvLib;
+        m_hackTvLib = nullptr;
     }
 }
 
@@ -897,15 +900,28 @@ void MainWindow::executeCommand()
 
     if (executeButton->text() == "START")
     {
-        // Lazy initialization - create HackTvLib on first use
-        if (!m_hackTvLib) {
-            qDebug() << "Creating HackTvLib on first START...";
-            initializeHackTvLib();
-            if (!m_hackTvLib) {
-                qDebug() << "ERROR: Failed to create HackTvLib!";
-                return;
-            }
+        // Hard reset: destroy existing instance and create fresh one
+        // This ensures clean USB state even after previous crash
+        if (m_hackTvLib) {
+            qDebug() << "Resetting HackTvLib for clean start...";
+            m_hackTvLib->clearCallbacks();
+            m_hackTvLib->stop();
+            delete m_hackTvLib;
+            m_hackTvLib = nullptr;
+
+            // Give USB subsystem time to fully release the device
+            QThread::msleep(500);
         }
+
+        qDebug() << "Creating HackTvLib...";
+        initializeHackTvLib();
+        if (!m_hackTvLib) {
+            qDebug() << "ERROR: Failed to create HackTvLib!";
+            return;
+        }
+
+        // Small delay after init to let USB device settle
+        QThread::msleep(200);
 
         QStringList args = buildCommand();
 
@@ -1139,6 +1155,7 @@ void MainWindow::onRxTxTypeChanged(int index)
     inputTypeGroup->setVisible(isTx);
     modeGroup->setVisible(isTx);
     rxGroup->setVisible(!isTx);
+    colorDisabled->setVisible(isTx);
 
     if(isTx)
     {
@@ -1304,11 +1321,14 @@ void MainWindow::closeEvent(QCloseEvent *event)
 void MainWindow::exitApp()
 {
     m_shuttingDown.store(true);
+    m_isProcessing.store(false);
 
     if (m_hackTvLib) {
         m_hackTvLib->clearCallbacks();
         m_hackTvLib->stop();
-        // Qt otomatik siler (parent-child)
+        delete m_hackTvLib;
+        m_hackTvLib = nullptr;
+        QThread::msleep(300); // Let USB release
     }
 
     try {

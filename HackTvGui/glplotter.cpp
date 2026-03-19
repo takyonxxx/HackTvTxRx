@@ -282,11 +282,11 @@ void CPlotter::drawSpectrum(QPainter &painter, int w, int specH)
         fillPath.closeSubpath();
 
         QLinearGradient grad(0, 0, 0, specH);
-        grad.setColorAt(0.0, QColor(40, 120, 255, 200));
-        grad.setColorAt(0.15, QColor(20, 80, 220, 180));
-        grad.setColorAt(0.4, QColor(10, 40, 180, 160));
-        grad.setColorAt(0.7, QColor(5, 20, 140, 140));
-        grad.setColorAt(1.0, QColor(0, 10, 100, 120));
+        grad.setColorAt(0.0, QColor(60, 150, 255, 210));
+        grad.setColorAt(0.15, QColor(35, 110, 240, 190));
+        grad.setColorAt(0.4, QColor(20, 70, 210, 170));
+        grad.setColorAt(0.7, QColor(10, 40, 170, 150));
+        grad.setColorAt(1.0, QColor(5, 20, 130, 130));
 
         painter.setPen(Qt::NoPen);
         painter.setBrush(grad);
