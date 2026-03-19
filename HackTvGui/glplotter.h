@@ -161,6 +161,7 @@ private:
     void drawWaterfall(QPainter &painter, int w, int h);
     void drawFilterBox(QPainter &painter, int w, int h);
     void drawFreqLabels(QPainter &painter, int w, int spectrumH);
+    void drawBandOverlay(QPainter &painter, int w, int specH);
 
     void makeFrequencyStrs();
     int  xFromFreq(qint64 freq);

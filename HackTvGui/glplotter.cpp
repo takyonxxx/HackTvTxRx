@@ -32,13 +32,13 @@ static int gettimeofday(struct timeval *tp, struct timezone *)
 #define COLPAL_MIX    0
 #define DEFAULT_FREQ_STEP 5
 
-#define PLOTTER_BGD_COLOR        QColor(5, 12, 18)
-#define PLOTTER_GRID_COLOR       QColor(30, 110, 90, 140)
-#define PLOTTER_TEXT_COLOR       QColor(160, 210, 195)
-#define PLOTTER_CENTER_LINE_COL  QColor(120, 130, 150, 150)
-#define PLOTTER_FILTER_LINE_COL  QColor(255, 96, 96, 176)
+#define PLOTTER_BGD_COLOR        QColor(0, 8, 20)
+#define PLOTTER_GRID_COLOR       QColor(50, 160, 50, 100)
+#define PLOTTER_TEXT_COLOR       QColor(180, 220, 180)
+#define PLOTTER_CENTER_LINE_COL  QColor(255, 255, 0, 140)
+#define PLOTTER_FILTER_LINE_COL  QColor(255, 80, 80, 180)
 #define PLOTTER_FILTER_BOX_COL   QColor(0, 180, 255, 30)
-#define WF_BG_COLOR              QColor(3, 8, 12)
+#define WF_BG_COLOR              QColor(2, 8, 30)
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #define FONT_WIDTH(metrics, text) metrics.horizontalAdvance(text)
@@ -65,10 +65,8 @@ CPlotter::CPlotter(QWidget *parent)
     setMouseTracking(true);
     setUpdateBehavior(QOpenGLWidget::PartialUpdate);
 
-    // Enable multisampling for smooth lines
-    QSurfaceFormat fmt;
-    fmt.setSamples(4);
-    setFormat(fmt);
+    // QPainter handles antialiasing internally, no need for MSAA
+    // which can cause crashes on some GPU drivers
 
     m_FftColor = QColor(0xCE, 0xEC, 0xF5);
     m_FftFillCol = m_FftColor;
@@ -100,7 +98,7 @@ QSize CPlotter::sizeHint() const { return QSize(400, 300); }
 void CPlotter::initializeGL()
 {
     initializeOpenGLFunctions();
-    glClearColor(0.02f, 0.047f, 0.07f, 1.0f);
+    glClearColor(0.0f, 0.031f, 0.078f, 1.0f);
 }
 
 void CPlotter::resizeGL(int w, int h)
@@ -159,6 +157,9 @@ void CPlotter::paintGL()
     // Spectrum
     if (m_Running && m_fftData && m_fftDataSize > 0)
         drawSpectrum(painter, w, specH);
+
+    // Band allocation overlay at bottom of spectrum
+    drawBandOverlay(painter, w, specH);
 
     // Waterfall
     drawWaterfall(painter, w, h);
@@ -239,7 +240,7 @@ void CPlotter::drawSpectrum(QPainter &painter, int w, int specH)
     for (int i = xmin + 1; i < xmax; i++)
         specPath.lineTo(i, m_fftbuf[i]);
 
-    // Fill under curve with blue gradient
+    // Fill under curve — deep blue solid fill like SDR++
     if (m_FftFill) {
         QPainterPath fillPath = specPath;
         fillPath.lineTo(xmax - 1, specH);
@@ -247,31 +248,28 @@ void CPlotter::drawSpectrum(QPainter &painter, int w, int specH)
         fillPath.closeSubpath();
 
         QLinearGradient grad(0, 0, 0, specH);
-        grad.setColorAt(0.0, QColor(30, 150, 255, 190));
-        grad.setColorAt(0.25, QColor(15, 110, 240, 130));
-        grad.setColorAt(0.5, QColor(8, 70, 200, 75));
-        grad.setColorAt(0.8, QColor(4, 40, 150, 35));
-        grad.setColorAt(1.0, QColor(0, 20, 100, 10));
+        grad.setColorAt(0.0, QColor(40, 120, 255, 200));
+        grad.setColorAt(0.15, QColor(20, 80, 220, 180));
+        grad.setColorAt(0.4, QColor(10, 40, 180, 160));
+        grad.setColorAt(0.7, QColor(5, 20, 140, 140));
+        grad.setColorAt(1.0, QColor(0, 10, 100, 120));
 
         painter.setPen(Qt::NoPen);
         painter.setBrush(grad);
         painter.drawPath(fillPath);
     }
 
-    // Draw spectrum line — smooth and glowing
-    // Glow layer (wider, more transparent)
-    QPen glowPen(m_FftColor);
-    glowPen.setWidthF(3.0);
-    QColor glowCol = m_FftColor;
-    glowCol.setAlpha(35);
-    glowPen.setColor(glowCol);
+    // Draw spectrum line — thin cyan like SDR++
+    // Subtle glow
+    QPen glowPen(QColor(100, 220, 255, 25));
+    glowPen.setWidthF(2.5);
     painter.setPen(glowPen);
     painter.setBrush(Qt::NoBrush);
     painter.drawPath(specPath);
 
-    // Main line
-    QPen mainPen(m_FftColor);
-    mainPen.setWidthF(1.2);
+    // Main thin line
+    QPen mainPen(QColor(120, 230, 255));
+    mainPen.setWidthF(0.9);
     painter.setPen(mainPen);
     painter.drawPath(specPath);
 
@@ -391,6 +389,129 @@ void CPlotter::drawFilterBox(QPainter &painter, int w, int h)
     painter.setPen(edgePen);
     painter.drawLine(lo, 0, lo, h);
     painter.drawLine(hi, 0, hi, h);
+}
+
+// ============================================================================
+// Band allocation overlay — known frequency bands shown at bottom of spectrum
+// ============================================================================
+
+void CPlotter::drawBandOverlay(QPainter &painter, int w, int specH)
+{
+    struct BandInfo {
+        qint64 startHz;
+        qint64 endHz;
+        const char *name;
+        QColor color;
+    };
+
+    static const BandInfo bands[] = {
+        // LF / MF
+        {148500,    283500,     "LW",               QColor(80, 80, 180)},
+        {526500,    1606500,    "MW",                QColor(80, 100, 160)},
+        // HF
+        {1800000,   2000000,    "160m Ham",          QColor(180, 60, 60)},
+        {2300000,   2495000,    "120m SW",           QColor(60, 130, 60)},
+        {3200000,   3400000,    "90m SW",            QColor(60, 130, 60)},
+        {3500000,   3800000,    "80m Ham",           QColor(180, 60, 60)},
+        {3900000,   4000000,    "75m SW",            QColor(60, 130, 60)},
+        {4750000,   5060000,    "60m SW",            QColor(60, 130, 60)},
+        {5351500,   5366500,    "60m Ham",           QColor(180, 60, 60)},
+        {5900000,   6200000,    "49m SW",            QColor(60, 130, 60)},
+        {7000000,   7200000,    "40m Ham",           QColor(180, 60, 60)},
+        {7200000,   7450000,    "41m SW",            QColor(60, 130, 60)},
+        {9400000,   9900000,    "31m SW",            QColor(60, 130, 60)},
+        {10100000,  10150000,   "30m Ham",           QColor(180, 60, 60)},
+        {11600000,  12100000,   "25m SW",            QColor(60, 130, 60)},
+        {13570000,  13870000,   "22m SW",            QColor(60, 130, 60)},
+        {14000000,  14350000,   "20m Ham",           QColor(180, 60, 60)},
+        {15100000,  15800000,   "19m SW",            QColor(60, 130, 60)},
+        {17480000,  17900000,   "16m SW",            QColor(60, 130, 60)},
+        {18068000,  18168000,   "17m Ham",           QColor(180, 60, 60)},
+        {18900000,  19020000,   "15m SW",            QColor(60, 130, 60)},
+        {21000000,  21450000,   "15m Ham",           QColor(180, 60, 60)},
+        {21450000,  21850000,   "13m SW",            QColor(60, 130, 60)},
+        {24890000,  24990000,   "12m Ham",           QColor(180, 60, 60)},
+        {25670000,  26100000,   "11m SW",            QColor(60, 130, 60)},
+        {26965000,  27405000,   "CB",                QColor(180, 140, 40)},
+        {28000000,  29700000,   "10m Ham",           QColor(180, 60, 60)},
+        {50000000,  54000000,   "6m Ham",            QColor(180, 60, 60)},
+        // VHF
+        {64000000,  68000000,   "TV Ch1-3",          QColor(100, 100, 160)},
+        {76000000,  87500000,   "TV Ch4-5 / JP FM",  QColor(100, 100, 160)},
+        {87500000,  108000000,  "FM Broadcast",      QColor(40, 100, 200)},
+        {108000000, 117975000,  "Air Nav",           QColor(160, 130, 40)},
+        {118000000, 136975000,  "Air Voice",         QColor(160, 160, 40)},
+        {144000000, 148000000,  "2m Ham",            QColor(180, 60, 60)},
+        {156000000, 162025000,  "Marine VHF",        QColor(40, 140, 160)},
+        {162400000, 162550000,  "NOAA Weather",      QColor(60, 160, 100)},
+        {174000000, 230000000,  "VHF TV",            QColor(100, 100, 160)},
+        {230000000, 240000000,  "DAB",               QColor(130, 80, 180)},
+        // UHF
+        {400000000, 406000000,  "Meteorological",    QColor(60, 150, 130)},
+        {420000000, 450000000,  "70cm Ham",          QColor(180, 60, 60)},
+        {462562500, 467712500,  "GMRS/FRS",          QColor(180, 140, 40)},
+        {470000000, 698000000,  "UHF TV",            QColor(100, 100, 160)},
+        {698000000, 806000000,  "LTE 700",           QColor(130, 80, 180)},
+        {824000000, 849000000,  "Cell 850 Up",       QColor(130, 80, 180)},
+        {869000000, 894000000,  "Cell 850 Down",     QColor(130, 80, 180)},
+        {902000000, 928000000,  "33cm Ham / ISM",    QColor(180, 60, 60)},
+        {935000000, 960000000,  "GSM 900 Down",      QColor(130, 80, 180)},
+        {1240000000,1300000000, "23cm Ham",          QColor(180, 60, 60)},
+        {1525000000,1559000000, "GPS L1/Inmarsat",   QColor(60, 150, 130)},
+        {1710000000,1785000000, "AWS Up",            QColor(130, 80, 180)},
+        {1805000000,1880000000, "GSM 1800 Down",     QColor(130, 80, 180)},
+        {1920000000,1980000000, "UMTS Up",           QColor(130, 80, 180)},
+        {2110000000,2170000000, "UMTS Down",         QColor(130, 80, 180)},
+        {2400000000LL,2483500000LL, "ISM 2.4G/WiFi", QColor(180, 140, 40)},
+    };
+
+    const int numBands = sizeof(bands) / sizeof(bands[0]);
+
+    qint64 viewStart = m_CenterFreq + m_FftCenter - m_Span / 2;
+    qint64 viewEnd = viewStart + m_Span;
+
+    QFontMetrics fm(m_Font);
+    int freqLabelH = fm.height() + 6;
+    int bandBarH = 24;
+    int bandBarY = specH - freqLabelH - bandBarH;
+
+    QFont bandFont = m_Font;
+    bandFont.setPixelSize(12);
+    bandFont.setBold(true);
+    QFontMetrics bm(bandFont);
+    painter.setFont(bandFont);
+
+    for (int b = 0; b < numBands; b++) {
+        const BandInfo &band = bands[b];
+
+        // Skip if band is completely outside view
+        if (band.endHz <= viewStart || band.startHz >= viewEnd)
+            continue;
+
+        int x1 = xFromFreq(qMax(band.startHz, viewStart));
+        int x2 = xFromFreq(qMin(band.endHz, viewEnd));
+        int bw = x2 - x1;
+        if (bw < 3) continue;
+
+        // Band color bar
+        QColor barCol = band.color;
+        barCol.setAlpha(140);
+        painter.fillRect(x1, bandBarY, bw, bandBarH, barCol);
+
+        // Border
+        QColor borderCol = band.color;
+        borderCol.setAlpha(200);
+        painter.setPen(borderCol);
+        painter.drawRect(x1, bandBarY, bw, bandBarH);
+
+        // Label if it fits
+        int textW = FONT_WIDTH(bm, band.name);
+        if (bw > textW + 6) {
+            painter.setPen(QColor(230, 230, 230));
+            QRect textRect(x1 + 2, bandBarY, bw - 4, bandBarH);
+            painter.drawText(textRect, Qt::AlignCenter, band.name);
+        }
+    }
 }
 
 // ============================================================================
@@ -923,18 +1044,38 @@ quint64 CPlotter::msecFromY(int y)
 void CPlotter::setWaterfallPalette(int pal)
 {
     Q_UNUSED(pal);
+    // SDR# style: dark blue bg → blue → cyan → white → yellow → orange → red
     for (int i = 0; i < 256; i++) {
-        if (i < 20)
-            m_ColorTbl[i].setRgb(0, 0, 0);
-        else if (i < 70)
-            m_ColorTbl[i].setRgb(0, 0, 140 * (i - 20) / 50);
-        else if (i < 100)
-            m_ColorTbl[i].setRgb(60 * (i - 70) / 30, 125 * (i - 70) / 30, 115 * (i - 70) / 30 + 140);
-        else if (i < 150)
-            m_ColorTbl[i].setRgb(195 * (i - 100) / 50 + 60, 130 * (i - 100) / 50 + 125, 255 - (255 * (i - 100) / 50));
-        else if (i < 250)
-            m_ColorTbl[i].setRgb(255, 255 - 255 * (i - 150) / 100, 0);
-        else
-            m_ColorTbl[i].setRgb(255, 0, 0);
+        float t;
+        if (i < 32) {
+            // Dark navy background → dark blue
+            t = (float)i / 32.0f;
+            m_ColorTbl[i].setRgb((int)(2 * t), (int)(8 * t), (int)(30 + 50 * t));
+        } else if (i < 80) {
+            // Dark blue → medium blue
+            t = (float)(i - 32) / 48.0f;
+            m_ColorTbl[i].setRgb((int)(2 + 8 * t), (int)(8 + 40 * t), (int)(80 + 100 * t));
+        } else if (i < 120) {
+            // Medium blue → cyan
+            t = (float)(i - 80) / 40.0f;
+            m_ColorTbl[i].setRgb((int)(10 + 40 * t), (int)(48 + 170 * t), (int)(180 + 75 * t));
+        } else if (i < 155) {
+            // Cyan → white
+            t = (float)(i - 120) / 35.0f;
+            m_ColorTbl[i].setRgb((int)(50 + 205 * t), (int)(218 + 37 * t), (int)(255));
+        } else if (i < 190) {
+            // White → yellow
+            t = (float)(i - 155) / 35.0f;
+            m_ColorTbl[i].setRgb(255, 255, (int)(255 - 220 * t));
+        } else if (i < 225) {
+            // Yellow → orange
+            t = (float)(i - 190) / 35.0f;
+            m_ColorTbl[i].setRgb(255, (int)(255 - 140 * t), (int)(35 - 35 * t));
+        } else {
+            // Orange → red
+            t = (float)(i - 225) / 30.0f;
+            if (t > 1.0f) t = 1.0f;
+            m_ColorTbl[i].setRgb(255, (int)(115 - 115 * t), 0);
+        }
     }
 }

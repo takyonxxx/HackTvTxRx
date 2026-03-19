@@ -67,7 +67,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     qDebug() << "Sdr device initialized.";
 
-    QTimer::singleShot(1000, this, [this]() {
+    QTimer::singleShot(2000, this, [this]() {
         initializeHackTvLib();
     });
 }
@@ -141,16 +141,36 @@ void MainWindow::setCurrentSampleRate(int sampleRate)
 
 void MainWindow::initializeHackTvLib()
 {
-    // m_hackTvLib = std::make_unique<HackTvLib>();
+    try {
+        m_hackTvLib = new HackTvLib(this);
 
-    m_hackTvLib = new HackTvLib(this);
+        if (!m_hackTvLib) {
+            qDebug() << "Failed to create HackTvLib instance";
+            // Retry after 3 seconds
+            QTimer::singleShot(3000, this, [this]() {
+                if (!m_hackTvLib && !m_shuttingDown.load()) {
+                    qDebug() << "Retrying HackTvLib initialization...";
+                    initializeHackTvLib();
+                }
+            });
+            return;
+        }
 
-    if (!m_hackTvLib) {
-        qDebug() << "Failed to create HackTvLib instance";
-        return;
+        qDebug() << "HackTvLib initialized successfully";
+    } catch (const std::exception& e) {
+        qDebug() << "Exception during HackTvLib init:" << e.what();
+        m_hackTvLib = nullptr;
+        // Retry after 3 seconds
+        QTimer::singleShot(3000, this, [this]() {
+            if (!m_hackTvLib && !m_shuttingDown.load()) {
+                qDebug() << "Retrying HackTvLib initialization...";
+                initializeHackTvLib();
+            }
+        });
+    } catch (...) {
+        qDebug() << "Unknown exception during HackTvLib init";
+        m_hackTvLib = nullptr;
     }
-
-    qDebug() << "HackTvLib initialized successfully";
 }
 
 void MainWindow::handleReceivedData(const int8_t *data, size_t len)
@@ -280,6 +300,7 @@ void MainWindow::addOutputGroup()
     ampEnabled->setChecked(true);
     colorDisabled = new QCheckBox("No Color", this);
     colorDisabled->setChecked(false);
+    colorDisabled->setMinimumWidth(85);
 
     QLabel *channelLabel = new QLabel("Ch:", this);
     channelCombo = new QComboBox(this);
@@ -305,26 +326,28 @@ void MainWindow::addOutputGroup()
         sampleRateCombo->addItem(displayText + " MHz", rate);
     }
 
-    // Row 0: Device | Mode | Amp | NoColor | Channel | Freq | SampleRate
-    int col = 0;
-    outputLayout->addWidget(outputLabel, 0, col++);
-    outputLayout->addWidget(outputCombo, 0, col++);
-    outputLayout->addWidget(rxtxLabel, 0, col++);
-    outputLayout->addWidget(rxtxCombo, 0, col++);
-    outputLayout->addWidget(ampEnabled, 0, col++);
-    outputLayout->addWidget(colorDisabled, 0, col++);
-    outputLayout->addWidget(channelLabel, 0, col++);
-    outputLayout->addWidget(channelCombo, 0, col++);
-    outputLayout->addWidget(freqLabel, 0, col++);
-    outputLayout->addWidget(frequencyEdit, 0, col++);
-    outputLayout->addWidget(sampleRateLabel, 0, col++);
-    outputLayout->addWidget(sampleRateCombo, 0, col++);
+    // Row 0: Device | Mode | Amp | NoColor
+    outputLayout->addWidget(outputLabel, 0, 0);
+    outputLayout->addWidget(outputCombo, 0, 1);
+    outputLayout->addWidget(rxtxLabel, 0, 2);
+    outputLayout->addWidget(rxtxCombo, 0, 3);
+    outputLayout->addWidget(ampEnabled, 0, 4);
+    outputLayout->addWidget(colorDisabled, 0, 5, 1, 2); // span 2 columns
 
-    // Set stretch: combos and edit fields should stretch
-    outputLayout->setColumnStretch(1, 2); // device combo
-    outputLayout->setColumnStretch(7, 2); // channel combo
-    outputLayout->setColumnStretch(9, 3); // frequency edit
-    outputLayout->setColumnStretch(11, 1); // sample rate combo
+    // Row 1: Channel | Freq | SampleRate
+    outputLayout->addWidget(channelLabel, 1, 0);
+    outputLayout->addWidget(channelCombo, 1, 1);
+    outputLayout->addWidget(freqLabel, 1, 2);
+    outputLayout->addWidget(frequencyEdit, 1, 3, 1, 2);
+    outputLayout->addWidget(sampleRateLabel, 1, 5);
+    outputLayout->addWidget(sampleRateCombo, 1, 6);
+
+    // Set stretch
+    outputLayout->setColumnStretch(1, 3); // device/channel combo
+    outputLayout->setColumnStretch(3, 3); // rxtx/freq
+    outputLayout->setColumnStretch(4, 1); // freq extends
+    outputLayout->setColumnStretch(6, 1); // sample rate combo
+    int col = 7; // for TX controls row reference
 
     // TX Controls layout (hidden in RX mode)
     txControlsLayout = new QGridLayout();
@@ -413,8 +436,8 @@ void MainWindow::addOutputGroup()
     tx_line->setFrameShape(QFrame::HLine);
     tx_line->setFrameShadow(QFrame::Sunken);
     tx_line->setFixedHeight(2);
-    outputLayout->addWidget(tx_line, 1, 0, 1, col);
-    outputLayout->addLayout(txControlsLayout, 2, 0, 1, col);
+    outputLayout->addWidget(tx_line, 2, 0, 1, col);
+    outputLayout->addLayout(txControlsLayout, 3, 0, 1, col);
     mainLayout->addWidget(outputGroup);
 
     connect(txAmpSlider, &QSlider::valueChanged, [this](int value) {
