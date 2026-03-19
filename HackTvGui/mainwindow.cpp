@@ -66,10 +66,8 @@ MainWindow::MainWindow(QWidget *parent)
     logTimer->start(500);
 
     qDebug() << "Sdr device initialized.";
-
-    QTimer::singleShot(2000, this, [this]() {
-        initializeHackTvLib();
-    });
+    // HackTvLib is created on-demand when START is pressed (lazy init)
+    // This avoids DLL/USB subsystem crashes at startup
 }
 
 MainWindow::~MainWindow()
@@ -641,7 +639,7 @@ void MainWindow::addRxGroup()
     cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
 
-    cPlotter->setFftRange(-140.0f, 20.0f);
+    cPlotter->setFftRange(-100.0f, 0.0f);
     cPlotter->setPandapterRange(-140.f, 20.f);
     cPlotter->setDemodRanges(-1*DEFAULT_CUT_OFF, -_KHZ(5), _KHZ(5), DEFAULT_CUT_OFF, true);
 
@@ -899,10 +897,14 @@ void MainWindow::executeCommand()
 
     if (executeButton->text() == "START")
     {
+        // Lazy initialization - create HackTvLib on first use
         if (!m_hackTvLib) {
-            qDebug() << "ERROR: m_hackTvLib is null!";
-            logBrowser->append("HackTvLib not initialized!");
-            return;
+            qDebug() << "Creating HackTvLib on first START...";
+            initializeHackTvLib();
+            if (!m_hackTvLib) {
+                qDebug() << "ERROR: Failed to create HackTvLib!";
+                return;
+            }
         }
 
         QStringList args = buildCommand();

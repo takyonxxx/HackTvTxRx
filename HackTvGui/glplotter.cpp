@@ -32,8 +32,8 @@ static int gettimeofday(struct timeval *tp, struct timezone *)
 #define COLPAL_MIX    0
 #define DEFAULT_FREQ_STEP 5
 
-#define PLOTTER_BGD_COLOR        QColor(0, 8, 20)
-#define PLOTTER_GRID_COLOR       QColor(50, 160, 50, 100)
+#define PLOTTER_BGD_COLOR        QColor(4, 14, 22)
+#define PLOTTER_GRID_COLOR       QColor(28, 105, 168, 90)
 #define PLOTTER_TEXT_COLOR       QColor(180, 220, 180)
 #define PLOTTER_CENTER_LINE_COL  QColor(255, 255, 0, 140)
 #define PLOTTER_FILTER_LINE_COL  QColor(255, 80, 80, 180)
@@ -136,12 +136,16 @@ void CPlotter::paintGL()
     // Background
     painter.fillRect(0, 0, w, specH, PLOTTER_BGD_COLOR);
 
-    // Grid + labels
-    drawGrid(painter, w, specH);
-
-    // Filter box
+    // Filter box (behind everything)
     if (m_FilterBoxEnabled)
         drawFilterBox(painter, w, specH);
+
+    // Spectrum (fill + line)
+    if (m_Running && m_fftData && m_fftDataSize > 0)
+        drawSpectrum(painter, w, specH);
+
+    // Grid + dB labels — drawn ON TOP of spectrum fill so always visible
+    drawGrid(painter, w, specH);
 
     // Center line
     if (m_CenterLineEnabled) {
@@ -153,10 +157,6 @@ void CPlotter::paintGL()
             painter.drawLine(cx, 0, cx, specH);
         }
     }
-
-    // Spectrum
-    if (m_Running && m_fftData && m_fftDataSize > 0)
-        drawSpectrum(painter, w, specH);
 
     // Band allocation overlay at bottom of spectrum
     drawBandOverlay(painter, w, specH);
@@ -185,11 +185,12 @@ void CPlotter::drawGrid(QPainter &painter, int w, int h)
 
     QPen gridPen(PLOTTER_GRID_COLOR);
     gridPen.setStyle(Qt::SolidLine);
-    gridPen.setWidthF(0.7);
-    painter.setPen(gridPen);
+    gridPen.setWidthF(1.0);
     painter.setFont(m_Font);
 
-    // Horizontal grid (dB)
+    QColor gridCol = PLOTTER_GRID_COLOR;
+
+    // Horizontal grid (dB) — draw as filled rects for reliable OpenGL rendering
     float pixPerDb = (float)plotH / fabs(m_PandMaxdB - m_PandMindB);
     float dbStep = 10.0f;
     if (pixPerDb * dbStep < 20) dbStep = 20.0f;
@@ -198,18 +199,16 @@ void CPlotter::drawGrid(QPainter &painter, int w, int h)
     for (float db = ceil(m_PandMindB / dbStep) * dbStep; db <= m_PandMaxdB; db += dbStep) {
         int y = (int)((m_PandMaxdB - db) * pixPerDb);
         if (y < 0 || y >= plotH) continue;
-        painter.setPen(gridPen);
-        painter.drawLine(m_YAxisWidth, y, w, y);
+        painter.fillRect(m_YAxisWidth, y, plotW, 1, gridCol);
         painter.setPen(PLOTTER_TEXT_COLOR);
         painter.drawText(2, y + metrics.ascent() / 2, QString::number((int)db));
     }
 
-    // Vertical grid (frequency)
+    // Vertical grid (frequency) — draw as filled rects
     makeFrequencyStrs();
     for (int i = 0; i <= m_HorDivs; i++) {
         int x = m_YAxisWidth + (i * plotW / m_HorDivs);
-        painter.setPen(gridPen);
-        painter.drawLine(x, 0, x, plotH);
+        painter.fillRect(x, 0, 1, plotH, gridCol);
     }
 }
 
@@ -232,13 +231,48 @@ void CPlotter::drawSpectrum(QPainter &painter, int w, int specH)
                             &xmin, &xmax);
 
     int n = xmax - xmin;
-    if (n < 2) return;
+    if (n < 4) return;
 
-    // Build path
+    // Smooth the FFT data with a moving average filter
+    // Use a temporary buffer to avoid modifying m_fftbuf (needed for waterfall)
+    static qint32 smoothBuf[MAX_SCREENSIZE];
+    const int kernelSize = 5; // 5-point moving average
+    const int halfK = kernelSize / 2;
+    for (int i = xmin; i < xmax; i++) {
+        int sum = 0;
+        int count = 0;
+        for (int k = -halfK; k <= halfK; k++) {
+            int idx = i + k;
+            if (idx >= xmin && idx < xmax) {
+                sum += m_fftbuf[idx];
+                count++;
+            }
+        }
+        smoothBuf[i] = sum / count;
+    }
+
+    // Build smooth cubic path using control points
     QPainterPath specPath;
-    specPath.moveTo(xmin, m_fftbuf[xmin]);
-    for (int i = xmin + 1; i < xmax; i++)
-        specPath.lineTo(i, m_fftbuf[i]);
+    specPath.moveTo(xmin, smoothBuf[xmin]);
+
+    // Downsample to control points, then use cubicTo for smooth curves
+    const int step = qMax(2, n / 500); // ~500 control points max
+    QVector<QPointF> pts;
+    for (int i = xmin; i < xmax; i += step)
+        pts.append(QPointF(i, smoothBuf[i]));
+    // Always include last point
+    if (pts.isEmpty() || pts.last().x() < xmax - 1)
+        pts.append(QPointF(xmax - 1, smoothBuf[xmax - 1]));
+
+    if (pts.size() >= 2) {
+        specPath.moveTo(pts[0]);
+        for (int i = 1; i < pts.size(); i++) {
+            QPointF p0 = pts[i - 1];
+            QPointF p1 = pts[i];
+            float cx = (p0.x() + p1.x()) / 2.0f;
+            specPath.cubicTo(cx, p0.y(), cx, p1.y(), p1.x(), p1.y());
+        }
+    }
 
     // Fill under curve — deep blue solid fill like SDR++
     if (m_FftFill) {
@@ -338,11 +372,25 @@ void CPlotter::drawWaterfall(QPainter &painter, int w, int h)
                         (m_waterfallImg.height() - 1) * m_waterfallImg.bytesPerLine());
             }
 
-            // Draw new top line
+            // Draw new top line with smoothing for soft appearance
             QRgb *line = reinterpret_cast<QRgb*>(m_waterfallImg.scanLine(0));
+
+            // Smooth the waterfall data with 3-point average
+            static qint32 wfSmooth[MAX_SCREENSIZE];
             for (int i = 0; i < w; i++) {
                 if (i >= xmin && i < xmax) {
-                    int idx = msec_per_wfline > 0 ? (255 - m_wfbuf[i]) : (255 - m_fftbuf[i]);
+                    int val = msec_per_wfline > 0 ? m_wfbuf[i] : m_fftbuf[i];
+                    int prev = (i > xmin) ? (msec_per_wfline > 0 ? m_wfbuf[i-1] : m_fftbuf[i-1]) : val;
+                    int next = (i < xmax-1) ? (msec_per_wfline > 0 ? m_wfbuf[i+1] : m_fftbuf[i+1]) : val;
+                    wfSmooth[i] = (prev + val * 2 + next) / 4;
+                } else {
+                    wfSmooth[i] = 255;
+                }
+            }
+
+            for (int i = 0; i < w; i++) {
+                if (i >= xmin && i < xmax) {
+                    int idx = 255 - wfSmooth[i];
                     idx = qBound(0, idx, 255);
                     line[i] = m_ColorTbl[idx].rgb();
                     if (msec_per_wfline > 0)
@@ -1044,38 +1092,38 @@ quint64 CPlotter::msecFromY(int y)
 void CPlotter::setWaterfallPalette(int pal)
 {
     Q_UNUSED(pal);
-    // SDR# style: dark blue bg → blue → cyan → white → yellow → orange → red
+    // SDR# style: noise floor = deep dark blue, signals pop as cyan→yellow→red
     for (int i = 0; i < 256; i++) {
         float t;
-        if (i < 32) {
-            // Dark navy background → dark blue
-            t = (float)i / 32.0f;
-            m_ColorTbl[i].setRgb((int)(2 * t), (int)(8 * t), (int)(30 + 50 * t));
-        } else if (i < 80) {
+        if (i < 50) {
+            // Noise floor: near-black → deep dark blue (dominant background color)
+            t = (float)i / 50.0f;
+            m_ColorTbl[i].setRgb(0, 0, (int)(8 + 40 * t));
+        } else if (i < 90) {
             // Dark blue → medium blue
-            t = (float)(i - 32) / 48.0f;
-            m_ColorTbl[i].setRgb((int)(2 + 8 * t), (int)(8 + 40 * t), (int)(80 + 100 * t));
-        } else if (i < 120) {
-            // Medium blue → cyan
-            t = (float)(i - 80) / 40.0f;
-            m_ColorTbl[i].setRgb((int)(10 + 40 * t), (int)(48 + 170 * t), (int)(180 + 75 * t));
-        } else if (i < 155) {
-            // Cyan → white
-            t = (float)(i - 120) / 35.0f;
-            m_ColorTbl[i].setRgb((int)(50 + 205 * t), (int)(218 + 37 * t), (int)(255));
+            t = (float)(i - 50) / 40.0f;
+            m_ColorTbl[i].setRgb(0, (int)(12 * t), (int)(48 + 75 * t));
+        } else if (i < 130) {
+            // Medium blue → bright blue
+            t = (float)(i - 90) / 40.0f;
+            m_ColorTbl[i].setRgb((int)(10 * t), (int)(12 + 80 * t), (int)(123 + 90 * t));
+        } else if (i < 160) {
+            // Bright blue → cyan
+            t = (float)(i - 130) / 30.0f;
+            m_ColorTbl[i].setRgb((int)(10 + 45 * t), (int)(92 + 135 * t), (int)(213 + 42 * t));
         } else if (i < 190) {
-            // White → yellow
-            t = (float)(i - 155) / 35.0f;
-            m_ColorTbl[i].setRgb(255, 255, (int)(255 - 220 * t));
+            // Cyan → yellow
+            t = (float)(i - 160) / 30.0f;
+            m_ColorTbl[i].setRgb((int)(55 + 200 * t), (int)(227 + 28 * t), (int)(255 - 225 * t));
         } else if (i < 225) {
-            // Yellow → orange
+            // Yellow → orange-red
             t = (float)(i - 190) / 35.0f;
-            m_ColorTbl[i].setRgb(255, (int)(255 - 140 * t), (int)(35 - 35 * t));
+            m_ColorTbl[i].setRgb(255, (int)(255 - 160 * t), (int)(30 - 30 * t));
         } else {
-            // Orange → red
+            // Orange-red → deep red
             t = (float)(i - 225) / 30.0f;
             if (t > 1.0f) t = 1.0f;
-            m_ColorTbl[i].setRgb(255, (int)(115 - 115 * t), 0);
+            m_ColorTbl[i].setRgb(255, (int)(95 - 95 * t), 0);
         }
     }
 }
