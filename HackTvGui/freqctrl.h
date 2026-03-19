@@ -56,6 +56,14 @@ public:
         m_InvertScrolling = invert;
     }
 
+    // Returns the increment value of the last active digit (persists after mouse leaves)
+    qint64 getActiveStep() const
+    {
+        if (m_LastActiveDigit >= 0 && m_LastActiveDigit < FCTL_MAX_DIGITS)
+            return m_DigitInfo[m_LastActiveDigit].incval;
+        return 1000000; // default 1 MHz
+    }
+
 signals:
     void    newFrequency(qint64 freq); // emitted when frequency has changed
 
@@ -99,6 +107,7 @@ private:
     int         m_NumDigitsForUnit;     // number of digits allocated for unit (kHz, MHz, ...)
     int         m_DigStart;
     int         m_ActiveEditDigit;
+    int         m_LastActiveDigit;  // persists after mouse leaves - used for wheel step
     int         m_DecPos;
     int         m_NumSeps;
     int         m_CumWheelDelta;

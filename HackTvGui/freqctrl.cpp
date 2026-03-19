@@ -64,6 +64,7 @@ CFreqCtrl::CFreqCtrl(QWidget *parent) :
     m_LastLeadZeroPos = 0;
     m_LRMouseFreqSel = false;
     m_ActiveEditDigit = -1;
+    m_LastActiveDigit = -1;
     m_ResetLowerDigits = true;
     m_InvertScrolling = false;
     m_UnitsFont = QFont("Arial", 12, QFont::Normal);
@@ -101,6 +102,8 @@ void CFreqCtrl::setActiveDigit(int idx)
     if (m_ActiveEditDigit != idx)
     {
         m_ActiveEditDigit = idx;
+        if (idx >= 0)
+            m_LastActiveDigit = idx; // Remember for wheel step
         update();
     }
 }

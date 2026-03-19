@@ -792,28 +792,9 @@ void CPlotter::mouseReleaseEvent(QMouseEvent *event)
 
 void CPlotter::wheelEvent(QWheelEvent *event)
 {
-#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
-    QPointF pt = QPointF(event->pos());
-#else
-    QPointF pt = event->position();
-#endif
-
     int delta = m_InvertScrolling ? -event->angleDelta().y() : event->angleDelta().y();
-
-    if (pt.x() < m_YAxisWidth) {
-        // Y-axis zoom
-        float factor = delta > 0 ? 0.9f : 1.1f;
-        float range = m_PandMaxdB - m_PandMindB;
-        float center = (m_PandMaxdB + m_PandMindB) / 2.0f;
-        m_PandMindB = center - range * factor / 2.0f;
-        m_PandMaxdB = center + range * factor / 2.0f;
-        emit pandapterRangeChanged(m_PandMindB, m_PandMaxdB);
-    } else {
-        // X-axis zoom
-        float factor = delta > 0 ? 0.9f : 1.1f;
-        zoomStepX(factor, pt.x());
-    }
-    update();
+    if (delta != 0)
+        emit wheelFreqChange(delta > 0 ? 1 : -1);
 }
 
 // ============================================================================

@@ -122,6 +122,7 @@ signals:
     void newFilterFreq(int low, int high);
     void pandapterRangeChanged(float min, float max);
     void newZoomLevel(float level);
+    void wheelFreqChange(int direction); // +1 = up, -1 = down
 
 public slots:
     void resetHorizontalZoom(void);

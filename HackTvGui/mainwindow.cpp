@@ -661,6 +661,16 @@ void MainWindow::addRxGroup()
 
     connect(cPlotter, &CPlotter::newDemodFreq, this, &MainWindow::on_plotter_newDemodFreq);
     connect(cPlotter, &CPlotter::newFilterFreq, this, &MainWindow::on_plotter_newFilterFreq);
+    connect(cPlotter, &CPlotter::wheelFreqChange, this, [this](int direction) {
+        qint64 step = freqCtrl->getActiveStep();
+        m_frequency += direction * step;
+        freqCtrl->setFrequency(m_frequency);
+        cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
+        if (m_isProcessing && m_hackTvLib)
+            m_hackTvLib->setFrequency(m_frequency);
+        frequencyEdit->setText(QString::number(m_frequency));
+        saveSettings();
+    });
 
     cMeter = new CMeter(this);
     cMeter->setMinimumHeight(50);
