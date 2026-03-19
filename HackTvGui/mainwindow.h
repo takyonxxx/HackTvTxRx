@@ -21,7 +21,7 @@
 #include <complex>
 #include "hacktvlib.h"
 #include "freqctrl.h"
-#include "cplotter.h"
+#include "glplotter.h"
 #include "meter.h"
 #include "audiooutput.h"
 #include "modulator.h"
@@ -148,6 +148,7 @@ private:
 
     std::atomic<bool> m_shuttingDown{false};
     std::atomic<bool> m_isProcessing;
+    QAtomicInt m_fftUpdatePending{0};  // Frame-drop: skip queuing if update already pending
 
     std::unique_ptr<LowPassFilter> lowPassFilter;
     std::unique_ptr<RationalResampler> rationalResampler;

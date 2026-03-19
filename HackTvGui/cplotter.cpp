@@ -152,6 +152,10 @@ static inline quint64 time_ms(void)
 
     m_FreqDigits = 3;
 
+    m_fftData = nullptr;
+    m_wfData = nullptr;
+    m_fftDataSize = 0;
+
     m_Peaks = QMap<int,int>();
     setPeakDetection(false, 2);
     m_PeakHoldValid = false;
@@ -165,6 +169,52 @@ static inline quint64 time_ms(void)
     wf_span = 0;
     fft_rate = 15;
     memset(m_wfbuf, 255, MAX_SCREENSIZE);
+
+    // Resize debounce timer - prevents expensive redraws during continuous resize
+    m_resizeTimer = new QTimer(this);
+    m_resizeTimer->setSingleShot(true);
+    m_resizeTimer->setInterval(100);
+    m_pendingSize = QSize(0, 0);
+    m_resizing = false;
+    connect(m_resizeTimer, &QTimer::timeout, this, [this]() {
+        if (!m_pendingSize.isValid() || m_pendingSize == m_Size) {
+            m_resizing = false;
+            return;
+        }
+
+        int fft_plot_height;
+        m_Size = m_pendingSize;
+        fft_plot_height = m_Percent2DScreen * m_Size.height() / 100;
+        m_OverlayPixmap = QPixmap(m_Size.width(), fft_plot_height);
+        m_OverlayPixmap.fill(Qt::black);
+        m_2DPixmap = QPixmap(m_Size.width(), fft_plot_height);
+        m_2DPixmap.fill(Qt::black);
+
+        int height = (100 - m_Percent2DScreen) * m_Size.height() / 100;
+        if (m_WaterfallPixmap.isNull())
+        {
+            m_WaterfallPixmap = QPixmap(m_Size.width(), height);
+            m_WaterfallPixmap.fill(Qt::black);
+        }
+        else
+        {
+            m_WaterfallPixmap = m_WaterfallPixmap.scaled(m_Size.width(), height,
+                                                         Qt::IgnoreAspectRatio,
+                                                         Qt::FastTransformation);
+        }
+
+        m_PeakHoldValid = false;
+
+        if (wf_span > 0)
+            msec_per_wfline = wf_span / height;
+        memset(m_wfbuf, 255, MAX_SCREENSIZE);
+
+        drawOverlay();
+
+        // Unblock draw() AFTER pixmaps are fully rebuilt
+        m_resizing = false;
+        update();
+    });
 }
 
 CPlotter::~CPlotter()
@@ -891,47 +941,26 @@ void CPlotter::resizeEvent(QResizeEvent* )
 
     if (m_Size != size())
     {
-        // if changed, resize pixmaps to new screensize
-        int     fft_plot_height;
-
-        m_Size = size();
-        fft_plot_height = m_Percent2DScreen * m_Size.height() / 100;
-        m_OverlayPixmap = QPixmap(m_Size.width(), fft_plot_height);
-        m_OverlayPixmap.fill(Qt::black);
-        m_2DPixmap = QPixmap(m_Size.width(), fft_plot_height);
-        m_2DPixmap.fill(Qt::black);
-
-        int height = (100 - m_Percent2DScreen) * m_Size.height() / 100;
-        if (m_WaterfallPixmap.isNull())
-        {
-            m_WaterfallPixmap = QPixmap(m_Size.width(), height);
-            m_WaterfallPixmap.fill(Qt::black);
-        }
-        else
-        {
-            m_WaterfallPixmap = m_WaterfallPixmap.scaled(m_Size.width(), height,
-                                                         Qt::IgnoreAspectRatio,
-                                                         Qt::SmoothTransformation);
-        }
-
-        m_PeakHoldValid = false;
-
-        if (wf_span > 0)
-            msec_per_wfline = wf_span / height;
-        memset(m_wfbuf, 255, MAX_SCREENSIZE);
+        m_resizing = true;  // Block draw() until pixmaps are rebuilt
+        m_pendingSize = size();
+        m_resizeTimer->start(); // debounce - actual resize happens after timer fires
     }
-
-    drawOverlay();
 }
 
 // Called by QT when screen needs to be redrawn
 void CPlotter::paintEvent(QPaintEvent *)
 {
+    // Skip painting during resize - pixmaps may be inconsistent
+    if (m_resizing)
+        return;
+
     QPainter painter(this);
 
-    painter.drawPixmap(0, 0, m_2DPixmap);
-    painter.drawPixmap(0, m_Percent2DScreen * m_Size.height() / 100,
-                       m_WaterfallPixmap);
+    if (!m_2DPixmap.isNull())
+        painter.drawPixmap(0, 0, m_2DPixmap);
+    if (!m_WaterfallPixmap.isNull())
+        painter.drawPixmap(0, m_Percent2DScreen * m_Size.height() / 100,
+                           m_WaterfallPixmap);
 }
 
 // Called to update spectrum data for displaying on the screen
@@ -1149,6 +1178,11 @@ void CPlotter::draw()
     int     h;
     int     xmin, xmax;
 
+    // CRITICAL: Skip drawing while resize is in progress.
+    // Pixmaps are being rebuilt and sizes may be inconsistent.
+    if (m_resizing)
+        return;
+
     if (m_DrawOverlay)
     {
         drawOverlay();
@@ -1158,6 +1192,10 @@ void CPlotter::draw()
     QPoint LineBuf[MAX_SCREENSIZE];
 
     if (!m_Running)
+        return;
+
+    // Safety: skip drawing if FFT data is not available yet
+    if (!m_fftData || !m_wfData || m_fftDataSize <= 0)
         return;
 
     // get/draw the waterfall
@@ -1235,8 +1273,8 @@ void CPlotter::draw()
 
     if (w != 0 && h != 0)
     {
-        // first copy into 2Dbitmap the overlay bitmap.
-        m_2DPixmap = m_OverlayPixmap.copy(0,0,w,h);
+        // Copy overlay as base for 2D spectrum drawing
+        m_2DPixmap = m_OverlayPixmap.copy(0, 0, w, h);
 
         QPainter painter2(&m_2DPixmap);
 
@@ -1362,8 +1400,11 @@ void CPlotter::setNewFttData(float *fftData, int size)
     if (!m_Running)
         m_Running = true;
 
-    m_wfData = fftData;
-    m_fftData = fftData;
+    // Copy data internally to prevent dangling pointer access after caller frees memory
+    m_fftDataBuf.assign(fftData, fftData + size);
+    m_wfDataBuf.assign(fftData, fftData + size);
+    m_fftData = m_fftDataBuf.data();
+    m_wfData = m_wfDataBuf.data();
     m_fftDataSize = size;
 
     draw();
@@ -1385,8 +1426,11 @@ void CPlotter::setNewFttData(float *fftData, float *wfData, int size)
     if (!m_Running)
         m_Running = true;
 
-    m_wfData = wfData;
-    m_fftData = fftData;
+    // Copy data internally to prevent dangling pointer access after caller frees memory
+    m_fftDataBuf.assign(fftData, fftData + size);
+    m_wfDataBuf.assign(wfData, wfData + size);
+    m_fftData = m_fftDataBuf.data();
+    m_wfData = m_wfDataBuf.data();
     m_fftDataSize = size;
 
     draw();
@@ -1859,7 +1903,7 @@ void CPlotter::setFftPlotColor(const QColor color)
 {
     m_FftColor = color;
     m_FftFillCol = color;
-    m_FftFillCol.setAlpha(0x1A);
+    m_FftFillCol.setAlpha(0x50);  // Semi-transparent fill under spectrum curve
     m_PeakHoldColor = color;
     m_PeakHoldColor.setAlpha(60);
 }

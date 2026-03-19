@@ -1,4 +1,4 @@
-QT       += core gui multimedia concurrent
+QT       += core gui multimedia concurrent openglwidgets
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
 CONFIG += c++17
@@ -90,7 +90,7 @@ linux {
 
 SOURCES += \
     audiooutput.cpp \
-    cplotter.cpp \ 
+    glplotter.cpp \ 
     freqctrl.cpp \
     main.cpp \
     mainwindow.cpp \
@@ -99,7 +99,7 @@ SOURCES += \
 HEADERS += \
     audiooutput.h \
     constants.h \
-    cplotter.h \
+    glplotter.h \
     freqctrl.h \
     mainwindow.h \
     meter.h \

@@ -5,6 +5,7 @@
 #include <QFont>
 #include <QFrame>
 #include <QImage>
+#include <QTimer>
 #include <vector>
 #include <QMap>
 
@@ -468,6 +469,10 @@ private:
     float      *m_wfData;
     int         m_fftDataSize;
 
+    // Internal copies of FFT data to prevent dangling pointer access
+    std::vector<float> m_fftDataBuf;
+    std::vector<float> m_wfDataBuf;
+
     int         m_XAxisYCenter;
     int         m_YAxisWidth;
 
@@ -547,6 +552,11 @@ private:
     bool        m_histIIRValid;
     qint32      m_CumWheelDelta;
     unsigned int freqStep;
+
+    // Resize debounce
+    QTimer      *m_resizeTimer;
+    QSize        m_pendingSize;
+    bool         m_resizing;       // true while resize is in progress - blocks draw()
 };
 
 #endif // PLOTTER_H
