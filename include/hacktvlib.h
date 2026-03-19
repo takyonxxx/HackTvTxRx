@@ -1,7 +1,6 @@
 #ifndef HACKTVLIB_H
 #define HACKTVLIB_H
 
-
 #ifdef _WIN32
 #ifdef HACKTVLIB_LIBRARY
 #define HACKTVLIB_EXPORT __declspec(dllexport)
@@ -9,7 +8,7 @@
 #define HACKTVLIB_EXPORT __declspec(dllimport)
 #endif
 #else
-#define HACKTVLIB_EXPORT  // Linux için boş
+#define HACKTVLIB_EXPORT
 #endif
 
 #include <QObject>
@@ -21,6 +20,13 @@
 #include <stdint.h>
 #include <vector>
 #include <mutex>
+#include <cstring>
+
+// Forward declarations for types defined in DLL
+struct hacktv_t;
+class HackRfDevice;
+class RTLSDRDevice;
+enum rxtx_mode : int;
 
 class HACKTVLIB_EXPORT HackTvLib : public QObject
 {
@@ -52,22 +58,50 @@ public:
     void setTxAmpGain(unsigned int tx_amp_gain);
     void setRxAmpGain(unsigned int rx_amp_gain);
 
+    bool isInitialized() const {
+        return (s != nullptr);
+    }
+
+    bool isDeviceReady() const {
+        return (hackRfDevice != nullptr);
+    }
+
 private slots:
     void emitReceivedData(const int8_t *data, size_t data_len);
     void dataReceived(const int8_t* data, size_t data_len);
+
 private:
+    // ========================================
+    // MEMBER ORDER MUST MATCH DLL EXACTLY
+    // ========================================
+
+    // Callbacks
     LogCallback m_logCallback;
     DataCallback m_dataCallback;
-    std::thread m_thread;
+
+    // Threading
+    std::thread m_txThread;
     std::mutex m_mutex;
-    std::atomic<bool> m_abort;
-    std::atomic<int> m_signal;
+    std::atomic<bool> m_abort{false};
+    std::atomic<int> m_signal{0};
+
+    // Arguments
     std::vector<char*> m_argv;
+
+    // Configuration
+    hacktv_t* s = nullptr;
+    rxtx_mode m_rxTxMode;
+    bool micEnabled = false;
+
+    // Devices
+    HackRfDevice* hackRfDevice = nullptr;
+    RTLSDRDevice* rtlSdrDevice = nullptr;
+
+    // Private methods
     bool openDevice();
     bool setVideo();
     bool initAv();
     bool parseArguments();
-    bool micEnabled = false;
     void log(const char* format, ...);
     void cleanupArgv();
     void rfTxLoop();

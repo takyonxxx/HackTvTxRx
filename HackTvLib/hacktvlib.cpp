@@ -1699,14 +1699,16 @@ bool HackTvLib::start()
             fprintf(stderr, "[6] Setting up HackRF...\n");
             fflush(stderr);
 
-            // Clean up existing device
-            if (hackRfDevice) {
-                fprintf(stderr, "     Deleting existing HackRfDevice...\n");
+            // Clean up existing device safely
+            if (hackRfDevice != nullptr) {
+                fprintf(stderr, "     Stopping existing HackRfDevice...\n");
                 fflush(stderr);
                 try {
+                    hackRfDevice->stop();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(300));
                     delete hackRfDevice;
                 } catch (...) {
-                    fprintf(stderr, "     Exception during delete\n");
+                    fprintf(stderr, "     Exception during cleanup - ignoring\n");
                     fflush(stderr);
                 }
                 hackRfDevice = nullptr;

@@ -37,6 +37,7 @@ public:
     void reset();
     bool isRunning() const { return m_isRunning.load() && !m_isStopped.load(); }
     bool isStopped() const { return m_isStopped.load(); }
+    bool isReady() const { return !device_serials.empty(); }
     bool isInitialized() const { return h_device != nullptr; }
     std::vector<std::string> listDevices();
 

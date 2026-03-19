@@ -36,14 +36,46 @@ HackRfDevice::HackRfDevice(QObject *parent):
     interpolation(48.0f),
     decimation(1)
 {
-    int r = hackrf_init();
-    if(r != HACKRF_SUCCESS) {
-        fprintf(stderr, "hackrf_init() failed: %s (%d)\n",
-                hackrf_error_name(static_cast<hackrf_error>(r)), r);
-        throw std::runtime_error("Failed to initialize HackRF");
+    // hackrf_init() must only be called ONCE per process lifetime.
+    // Multiple init/exit cycles cause USB handle corruption and crashes.
+    static bool s_hackrf_initialized = false;
+    static bool s_hackrf_init_failed = false;
+
+    if (s_hackrf_init_failed) {
+        fprintf(stderr, "hackrf_init() previously failed - skipping\n");
+        fflush(stderr);
+        return; // Don't throw - let caller check isReady()
     }
 
-    listDevices();
+    if (!s_hackrf_initialized) {
+        fprintf(stderr, "Calling hackrf_init()...\n");
+        fflush(stderr);
+        try {
+            int r = hackrf_init();
+            if(r != HACKRF_SUCCESS) {
+                fprintf(stderr, "hackrf_init() failed: %s (%d)\n",
+                        hackrf_error_name(static_cast<hackrf_error>(r)), r);
+                fflush(stderr);
+                s_hackrf_init_failed = true;
+                return; // Don't throw
+            }
+            s_hackrf_initialized = true;
+            fprintf(stderr, "hackrf_init() OK (one-time)\n");
+            fflush(stderr);
+        } catch (...) {
+            fprintf(stderr, "Exception in hackrf_init()\n");
+            fflush(stderr);
+            s_hackrf_init_failed = true;
+            return;
+        }
+    }
+
+    try {
+        listDevices();
+    } catch (...) {
+        fprintf(stderr, "Exception in listDevices()\n");
+        fflush(stderr);
+    }
 }
 
 HackRfDevice::~HackRfDevice()
@@ -87,10 +119,8 @@ HackRfDevice::~HackRfDevice()
         // Destructor'da exception fırlatma
     }
 
-    // HackRF library'yi kapat
-    if (!device_serials.empty()) {
-        hackrf_exit();
-    }
+    // Do NOT call hackrf_exit() here - it must only be called once at process exit.
+    // Calling hackrf_exit() + hackrf_init() on re-create causes USB handle corruption.
 }
 
 std::vector<std::string> HackRfDevice::listDevices()
@@ -256,14 +286,29 @@ int HackRfDevice::start(rf_mode _mode)
 
         mode = _mode;
 
+        // Force close any stale device handle before opening
+        if (h_device) {
+            fprintf(stderr, "Closing stale HackRF handle before re-open...\n");
+            fflush(stderr);
+            hackrf_stop_rx(h_device);
+            hackrf_stop_tx(h_device);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            hackrf_close(h_device);
+            h_device = nullptr;
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        }
+
+        // Re-enumerate devices in case USB state changed
+        listDevices();
+
         if (device_serials.empty()) {
             fprintf(stderr, "No HackRF devices found\n");
             fflush(stderr);
             return RF_ERROR;
         }
 
-        // Device'ı aç
-        if (!h_device) {
+        // Open device
+        {
             fprintf(stderr, "Opening HackRF device: %s\n", device_serials[0].c_str());
             fflush(stderr);
 
