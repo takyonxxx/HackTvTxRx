@@ -179,7 +179,7 @@ void MainWindow::setupUI()
 
     // Color Mode checkbox
     m_colorModeCheckBox = new QCheckBox("Color Mode (Renkli)", this);
-    m_colorModeCheckBox->setChecked(true);
+    m_colorModeCheckBox->setChecked(false);
     m_colorModeCheckBox->setStyleSheet("QCheckBox { font-weight: bold; }");
     connect(m_colorModeCheckBox, &QCheckBox::stateChanged,
             this, &MainWindow::onColorModeChanged);
@@ -492,14 +492,15 @@ void MainWindow::setupUI()
     syncThresholdLayout->addWidget(new QLabel("Threshold:", this));
 
     m_syncThresholdSlider = new QSlider(Qt::Horizontal, this);
-    m_syncThresholdSlider->setRange(-100, 0);
-    m_syncThresholdSlider->setValue(-20);
+    m_syncThresholdSlider->setRange(0, 50);
+    m_syncThresholdSlider->setValue(15);
     m_syncThresholdSlider->setTickPosition(QSlider::TicksBelow);
-    m_syncThresholdSlider->setTickInterval(10);
+    m_syncThresholdSlider->setTickInterval(5);
 
     m_syncThresholdSpinBox = new QDoubleSpinBox(this);
-    m_syncThresholdSpinBox->setRange(-1.0, 0.0);
+    m_syncThresholdSpinBox->setRange(0.0, 0.5);
     m_syncThresholdSpinBox->setSingleStep(0.01);
+    m_syncThresholdSpinBox->setValue(0.15);
     m_syncThresholdSpinBox->setValue(-0.2);
     m_syncThresholdSpinBox->setDecimals(2);
     m_syncThresholdSpinBox->setMaximumWidth(100);
