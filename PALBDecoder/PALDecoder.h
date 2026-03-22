@@ -121,6 +121,10 @@ private:
     float m_dcBlockerY1;
     int m_resampleCounter;
 
+    // Chroma accumulators (full-rate chroma demod, averaged over decimation period)
+    float m_chromaUAccum;
+    float m_chromaVAccum;
+
     // ========== AGC ==========
     float m_ampMin;
     float m_ampMax;

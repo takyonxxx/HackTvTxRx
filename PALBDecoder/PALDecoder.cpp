@@ -43,6 +43,8 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_dcBlockerX1(0.0f)
     , m_dcBlockerY1(0.0f)
     , m_resampleCounter(0)
+    , m_chromaUAccum(0.0f)
+    , m_chromaVAccum(0.0f)
     , m_ampMin(-1.0f)
     , m_ampMax(1.0f)
     , m_ampDelta(2.0f)
@@ -92,12 +94,11 @@ void PALDecoder::setSampleRate(int sampleRate)
 
     m_sampleRate = sampleRate;
 
-    // Decimation: target video rate ~5-8 MHz
-    // 8 MHz  -> decim 1 -> 8 MHz video
-    // 10 MHz -> decim 1 -> 10 MHz video (still fine)
-    // 12.5 MHz -> decim 1 -> 12.5 MHz (a bit high but ok, no good integer divisor)
-    // 16 MHz -> decim 2 -> 8 MHz video
-    // 20 MHz -> decim 2 -> 10 MHz video
+    // Decimation for luma only. Chroma demod runs at FULL sample rate
+    // (before decimation) so color works at all rates.
+    //   12.5 MHz -> decim 1 -> 12.5 MHz
+    //   16 MHz   -> decim 2 -> 8 MHz (luma only, chroma at 16 MHz)
+    //   20 MHz   -> decim 2 -> 10 MHz (luma only, chroma at 20 MHz)
     if (m_sampleRate <= 12500000) {
         m_decimFactor = 1;
     } else {
@@ -106,13 +107,11 @@ void PALDecoder::setSampleRate(int sampleRate)
 
     m_decimatedRate = static_cast<float>(m_sampleRate) / m_decimFactor;
 
-    // Chroma bandwidth scales: wider at higher rates
-    if (m_decimatedRate >= 10e6f)
+    // Chroma bandwidth at FULL sample rate (chroma runs before decimation)
+    if (m_sampleRate >= 16000000)
         m_chromaBandwidth = 1.5e6f;
-    else if (m_decimatedRate >= 8e6f)
-        m_chromaBandwidth = 1.2e6f;
     else
-        m_chromaBandwidth = 1.0e6f;
+        m_chromaBandwidth = 1.2e6f;
 
     applyStandard();
     initFilters();
@@ -190,10 +189,10 @@ void PALDecoder::initFilters()
     float lumaCutoff = std::min(3.0e6f, m_decimatedRate * 0.35f);
     m_lumaFilterTaps = designLowPassFIR(lumaCutoff, m_decimatedRate, 33);
 
-    // Chroma BPF at decimated rate
-    // Chroma carrier 4.43 MHz needs Nyquist > 4.43, so decimated rate > ~9 MHz
-    if (COLOR_CARRIER_FREQ < m_decimatedRate / 2.0f) {
-        m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, m_decimatedRate, 65);
+    // Chroma BPF at FULL sample rate (chroma demod runs before decimation)
+    // At full rate, Nyquist is always > 4.43 MHz for our min rate of 12.5 MHz
+    if (COLOR_CARRIER_FREQ < rate / 2.0f) {
+        m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, rate, 65);
     } else {
         m_chromaFilterTaps.clear();
     }
@@ -201,23 +200,27 @@ void PALDecoder::initFilters()
     qDebug() << "  Filters: video LPF" << videoCutoff / 1e6f << "MHz @" << rate / 1e6f
              << "(" << m_videoFilterTaps.size() << "taps),"
              << "luma" << lumaCutoff / 1e6f << "MHz @" << m_decimatedRate / 1e6f
-             << ", chroma" << (m_chromaFilterTaps.empty() ? "OFF" : "ON");
+             << ", chroma" << (m_chromaFilterTaps.empty() ? "OFF" : "ON")
+             << "@" << rate / 1e6f << "MHz";
 }
 
 void PALDecoder::rebuildColorLUT()
 {
-    if (COLOR_CARRIER_FREQ >= m_decimatedRate / 2.0f) {
+    float rate = static_cast<float>(m_sampleRate);
+
+    // Color carrier LUT at full sample rate (chroma runs before decimation)
+    if (COLOR_CARRIER_FREQ >= rate / 2.0f) {
         m_colorCarrierSin.clear();
         m_colorCarrierCos.clear();
         return;
     }
 
-    int carrierSamples = static_cast<int>(m_decimatedRate / COLOR_CARRIER_FREQ * 100.0f + 0.5f);
+    int carrierSamples = static_cast<int>(rate / COLOR_CARRIER_FREQ * 100.0f + 0.5f);
     if (carrierSamples < 200) carrierSamples = 200;
     m_colorCarrierSin.resize(carrierSamples);
     m_colorCarrierCos.resize(carrierSamples);
     for (int i = 0; i < carrierSamples; i++) {
-        double phase = 2.0 * M_PI * COLOR_CARRIER_FREQ * i / static_cast<double>(m_decimatedRate);
+        double phase = 2.0 * M_PI * COLOR_CARRIER_FREQ * i / static_cast<double>(rate);
         m_colorCarrierSin[i] = static_cast<float>(std::sin(phase));
         m_colorCarrierCos[i] = static_cast<float>(std::cos(phase));
     }
@@ -454,24 +457,34 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         // Sync at full rate (uses normalized [0,1] signal)
         processSample(normalized);
 
-        // Decimate for video
-        m_resampleCounter++;
-        if (m_resampleCounter < m_decimFactor) continue;
-        m_resampleCounter = 0;
-
-        // Luma
-        float luma = applyLumaFilter(normalized);
-
-        // Chroma (only if LUT available)
-        float u = 0.0f, v = 0.0f;
-        if (!m_colorCarrierSin.empty()) {
+        // === CHROMA at FULL sample rate (before decimation) ===
+        // Only process when color mode is enabled and LUT is available
+        if (m_colorMode && !m_colorCarrierSin.empty()) {
             float chromaSin = normalized * m_colorCarrierSin[m_colorCarrierIndex];
             float chromaCos = normalized * m_colorCarrierCos[m_colorCarrierIndex];
             m_colorCarrierIndex++;
             if (m_colorCarrierIndex >= static_cast<int>(m_colorCarrierSin.size()))
                 m_colorCarrierIndex = 0;
-            u = applyChromaFilterU(chromaSin) * 2.5f;
-            v = applyChromaFilterV(chromaCos) * 2.5f * (m_vPhaseAlternate ? -1.0f : 1.0f);
+            m_chromaUAccum += applyChromaFilterU(chromaSin);
+            m_chromaVAccum += applyChromaFilterV(chromaCos);
+        }
+
+        // === Decimate for luma + output chroma ===
+        m_resampleCounter++;
+        if (m_resampleCounter < m_decimFactor) continue;
+        m_resampleCounter = 0;
+
+        // Luma at decimated rate
+        float luma = applyLumaFilter(normalized);
+
+        // Chroma: average accumulated values over decimation period
+        float u = 0.0f, v = 0.0f;
+        if (m_colorMode && !m_colorCarrierSin.empty()) {
+            float invDecim = 1.0f / static_cast<float>(m_decimFactor);
+            u = m_chromaUAccum * invDecim * 2.5f;
+            v = m_chromaVAccum * invDecim * 2.5f * (m_vPhaseAlternate ? -1.0f : 1.0f);
+            m_chromaUAccum = 0.0f;
+            m_chromaVAccum = 0.0f;
         }
 
         // Collect pixels after blanking
