@@ -287,7 +287,7 @@ float PALDecoder::normalizeAndAGC(float sample)
 
 bool PALDecoder::detectSyncPulse()
 {
-    if (static_cast<int>(m_sampleHistory.size()) < HSYNC_WIDTH + 10)
+    if (static_cast<int>(m_sampleHistory.size()) < HSYNC_WIDTH + 8)
         return false;
 
     int lowCount = 0;
@@ -296,15 +296,17 @@ bool PALDecoder::detectSyncPulse()
             lowCount++;
     }
 
+    // Check signal rises after sync (shorter check = more tolerant)
     bool afterPulse = true;
-    for (int i = HSYNC_WIDTH; i < HSYNC_WIDTH + 10 && i < static_cast<int>(m_sampleHistory.size()); i++) {
-        if (m_sampleHistory[i] < m_syncThreshold) {
-            afterPulse = false;
-            break;
-        }
+    int afterCount = 0;
+    for (int i = HSYNC_WIDTH; i < HSYNC_WIDTH + 8 && i < static_cast<int>(m_sampleHistory.size()); i++) {
+        if (m_sampleHistory[i] > m_syncThreshold)
+            afterCount++;
     }
+    afterPulse = (afterCount >= 4);  // At least half should be above threshold
 
-    return (lowCount >= HSYNC_WIDTH * 6 / 10) && afterPulse;
+    // 50% of sync width below threshold (was 60%)
+    return (lowCount >= HSYNC_WIDTH / 2) && afterPulse;
 }
 
 void PALDecoder::processSamples(const int8_t* data, size_t len)
@@ -403,12 +405,18 @@ void PALDecoder::processVideoSample(float sample)
                         (m_samplesSinceSync <= m_expectedSyncPosition + SYNC_SEARCH_WINDOW);
 
     if (inSyncWindow && detectSyncPulse()) {
+        // SYNC FOUND - update PLL
         int error = m_samplesSinceSync - m_expectedSyncPosition;
-        m_expectedSyncPosition += error / 8;
-        m_expectedSyncPosition = std::max(SAMPLES_PER_LINE - 20,
-                                          std::min(SAMPLES_PER_LINE + 20, m_expectedSyncPosition));
 
-        m_syncConfidence = std::min(1.0f, m_syncConfidence + 0.1f);
+        // Faster PLL when confidence is low (just locked), slower when stable
+        int divisor = (m_syncConfidence > 0.8f) ? 8 : 4;
+        m_expectedSyncPosition += error / divisor;
+
+        // Allow wider range for PLL to track
+        m_expectedSyncPosition = std::max(SAMPLES_PER_LINE - 30,
+                                          std::min(SAMPLES_PER_LINE + 30, m_expectedSyncPosition));
+
+        m_syncConfidence = std::min(1.0f, m_syncConfidence + 0.15f);
         m_syncDetected++;
 
         finalizeLine();
@@ -419,8 +427,14 @@ void PALDecoder::processVideoSample(float sample)
         return;
     }
 
-    if (m_samplesSinceSync >= m_expectedSyncPosition + SYNC_SEARCH_WINDOW + 40) {
-        m_syncConfidence = std::max(0.0f, m_syncConfidence - 0.05f);
+    // FLYWHEEL: if we passed the sync window without finding sync,
+    // force a line break at the predicted position anyway.
+    // This keeps the frame stable even when sync pulses are lost in noise.
+    if (m_samplesSinceSync >= m_expectedSyncPosition + SYNC_SEARCH_WINDOW) {
+        // Confidence drops slowly - flywheel can run for many lines
+        m_syncConfidence = std::max(0.0f, m_syncConfidence - 0.02f);
+
+        // Don't adjust PLL when in flywheel - keep last known good timing
         finalizeLine();
         m_samplesSinceSync = 0;
         m_samplesInCurrentLine = 0;

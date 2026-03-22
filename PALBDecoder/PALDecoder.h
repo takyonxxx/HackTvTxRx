@@ -79,10 +79,10 @@ private:
     static constexpr float CHROMA_BANDWIDTH = 1.2e6f;
 
     // ========== Sync ==========
-    // Sync pulse: 4.7us * 5.33 MHz = ~25 samples
-    static constexpr int HSYNC_WIDTH = 25;
-    static constexpr int SYNC_SEARCH_WINDOW = 40;
-    static constexpr int HISTORY_SIZE = 80;
+    // Wider window + flywheel for noisy signals
+    static constexpr int HSYNC_WIDTH = 20;
+    static constexpr int SYNC_SEARCH_WINDOW = 60;
+    static constexpr int HISTORY_SIZE = 100;
 
     mutable QMutex m_processMutex;
 

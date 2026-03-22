@@ -8,6 +8,8 @@
 #include <QApplication>
 #include <QScreen>
 #include <QCheckBox>
+#include <QFile>
+#include <QDateTime>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -447,6 +449,20 @@ void MainWindow::setupUI()
     hackRfLayout->addLayout(rxAmpLayout);
 
     rightColumn->addWidget(hackRfGroup);
+
+    // IQ Recording
+    QGroupBox* iqRecGroup = new QGroupBox("IQ Recording", this);
+    QVBoxLayout* iqRecLayout = new QVBoxLayout(iqRecGroup);
+    m_iqRecordButton = new QPushButton("Record IQ (0.5 sec)", this);
+    m_iqRecordButton->setStyleSheet(
+        "QPushButton { background-color: #3388ff; color: white; "
+        "padding: 8px; font-weight: bold; }");
+    connect(m_iqRecordButton, &QPushButton::clicked, this, &MainWindow::toggleIQRecording);
+    iqRecLayout->addWidget(m_iqRecordButton);
+    m_iqRecordLabel = new QLabel("Ready", this);
+    m_iqRecordLabel->setStyleSheet("QLabel { font-size: 9pt; }");
+    iqRecLayout->addWidget(m_iqRecordLabel);
+    rightColumn->addWidget(iqRecGroup);
 
     // Sync Detection Controls
     QGroupBox* syncControlGroup = new QGroupBox("Sync Detection", this);
@@ -1100,6 +1116,17 @@ void MainWindow::handleReceivedData(const int8_t* data, size_t len)
         return;
     }
 
+    // IQ Recording - write raw int8 data directly
+    if (m_iqRecording && m_iqFile && m_iqFile->isOpen()) {
+        m_iqFile->write(reinterpret_cast<const char*>(data), len);
+        m_iqBytesWritten += len;
+
+        // Auto-stop after ~0.5 seconds (16 MHz * 2 bytes * 0.5 sec = 16 MB)
+        if (m_iqBytesWritten >= 16000000) {
+            toggleIQRecording();
+        }
+    }
+
     const int samples_count = len / 2;
     auto samplesPtr = std::make_shared<std::vector<std::complex<float>>>(samples_count);
 
@@ -1183,4 +1210,70 @@ void MainWindow::startPalVideoProcessing(std::shared_ptr<std::vector<std::comple
             qCritical() << "Unknown exception in PAL video demodulation";
         }
     });
+}
+
+void MainWindow::toggleIQRecording()
+{
+    if (m_iqRecording) {
+        // Stop recording
+        m_iqRecording = false;
+        if (m_iqFile) {
+            m_iqFile->flush();
+            m_iqFile->close();
+            QString filename = m_iqFile->fileName();
+            float sizeMB = m_iqBytesWritten / (1024.0f * 1024.0f);
+            float durationSec = m_iqBytesWritten / (16000000.0f * 2.0f);
+            delete m_iqFile;
+            m_iqFile = nullptr;
+            qDebug() << "IQ recording stopped:" << filename
+                     << sizeMB << "MB," << durationSec << "sec";
+            if (m_iqRecordLabel)
+                m_iqRecordLabel->setText(QString("Saved: %1 (%2 MB, %3 sec)")
+                    .arg(filename).arg(sizeMB, 0, 'f', 1).arg(durationSec, 0, 'f', 1));
+        }
+        if (m_iqRecordButton) {
+            m_iqRecordButton->setText("Record IQ (0.5 sec)");
+            m_iqRecordButton->setStyleSheet(
+                "QPushButton { background-color: #3388ff; color: white; "
+                "padding: 8px; font-weight: bold; }");
+        }
+    } else {
+        // Start recording
+        if (!m_hackRfRunning) {
+            if (m_iqRecordLabel)
+                m_iqRecordLabel->setText("Start HackRF first!");
+            return;
+        }
+
+        // Create filename with frequency and timestamp
+        QString filename = QString("iq_%1MHz_%2.raw")
+            .arg(m_currentFrequency / 1000000.0, 0, 'f', 1)
+            .arg(QDateTime::currentDateTime().toString("hhmmss"));
+
+        m_iqFile = new QFile(filename);
+        if (!m_iqFile->open(QIODevice::WriteOnly)) {
+            qCritical() << "Failed to open IQ file:" << filename;
+            if (m_iqRecordLabel)
+                m_iqRecordLabel->setText("Error: cannot create file!");
+            delete m_iqFile;
+            m_iqFile = nullptr;
+            return;
+        }
+
+        m_iqBytesWritten = 0;
+        m_iqRecording = true;
+
+        qDebug() << "IQ recording started:" << filename
+                 << "Freq:" << m_currentFrequency / 1e6 << "MHz"
+                 << "Rate: 16 MHz, Format: int8 IQ interleaved";
+
+        if (m_iqRecordButton) {
+            m_iqRecordButton->setText("RECORDING...");
+            m_iqRecordButton->setStyleSheet(
+                "QPushButton { background-color: #ff3333; color: white; "
+                "padding: 8px; font-weight: bold; }");
+        }
+        if (m_iqRecordLabel)
+            m_iqRecordLabel->setText(QString("Recording to %1...").arg(filename));
+    }
 }

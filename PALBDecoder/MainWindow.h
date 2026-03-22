@@ -16,6 +16,7 @@
 #include <QMutex>
 #include <QThreadPool>
 #include <QElapsedTimer>
+#include <QFile>
 #include <atomic>
 #include <memory>
 
@@ -143,6 +144,14 @@ private:
     QMutex m_audioQueueMutex;
     std::deque<std::vector<std::complex<float>>> m_audioQueue;
     static constexpr size_t MAX_AUDIO_QUEUE = 10; // Max 10 chunk
+
+    // IQ Recording
+    bool m_iqRecording = false;
+    QFile* m_iqFile = nullptr;
+    int64_t m_iqBytesWritten = 0;
+    QPushButton* m_iqRecordButton = nullptr;
+    QLabel* m_iqRecordLabel = nullptr;
+    void toggleIQRecording();
 
     // Constants
     static constexpr uint64_t VHF_BAND1_MIN_FREQ = 47000000ULL;   // VHF Band I (E2-E4)
