@@ -1,6 +1,6 @@
 # HackTvRxTx - SDR Transceiver & Analog TV Decoder
 
-A Qt 6.x based SDR (Software Defined Radio) application for HackRF One and RTL-SDR devices. Includes wideband FM receiver with real-time FFT spectrum analyzer, waterfall display, analog TV PAL B/G transmitter, and a standalone PAL-B/G TV decoder.
+A Qt 6.x based SDR (Software Defined Radio) application for HackRF One and RTL-SDR devices. Includes wideband FM receiver with real-time FFT spectrum analyzer, waterfall display, FM stereo transmitter (mic & file), analog TV PAL B/G transmitter, and a standalone PAL-B/G TV decoder.
 
 Based on [fsphil/hacktv](https://github.com/fsphil/hacktv) with significant modifications for cross-platform GUI operation.
 
@@ -11,7 +11,10 @@ Based on [fsphil/hacktv](https://github.com/fsphil/hacktv) with significant modi
 ### HackTvGui - SDR Transceiver
 - **RX Mode**: Wideband FM receiver with real-time audio demodulation
 - **TX Mode**: Analog TV transmitter supporting PAL-I, PAL-B/G, PAL-D/K, PAL-M, PAL-N, SECAM-L, SECAM-D/K, NTSC-M, NTSC-A and more
-- **FM Transmitter**: Microphone input FM transmitter mode
+- **FM Stereo Transmitter (Mic)**: Real-time microphone input FM stereo transmitter with 19 kHz pilot tone and 38 kHz DSB-SC subcarrier per FM broadcasting standard
+- **FM Stereo Transmitter (File)**: Audio file playback FM stereo transmitter — supports WAV, MP3, FLAC, OGG, AAC, WMA, M4A and video files (audio track extracted). FFmpeg-based decoding with stereo MPX composite generation
+- **FM Stereo MPX**: Full FM stereo multiplex signal generation — (L+R) mono-compatible baseband, 19 kHz pilot tone, (L-R)×sin(38 kHz) subcarrier, 75µs pre-emphasis applied per-channel. MPX composite generated directly at TX sample rate (no intermediate resampler) for maximum efficiency
+- **USB Hard Reset**: Physical HackRF USB device reset via `hackrf_reset()` — device detaches and re-enumerates on the USB bus (equivalent to physical unplug/replug). Accessible via the HARD RESET button in the GUI
 - **OpenGL Spectrum Analyzer**: GPU-accelerated FFT spectrum display with smooth antialiased rendering
 - **Waterfall Display**: Real-time scrolling waterfall with SDR#-style color palette (dark blue → cyan → yellow → red)
 - **Band Overlay**: Known frequency band allocations displayed on spectrum (FM Broadcast, Ham Radio, Aviation, Marine VHF, TV bands, Cellular, ISM/WiFi, etc.)
@@ -20,6 +23,7 @@ Based on [fsphil/hacktv](https://github.com/fsphil/hacktv) with significant modi
 - **Multiple Sample Rates**: 2, 4, 8, 10, 12.5, 16, 20 MHz
 - **European TV Channels**: Pre-configured E2-E69 channel list
 - **Video Input Sources**: File (MP4/FLV), test pattern, RTSP stream via FFmpeg
+- **Fixed Window Size**: 1024×740 fixed layout for consistent UI across all modes
 - **Cross-platform**: Windows (MinGW 64-bit) and macOS
 
 ### PALBDecoder - Analog TV Receiver
@@ -32,28 +36,95 @@ Based on [fsphil/hacktv](https://github.com/fsphil/hacktv) with significant modi
 
 ![PALBDecoder Screenshot](paldecoder.jpg)
 
+## Architecture
+
+### FM Transmitter Audio Pipeline
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Audio Sources                                                   │
+│                                                                  │
+│  Microphone ──► PortAudioInput (mono 44.1kHz)                   │
+│                    │                                             │
+│                    ▼                                             │
+│              Mono→Stereo (L=R) ──► Ring Buffer (1M float SPSC)  │
+│                                          ▲                      │
+│  Audio File ──► FFmpeg Decode ──► Stereo 44.1kHz ───┘           │
+│  (MP3/WAV/      (swresample)      (L,R interleaved)            │
+│   FLAC/OGG)                                                     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  FM Stereo MPX Generator (StereoMPXGenerator)                   │
+│                                                                  │
+│  Input: Stereo L,R @ 44.1kHz                                    │
+│                                                                  │
+│  ┌──────────┐   ┌──────────────────────────────────────┐        │
+│  │ L channel├──►│ 75µs Pre-emphasis ──► L'             │        │
+│  │ R channel├──►│ 75µs Pre-emphasis ──► R'             │        │
+│  └──────────┘   └──────────────────────────────────────┘        │
+│                           │                                      │
+│                           ▼                                      │
+│  ┌──────────────────────────────────────────────────────┐       │
+│  │  Linear Interpolation: 44.1kHz → TX Sample Rate     │       │
+│  │  (e.g. 2 MHz — direct upsample, no resampler)       │       │
+│  └──────────────────────────────────────────────────────┘       │
+│                           │                                      │
+│                           ▼                                      │
+│  MPX Composite @ TX Rate:                                        │
+│    0.45×(L'+R') + 0.075×sin(19kHz) + 0.45×(L'-R')×sin(38kHz)  │
+│    ──────────    ────────────────    ──────────────────────────  │
+│    Mono (L+R)    Pilot Tone         Stereo Subcarrier (DSB-SC)  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  FM Modulator (FrequencyModulator)                               │
+│                                                                  │
+│  MPX baseband → Phase modulation → IQ output                    │
+│  Persistent phase state across TX callbacks                      │
+│  Pre-emphasis disabled (handled by MPX generator)                │
+│                                                                  │
+│  Output: Complex IQ @ TX Sample Rate → HackRF USB Transfer      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Ring Buffer Design
+
+The audio pipeline uses a lock-free single-producer single-consumer (SPSC) ring buffer (1M float samples ≈ 11 seconds stereo @ 44.1kHz) shared between the audio source thread and the HackRF TX callback:
+
+- **Producer** (audio thread): PortAudioInput callback or AudioFileInput decode thread writes stereo interleaved float samples via `ringWrite()`
+- **Consumer** (TX callback): `apply_fm_modulation()` reads stereo samples via `ringRead()`, feeds to MPX generator
+- **Back-pressure**: File decode blocks when ring buffer is full (`ringFree() < 256`), naturally pacing decode speed to TX consumption rate
+- **No timing dependency**: TX hardware callback is the master clock — no `sleep_for` pacing needed
+
 ## Project Structure
 
 ```
 HackTvRxTx/
-├── HackTvLib/          # Shared library (DLL/dylib) - core SDR engine
-│   ├── hacktvlib.cpp   # Main library interface
-│   ├── hackrfdevice.*  # HackRF One device driver
-│   ├── rtlsdrdevice.*  # RTL-SDR device driver
-│   └── hacktv/         # Video encoding, modulation, RF output
-├── HackTvGui/          # Main SDR transceiver GUI application
-│   ├── mainwindow.*    # Main application window
-│   ├── glplotter.*     # OpenGL spectrum analyzer & waterfall
-│   ├── freqctrl.*      # Frequency digit display widget
-│   ├── meter.*         # Signal level meter widget
-│   ├── audiooutput.*   # Audio playback engine
-│   └── modulator.h     # FM/AM modulation DSP
-├── PALBDecoder/        # Standalone PAL-B/G TV decoder application
-│   ├── MainWindow.*    # Decoder GUI with video display
-│   ├── PALDecoder.*    # PAL video decoding engine
-│   └── audiodemodulator.* # FM audio demodulator
-├── include/            # Shared headers
-└── lib/                # Pre-built libraries (windows/macos/linux)
+├── HackTvLib/             # Shared library (DLL/dylib) - core SDR engine
+│   ├── hacktvlib.cpp/h    # Main library interface
+│   ├── hackrfdevice.cpp/h # HackRF One device driver + ring buffer + FM TX
+│   ├── rtlsdrdevice.cpp/h # RTL-SDR device driver
+│   ├── audioinput.h       # Microphone input (PortAudio → ring buffer)
+│   ├── audiofileinput.h   # Audio file input (FFmpeg → ring buffer)
+│   ├── modulation.h       # StereoMPXGenerator, FrequencyModulator, RationalResampler
+│   ├── stream_tx.h        # Legacy double-buffer (used by video TX mode)
+│   └── hacktv/            # Video encoding, modulation, RF output
+├── HackTvGui/             # Main SDR transceiver GUI application
+│   ├── mainwindow.cpp/h   # Main application window
+│   ├── glplotter.cpp/h    # OpenGL spectrum analyzer & waterfall
+│   ├── freqctrl.cpp/h     # Frequency digit display widget
+│   ├── meter.cpp/h        # Signal level meter widget
+│   ├── audiooutput.cpp/h  # Audio playback engine
+│   └── modulator.h        # FM/AM modulation DSP (RX side)
+├── PALBDecoder/           # Standalone PAL-B/G TV decoder application
+│   ├── MainWindow.cpp/h   # Decoder GUI with video display
+│   ├── PALDecoder.cpp/h   # PAL video decoding engine
+│   └── audiodemodulator.*  # FM audio demodulator
+├── include/               # Shared headers
+└── lib/                   # Pre-built libraries (windows/macos/linux)
 ```
 
 ## Supported Hardware
@@ -145,6 +216,15 @@ sudo apt install libhackrf-dev libusb-1.0-0-dev librtlsdr-dev \
 | SECAM-L | 625 | 25 | 6.5 MHz AM |
 | SECAM-D/K | 625 | 25 | 6.5 MHz FM |
 | NTSC-M | 525 | 29.97 | 4.5 MHz FM |
+
+## FM Transmitter Modes
+
+| Mode | Input | Stereo | Description |
+|------|-------|--------|-------------|
+| FM Transmitter Mic | Microphone | Yes (dual mono) | Real-time voice/audio transmission via default audio input device |
+| FM Transmitter File | Audio/Video file | Yes (true stereo) | File playback transmission — FFmpeg decodes any format, stereo channels preserved in MPX |
+
+Both modes generate a standard FM stereo MPX composite signal with 19 kHz pilot tone, enabling any FM stereo receiver to decode separate left and right channels.
 
 ## License
 
