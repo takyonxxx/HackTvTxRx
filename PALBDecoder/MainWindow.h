@@ -153,7 +153,7 @@ private:
     static constexpr uint64_t UHF_MAX_FREQ = 862000000ULL;
     static constexpr uint64_t MIN_FREQ = VHF_BAND1_MIN_FREQ;
     static constexpr uint64_t MAX_FREQ = UHF_MAX_FREQ;
-    static constexpr uint64_t DEFAULT_FREQ = 478000000ULL;        // UHF E21
+    static constexpr uint64_t DEFAULT_FREQ = 479300000ULL;        // E22 video carrier ~479.25 MHz
     static constexpr uint32_t SAMP_RATE = 16000000;
 };
 

@@ -35,6 +35,10 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_vPhaseAlternate(false)
     , m_colorCarrierIndex(0)
     , m_burstPhaseError(0.0f)
+    , m_ncoPhase(0.0)
+    , m_ncoPhaseIncrement(0.0)
+    , m_videoCarrierOffsetHz(0.0f)
+    , m_tuneFrequency(478000000ULL)
 {
     m_resampleDecim = 3;
 
@@ -58,6 +62,9 @@ PALDecoder::PALDecoder(QObject *parent)
     qDebug() << "  625 lines, 25 fps, Color subcarrier:" << COLOR_CARRIER_FREQ << "Hz";
     qDebug() << "  Resolution:" << VIDEO_WIDTH << "x" << VIDEO_HEIGHT;
     qDebug() << "  PAL Comb Filter: ENABLED";
+
+    updateNCO();
+    qDebug() << "  NCO offset:" << m_videoCarrierOffsetHz / 1e6f << "MHz";
 }
 
 PALDecoder::~PALDecoder()
@@ -65,6 +72,38 @@ PALDecoder::~PALDecoder()
     float syncRate = m_linesProcessed > 0 ?
                          (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
     qDebug() << "PALDecoder: Frames:" << m_frameCount << "Sync rate:" << syncRate << "%";
+}
+
+void PALDecoder::setTuneFrequency(uint64_t freqHz)
+{
+    m_tuneFrequency = freqHz;
+    updateNCO();
+    qDebug() << "PALDecoder: Tune" << freqHz / 1e6 << "MHz, offset" << m_videoCarrierOffsetHz / 1e6f << "MHz";
+}
+
+void PALDecoder::updateNCO()
+{
+    double tuneMHz = m_tuneFrequency / 1.0e6;
+    double videoCarrierMHz;
+
+    if (tuneMHz >= 470.0 && tuneMHz <= 862.0) {
+        int ch = static_cast<int>(std::floor((tuneMHz - 470.0 - 0.001) / 8.0));
+        if (ch < 0) ch = 0;
+        double lowerEdge = 470.0 + ch * 8.0;
+        videoCarrierMHz = lowerEdge + 1.25;
+    } else if (tuneMHz >= 174.0 && tuneMHz <= 230.0) {
+        int ch = static_cast<int>(std::floor((tuneMHz - 174.0 - 0.001) / 8.0));
+        if (ch < 0) ch = 0;
+        double lowerEdge = 174.0 + ch * 8.0;
+        videoCarrierMHz = lowerEdge + 1.25;
+    } else {
+        videoCarrierMHz = tuneMHz;
+    }
+
+    m_videoCarrierOffsetHz = static_cast<float>((videoCarrierMHz - tuneMHz) * 1.0e6);
+    m_ncoPhaseIncrement = -2.0 * M_PI * static_cast<double>(m_videoCarrierOffsetHz)
+                          / static_cast<double>(SAMP_RATE);
+    m_ncoPhase = 0.0;
 }
 
 void PALDecoder::initFilters()
@@ -293,7 +332,21 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
                 }, Qt::QueuedConnection);
         }
 
-        std::complex<float> filtered = applyVideoFilter(sample);
+        // NCO frequency shift FIRST: bring video carrier to DC
+        float ncoI = static_cast<float>(std::cos(m_ncoPhase));
+        float ncoQ = static_cast<float>(std::sin(m_ncoPhase));
+        m_ncoPhase += m_ncoPhaseIncrement;
+        if (m_ncoPhase > M_PI) m_ncoPhase -= 2.0 * M_PI;
+        else if (m_ncoPhase < -M_PI) m_ncoPhase += 2.0 * M_PI;
+
+        std::complex<float> shifted(
+            sample.real() * ncoI - sample.imag() * ncoQ,
+            sample.real() * ncoQ + sample.imag() * ncoI
+        );
+
+        // Now video carrier is at DC, apply video LPF on shifted IQ
+        std::complex<float> filtered = applyVideoFilter(shifted);
+
         float magnitude = std::sqrt(filtered.real() * filtered.real() +
                                     filtered.imag() * filtered.imag());
         float dcBlocked = dcBlock(magnitude);

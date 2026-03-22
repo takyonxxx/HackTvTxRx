@@ -37,6 +37,12 @@ AudioDemodulator::~AudioDemodulator()
 {
 }
 
+void AudioDemodulator::setAudioCarrierFreq(double freqHz)
+{
+    m_audioPhaseIncrement = -2.0 * M_PI * freqHz / SAMP_RATE;
+    qDebug() << "AudioDemodulator: carrier updated to" << freqHz / 1e6 << "MHz";
+}
+
 void AudioDemodulator::initFilters()
 {
     // Audio bandwidth filter (15 kHz for PAL-B)

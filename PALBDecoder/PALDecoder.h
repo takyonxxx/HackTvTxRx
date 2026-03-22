@@ -28,6 +28,9 @@ public:
     void setColorMode(bool color) { m_colorMode = color; }
     void setChromaGain(float gain) { m_chromaGain = gain; }
 
+    // Set the center frequency the HackRF is tuned to (Hz)
+    void setTuneFrequency(uint64_t freqHz);
+
     float getVideoGain() const { return m_videoGain; }
     float getVideoOffset() const { return m_videoOffset; }
     bool getVideoInvert() const { return m_videoInvert; }
@@ -116,6 +119,13 @@ private:
     // PAL delay line (comb filter)
     std::vector<float> m_prevLineU;
     std::vector<float> m_prevLineV;
+
+    // NCO for frequency shift (video carrier to DC)
+    double m_ncoPhase;
+    double m_ncoPhaseIncrement;
+    float m_videoCarrierOffsetHz;
+    uint64_t m_tuneFrequency;
+    void updateNCO();
 
     void initFilters();
     std::vector<float> designLowPassFIR(float cutoff, float sampleRate, int numTaps);

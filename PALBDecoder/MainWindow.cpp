@@ -336,7 +336,7 @@ void MainWindow::setupUI()
     QHBoxLayout* freqTopLayout = new QHBoxLayout();
     m_frequencySpinBox = new QDoubleSpinBox(this);
     m_frequencySpinBox->setRange(47.0, 862.0);
-    m_frequencySpinBox->setValue(478.0);
+    m_frequencySpinBox->setValue(479.3);
     m_frequencySpinBox->setSingleStep(0.1);
     m_frequencySpinBox->setDecimals(3);
     m_frequencySpinBox->setSuffix(" MHz");
@@ -369,7 +369,7 @@ void MainWindow::setupUI()
 
     m_frequencySlider = new QSlider(Qt::Horizontal, this);
     m_frequencySlider->setRange(47, 862);
-    m_frequencySlider->setValue(478);
+    m_frequencySlider->setValue(479);
     m_frequencySlider->setTickPosition(QSlider::TicksBelow);
     m_frequencySlider->setTickInterval(8);
     connect(m_frequencySlider, &QSlider::valueChanged,
@@ -630,18 +630,23 @@ void MainWindow::onFrequencySliderChanged(int value)
     // Slider MHz cinsinden (470-862)
     double freqMHz = static_cast<double>(value);
 
-    // Spinbox'ı güncelle (sonsuz döngü önleme)
+    // Spinbox'i guncelle (sonsuz dongu onleme)
     m_frequencySpinBox->blockSignals(true);
     m_frequencySpinBox->setValue(freqMHz);
     m_frequencySpinBox->blockSignals(false);
 
-    // Frequency'yi Hz cinsine çevir
+    // Frequency'yi Hz cinsine cevir
     m_currentFrequency = static_cast<uint64_t>(freqMHz * 1000000.0);
 
-    // Channel label'ı güncelle
+    // Channel label'i guncelle
     updateChannelLabel(m_currentFrequency);
 
-    // HackRF çalışıyorsa frekansı güncelle
+    // Update PAL decoder NCO for video carrier offset
+    if (m_palDecoder) {
+        m_palDecoder->setTuneFrequency(m_currentFrequency);
+    }
+
+    // HackRF calisiyorsa frekansi guncelle
     if (m_hackRfRunning && m_hackTvLib) {
         applyFrequencyChange();
     }
@@ -652,18 +657,23 @@ void MainWindow::onFrequencySpinBoxChanged(double value)
     // SpinBox MHz cinsinden
     int sliderValue = static_cast<int>(value);
 
-    // Slider'ı güncelle (sonsuz döngü önleme)
+    // Slider'i guncelle (sonsuz dongu onleme)
     m_frequencySlider->blockSignals(true);
     m_frequencySlider->setValue(sliderValue);
     m_frequencySlider->blockSignals(false);
 
-    // Frequency'yi Hz cinsine çevir
+    // Frequency'yi Hz cinsine cevir
     m_currentFrequency = static_cast<uint64_t>(value * 1000000.0);
 
-    // Channel label'ı güncelle
+    // Channel label'i guncelle
     updateChannelLabel(m_currentFrequency);
 
-    // HackRF çalışıyorsa frekansı güncelle
+    // Update PAL decoder NCO for video carrier offset
+    if (m_palDecoder) {
+        m_palDecoder->setTuneFrequency(m_currentFrequency);
+    }
+
+    // HackRF calisiyorsa frekansi guncelle
     if (m_hackRfRunning && m_hackTvLib) {
         applyFrequencyChange();
     }
@@ -755,6 +765,11 @@ void MainWindow::applyFrequencyChange()
     if (!m_hackTvLib) return;
     m_hackTvLib->setFrequency(m_currentFrequency);
     m_hackTvLib->setSampleRate(m_currentSampleRate);
+
+    // Update PAL decoder NCO
+    if (m_palDecoder) {
+        m_palDecoder->setTuneFrequency(m_currentFrequency);
+    }
 }
 
 void MainWindow::onVideoGainChanged(int value)
@@ -928,12 +943,17 @@ void MainWindow::toggleHackRF()
             m_hackTvLib->setVgaGain(20);
             m_hackTvLib->setRxAmpGain(14);
 
+            // Set PAL decoder tune frequency for correct NCO offset
+            if (m_palDecoder) {
+                m_palDecoder->setTuneFrequency(m_currentFrequency);
+            }
+
             m_startStopButton->setText("Stop HackRF");
             m_startStopButton->setStyleSheet(
                 "QPushButton { background-color: #ff5555; color: white; "
                 "padding: 10px; font-weight: bold; }");
 
-            qDebug() << "✓✓✓ HackRF started successfully ✓✓✓";
+            qDebug() << "HackRF started successfully";
 
         } else {
             // FAILED TO START
@@ -1092,35 +1112,25 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 
     palFrameBuffer->addBuffer(samples);
 
-    // VIDEO PROCESSING - tam frame (40ms = 1 PAL frame)
+    // VIDEO + AUDIO PROCESSING - tam frame (40ms = 1 PAL frame)
     if (palFrameBuffer->isFrameReady()) {
 
         auto fullFrame = palFrameBuffer->getFrame();
+        if (fullFrame.empty()) return;
 
+        // Single shared_ptr - no double-move
+        auto framePtr = std::make_shared<std::vector<std::complex<float>>>(
+            std::move(fullFrame)
+            );
+
+        // VIDEO: independent flag
         int expectedVideo = 0;
-        if (palDemodulationInProgress.testAndSetAcquire(expectedVideo, 1)) {            
-            if (!fullFrame.empty()) {
-                auto framePtr = std::make_shared<std::vector<std::complex<float>>>(
-                    std::move(fullFrame)
-                    );
-                startPalVideoProcessing(framePtr);
-                startPalAudioProcessing(framePtr);
-            } else {
-                palDemodulationInProgress.storeRelease(0);
-            }
+        if (palDemodulationInProgress.testAndSetAcquire(expectedVideo, 1)) {
+            startPalVideoProcessing(framePtr);
         }
 
-        int expectedAudio = 0;
-        if (audioDemodulationInProgress.testAndSetAcquire(expectedAudio, 1)) {
-            if (!fullFrame.empty()) {
-                auto framePtr = std::make_shared<std::vector<std::complex<float>>>(
-                    std::move(fullFrame)
-                    );
-                startPalAudioProcessing(framePtr);
-            } else {
-                audioDemodulationInProgress.storeRelease(0);
-            }
-        }
+        // AUDIO: always process - no frame skipping for audio continuity
+        startPalAudioProcessing(framePtr);
     }
 }
 

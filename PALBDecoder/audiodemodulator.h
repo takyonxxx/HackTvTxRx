@@ -30,6 +30,10 @@ public:
     double getSampleRate() const;
     void setSampleRate(double newSampleRate);
 
+    // Set the actual audio carrier frequency in baseband (accounts for tune offset)
+    // audioCarrierHz = videoCarrierOffsetHz + 5.5e6
+    void setAudioCarrierFreq(double freqHz);
+
 signals:
     void audioReady(const std::vector<float>& audioSamples);
 
