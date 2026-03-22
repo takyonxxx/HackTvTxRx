@@ -33,7 +33,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_audioDemodulator = std::make_unique<AudioDemodulator>(this);
     m_audioOutput = std::make_unique<AudioOutput>();
 
-    m_audioDemodulator->setSampleRate(48000);
+    // AudioDemodulator starts at 16 MHz by default - match current HackRF rate
+    m_audioDemodulator->setSampleRate(m_currentSampleRate);
 
     // Connect frame ready signal
     connect(m_palDecoder.get(), &PALDecoder::frameReady,
@@ -45,6 +46,23 @@ MainWindow::MainWindow(QWidget *parent)
     connect(
         m_audioDemodulator.get(), &AudioDemodulator::audioReady,
         this, &MainWindow::onAudioReady, Qt::QueuedConnection);
+
+    connect(m_audioDemodulator.get(), &AudioDemodulator::audioCapabilityChanged,
+        this, [this](bool capable, double rate, double carrier) {
+        if (!capable) {
+            m_audioEnabledCheckBox->setChecked(false);
+            m_audioEnabledCheckBox->setEnabled(false);
+            m_audioEnabledCheckBox->setText(
+                QString("Audio N/A (carrier %1 MHz > Nyquist %2 MHz)")
+                .arg(carrier / 1e6, 0, 'f', 1)
+                .arg(rate / 2e6, 0, 'f', 1));
+            qDebug() << "Audio disabled: carrier above Nyquist at" << rate / 1e6 << "MHz";
+        } else {
+            m_audioEnabledCheckBox->setEnabled(true);
+            m_audioEnabledCheckBox->setText("Enable Audio");
+            m_audioEnabledCheckBox->setChecked(true);
+        }
+    }, Qt::QueuedConnection);
 
     // Connect frame ready signal
     connect(m_palDecoder.get(), &PALDecoder::frameReady,
@@ -637,6 +655,17 @@ void MainWindow::onSampleRateChanged(int index)
     // Update PAL decoder with new sample rate
     if (m_palDecoder) {
         m_palDecoder->setSampleRate(m_currentSampleRate);
+    }
+
+    // Update audio demodulator sample rate (rebuilds decimation chain)
+    if (m_audioDemodulator) {
+        m_audioDemodulator->setSampleRate(m_currentSampleRate);
+    }
+
+    // Rebuild FrameBuffer for new rate (frame size changes)
+    if (palFrameBuffer) {
+        delete palFrameBuffer;
+        palFrameBuffer = new FrameBuffer(m_currentSampleRate, 0.04);
     }
 
     // If HackRF is running, update hardware

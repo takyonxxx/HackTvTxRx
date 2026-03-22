@@ -26,9 +26,13 @@ public:
     void setAudioEnabled(bool enabled) { m_audioEnabled = enabled; }
     float getAudioGain() const { return m_audioGain; }
     bool getAudioEnabled() const { return m_audioEnabled; }
-    
+
     double getSampleRate() const;
     void setSampleRate(double newSampleRate);
+
+    // Returns true if audio can be decoded at the current sample rate
+    // (i.e. audio carrier < Nyquist)
+    bool isAudioCapable() const { return m_audioCapable; }
 
     // Set the actual audio carrier frequency in baseband (accounts for tune offset)
     // audioCarrierHz = videoCarrierOffsetHz + 5.5e6
@@ -36,18 +40,17 @@ public:
 
 signals:
     void audioReady(const std::vector<float>& audioSamples);
+    void audioCapabilityChanged(bool capable, double sampleRate, double carrierFreq);
 
 private:
     // PAL-B/G TV Standard Constants
-    static constexpr int SAMP_RATE = 16000000;           // 16 MHz (HackRF sample rate)
     static constexpr int AUDIO_SAMP_RATE = 48000;        // 48 kHz output
     static constexpr int AUDIO_BUFFER_SIZE = 480;        // 10ms @ 48kHz (match AudioOutput)
-    
+
     // PAL-B Audio Specifications
     static constexpr double AUDIO_CARRIER = 5.5e6;       // 5.5 MHz (PAL-B standard)
-    static constexpr double FM_DEVIATION = 50e3;         // ±50 kHz (PAL standard)
-    
-    // Optimized decimation: 16MHz →÷5→ 3.2MHz →÷10→ 320kHz →÷2→ 160kHz →÷3.33→ 48kHz
+    static constexpr double FM_DEVIATION = 50e3;          // +/-50 kHz (PAL standard)
+
     static constexpr int FILTER_TAPS = 17;
 
     // Thread safety
@@ -55,12 +58,22 @@ private:
     mutable QRecursiveMutex m_mutex;
     QMutex m_phaseMutex;
 
-    // Audio filters (FIR) - CACHED
+    // ========== Dynamic decimation chain ==========
+    // Computed by rebuildDecimationChain() when sample rate changes.
+    // Each stage: filter + integer decimate (or final resample to 48 kHz).
+    struct DecimStage {
+        std::vector<float> filterTaps;
+        int decimFactor;       // integer decimation (1 = resample-only stage)
+        double outputRate;     // rate after this stage
+    };
+    std::vector<DecimStage> m_decimChain;
+    double m_inputSampleRate;  // current HackRF sample rate
+    bool m_audioCapable;       // false if carrier >= Nyquist
+
+    void rebuildDecimationChain();
+
+    // Audio filters (FIR) - final 15 kHz bandwidth filter at 48 kHz
     std::vector<float> m_audioFilterTaps;
-    std::vector<float> m_decimFilter1;  // 1.28 MHz @ 16 MHz
-    std::vector<float> m_decimFilter2;  // 128 kHz @ 3.2 MHz
-    std::vector<float> m_decimFilter3;  // 64 kHz @ 320 kHz
-    std::vector<float> m_decimFilter4;  // 21.3 kHz @ 160 kHz
 
     // Audio buffer
     std::vector<float> m_audioBuffer;
@@ -71,18 +84,18 @@ private:
     // Frequency shift state
     double m_audioPhase;
     double m_audioPhaseIncrement;
+    double m_currentCarrierFreq;   // actual carrier freq for freq shift (default AUDIO_CARRIER, updated by setAudioCarrierFreq)
 
     // Settings
     float m_audioGain;
     bool m_audioEnabled;
-    double sampleRate;
     double fmDeviation;
 
     // Helper functions
-    void initFilters();
-    
+    void initFinalFilter();
+
     std::vector<float> designLowPassFIR(int numTaps, float cutoffFreq, float sampleRate);
-    
+
     std::vector<float> applyFIRFilter(const std::vector<float>& signal,
                                       const std::vector<float>& coeffs);
 
@@ -91,18 +104,20 @@ private:
         const std::vector<std::complex<float>>& signal,
         double shiftFreq);
 
-    // FM demodulation (atan2 method)
+    // FM demodulation (atan2 method) - uses m_inputSampleRate for scaling
     std::vector<float> fmDemodulateAtan2(const std::vector<std::complex<float>>& signal);
+
+    // FM demodulation for narrowband signal at a specific rate
+    // Scaling: output +/-1.0 corresponds to +/-FM_DEVIATION
+    std::vector<float> fmDemodulateNarrowband(const std::vector<std::complex<float>>& signal,
+                                               double signalRate);
 
     // Phase unwrap
     float unwrapPhase(float phase, float lastPhase);
 
-    // Low-pass filter
-    std::vector<float> lowPassFilter(const std::vector<float>& signal, float cutoffFreq);
-
     // Decimation
     std::vector<float> decimate(const std::vector<float>& signal, int factor);
-    
+
     // Resampling (for non-integer decimation)
     std::vector<float> resample(const std::vector<float>& signal,
                                 double inputRate,

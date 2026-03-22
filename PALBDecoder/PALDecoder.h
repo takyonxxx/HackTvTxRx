@@ -151,6 +151,15 @@ private:
     uint64_t m_linesProcessed;
     uint64_t m_syncDetected;
 
+    // Flywheel-based sync quality:
+    // Accumulate abs(hSyncShift) for lines where sync WAS found,
+    // and count lines where sync was NOT found (free-running).
+    // syncQuality = weighted metric: low error + high detection = good.
+    uint64_t m_syncQualityWindow;      // lines in current measurement window
+    uint64_t m_syncFoundInWindow;      // lines where zero-crossing was detected
+    double   m_syncErrorAccum;         // sum of |hSyncShift| in window
+    float    m_lastSyncQuality;        // 0..100 computed at each reporting interval
+
     // ========== Color ==========
     bool m_vPhaseAlternate;
     std::vector<float> m_colorCarrierSin;

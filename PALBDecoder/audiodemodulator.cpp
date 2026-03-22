@@ -11,24 +11,26 @@
 
 AudioDemodulator::AudioDemodulator(QObject *parent)
     : QObject(parent)
+    , m_inputSampleRate(16000000.0)
+    , m_audioCapable(true)
     , m_lastPhase(0.0f)
     , m_audioPhase(0.0)
     , m_audioGain(5.0f)
     , m_audioEnabled(true)
-    , sampleRate(AUDIO_SAMP_RATE)
     , fmDeviation(FM_DEVIATION)
 {
     m_audioBuffer.reserve(AUDIO_BUFFER_SIZE * 2);
-    m_audioPhaseIncrement = -2.0 * M_PI * AUDIO_CARRIER / SAMP_RATE;
+    m_currentCarrierFreq = AUDIO_CARRIER;
+    m_audioPhaseIncrement = -2.0 * M_PI * AUDIO_CARRIER / m_inputSampleRate;
 
-    initFilters();
+    initFinalFilter();
+    rebuildDecimationChain();
 
     qDebug() << "========================================";
     qDebug() << "AudioDemodulator initialized (PAL-B):";
-    qDebug() << "  Sample rate: 16 MHz → 48 kHz (÷333.33)";
-    qDebug() << "  Decimation: 16MHz →÷5→ 3.2MHz →÷10→ 320kHz →÷2→ 160kHz →÷10/3→ 48kHz";
+    qDebug() << "  Input sample rate:" << m_inputSampleRate / 1e6 << "MHz";
     qDebug() << "  Audio carrier: 5.5 MHz";
-    qDebug() << "  FM deviation: ±50 kHz";
+    qDebug() << "  FM deviation: +/-50 kHz";
     qDebug() << "  Audio gain:" << m_audioGain;
     qDebug() << "========================================";
 }
@@ -39,24 +41,114 @@ AudioDemodulator::~AudioDemodulator()
 
 void AudioDemodulator::setAudioCarrierFreq(double freqHz)
 {
-    m_audioPhaseIncrement = -2.0 * M_PI * freqHz / SAMP_RATE;
+    m_currentCarrierFreq = freqHz;
+    m_audioPhaseIncrement = -2.0 * M_PI * freqHz / m_inputSampleRate;
     qDebug() << "AudioDemodulator: carrier updated to" << freqHz / 1e6 << "MHz";
 }
 
-void AudioDemodulator::initFilters()
+void AudioDemodulator::initFinalFilter()
 {
-    // Audio bandwidth filter (15 kHz for PAL-B)
+    // Audio bandwidth filter (15 kHz for PAL-B) at 48 kHz output
     m_audioFilterTaps = designLowPassFIR(FILTER_TAPS, 15000.0f, 48000.0f);
-    
-    // Pre-calculate decimation filter coefficients (PERFORMANCE OPTIMIZATION)
-    m_decimFilter1 = designLowPassFIR(FILTER_TAPS, 1280000.0f, 16000000.0f);
-    m_decimFilter2 = designLowPassFIR(FILTER_TAPS, 128000.0f, 3200000.0f);
-    m_decimFilter3 = designLowPassFIR(FILTER_TAPS, 64000.0f, 320000.0f);
-    m_decimFilter4 = designLowPassFIR(FILTER_TAPS, 21333.0f, 160000.0f);
-    
-    qDebug() << "Audio filters initialized:";
-    qDebug() << "  Final: 15kHz @ 48kHz";
-    qDebug() << "  Decim filters: 4 stages cached";
+}
+
+// ============================================================
+// Dynamic Decimation Chain Builder
+// ============================================================
+//
+// Goal: reduce m_inputSampleRate -> 48 kHz using integer decimation stages.
+//
+// Strategy: greedily pick the largest safe integer factor at each stage.
+// "Safe" means the anti-alias filter cutoff is well within Nyquist.
+// After all integer stages, do a final linear-interpolation resample to 48 kHz.
+//
+// Known good chains:
+//   16 MHz: /5 -> 3.2M, /10 -> 320k, /2 -> 160k, /3 -> 53.3k, resample -> 48k
+//   20 MHz: /5 -> 4M,   /10 -> 400k, /2 -> 200k, /4 -> 50k,   resample -> 48k
+//   12.5M:  /5 -> 2.5M, /5  -> 500k, /2 -> 250k, /5 -> 50k,   resample -> 48k
+//   10 MHz: /5 -> 2M,   /5  -> 400k, /2 -> 200k, /4 -> 50k,   resample -> 48k
+//
+// For rates where carrier >= Nyquist (e.g. 8 MHz: Nyquist=4 MHz < 5.5 MHz),
+// audio is impossible. Set m_audioCapable = false.
+
+void AudioDemodulator::rebuildDecimationChain()
+{
+    m_decimChain.clear();
+
+    double nyquist = m_inputSampleRate / 2.0;
+
+    // Check if audio carrier is representable
+    // Use the actual carrier freq (may be offset-adjusted, e.g. 5.45 MHz instead of 5.5 MHz)
+    if (m_currentCarrierFreq >= nyquist) {
+        m_audioCapable = false;
+        qDebug() << "AudioDemodulator: AUDIO NOT POSSIBLE at"
+                 << m_inputSampleRate / 1e6 << "MHz"
+                 << "(carrier" << m_currentCarrierFreq / 1e6 << "MHz >= Nyquist" << nyquist / 1e6 << "MHz)";
+        emit audioCapabilityChanged(false, m_inputSampleRate, m_currentCarrierFreq);
+        return;
+    }
+
+    m_audioCapable = true;
+
+    // Build decimation stages: reduce rate from m_inputSampleRate toward ~50-60 kHz,
+    // then final resample to exactly 48 kHz.
+    double currentRate = m_inputSampleRate;
+
+    // Target: get close to 48 kHz but not below it.
+    // Minimum rate before final resample: 48 kHz (can't go below output rate).
+    // Comfortable target: 48-80 kHz range before final resample.
+    static constexpr double MIN_INTERMEDIATE = 48000.0;
+    static constexpr double TARGET_INTERMEDIATE = 60000.0;
+
+    // Candidate integer factors to try at each stage (largest first)
+    static constexpr int candidateFactors[] = {10, 8, 5, 4, 3, 2};
+
+    while (currentRate > TARGET_INTERMEDIATE * 2.0) {
+        // Pick the largest factor that doesn't drop us below MIN_INTERMEDIATE
+        int bestFactor = 0;
+        for (int f : candidateFactors) {
+            double newRate = currentRate / f;
+            if (newRate >= MIN_INTERMEDIATE) {
+                bestFactor = f;
+                break;
+            }
+        }
+        if (bestFactor < 2) break; // can't decimate further with integers
+
+        double newRate = currentRate / bestFactor;
+
+        // Anti-alias filter: cutoff at 0.4 * currentRate / bestFactor
+        // (i.e. 80% of the new Nyquist)
+        float cutoff = static_cast<float>(newRate * 0.4);
+        int taps = FILTER_TAPS;
+        // Use more taps for aggressive decimation
+        if (bestFactor >= 8) taps = 33;
+        else if (bestFactor >= 5) taps = 21;
+
+        DecimStage stage;
+        stage.filterTaps = designLowPassFIR(taps, cutoff, static_cast<float>(currentRate));
+        stage.decimFactor = bestFactor;
+        stage.outputRate = newRate;
+        m_decimChain.push_back(std::move(stage));
+
+        currentRate = newRate;
+    }
+
+    // Log the chain
+    qDebug() << "AudioDemodulator: decimation chain for"
+             << m_inputSampleRate / 1e6 << "MHz:";
+    double rate = m_inputSampleRate;
+    for (size_t i = 0; i < m_decimChain.size(); i++) {
+        const auto& s = m_decimChain[i];
+        qDebug() << "  Stage" << i << ":"
+                 << rate / 1e3 << "kHz /" << s.decimFactor
+                 << "->" << s.outputRate / 1e3 << "kHz"
+                 << "(" << s.filterTaps.size() << "taps)";
+        rate = s.outputRate;
+    }
+    qDebug() << "  Final resample:" << rate / 1e3 << "kHz -> 48 kHz";
+
+    emit audioCapabilityChanged(true, m_inputSampleRate, m_currentCarrierFreq);
 }
 
 std::vector<float> AudioDemodulator::designLowPassFIR(
@@ -142,14 +234,14 @@ std::vector<std::complex<float>> AudioDemodulator::frequencyShift(
     if (std::abs(shiftFreq) < 1.0) return signal;
 
     std::vector<std::complex<float>> shifted(signal.size());
-    double phaseInc = 2.0 * M_PI * shiftFreq / sampleRate;
+    double phaseInc = 2.0 * M_PI * shiftFreq / m_inputSampleRate;
     double phase = m_audioPhase;
 
     for (size_t i = 0; i < signal.size(); i++) {
         std::complex<float> shift(std::cos(phase), std::sin(phase));
         shifted[i] = signal[i] * shift;
         phase += phaseInc;
-        
+
         if (phase > M_PI) phase -= 2.0 * M_PI;
         if (phase < -M_PI) phase += 2.0 * M_PI;
     }
@@ -179,11 +271,27 @@ std::vector<float> AudioDemodulator::fmDemodulateAtan2(
     float currentPhase = m_lastPhase;
     phaseLock.unlock();
 
+    // FM demod scaling uses the input sample rate (signal is still at full rate here)
+    // FM demod: output phase difference normalized so that +/-FM_DEVIATION maps to +/-1.0
+    // At input sample rate, max instantaneous freq = deviation, so:
+    //   delta_phase_max = 2*pi * deviation / sampleRate  (per sample)
+    // We want output = delta / delta_max = delta * sampleRate / (2*pi * deviation)
+    //
+    // BUT this gives huge values at high sample rates (e.g. 160 at 16 MHz).
+    // The correct normalization is simply delta / delta_max where delta_max
+    // is the max phase step for the FM deviation at this sample rate.
+    //
+    // Actually the issue is: after decimation the effective rate drops.
+    // The cleanest solution: just output raw phase difference (radians per sample)
+    // and let the decimation + final gain handle amplitude.
+    // Normalize so full deviation = +/-1.0
+    float normFactor = static_cast<float>(m_inputSampleRate) / (2.0f * M_PI * fmDeviation);
+
     for (size_t i = 0; i < signal.size(); i++) {
         float phase = std::atan2(signal[i].imag(), signal[i].real());
         float delta = unwrapPhase(phase, currentPhase);
 
-        demod[i] = delta * sampleRate / (2.0f * M_PI * fmDeviation);
+        demod[i] = delta * normFactor;
 
         currentPhase = phase;
     }
@@ -194,25 +302,39 @@ std::vector<float> AudioDemodulator::fmDemodulateAtan2(
     return demod;
 }
 
-std::vector<float> AudioDemodulator::lowPassFilter(
-    const std::vector<float>& signal,
-    float cutoffFreq)
+std::vector<float> AudioDemodulator::fmDemodulateNarrowband(
+    const std::vector<std::complex<float>>& signal,
+    double signalRate)
 {
-    if (signal.empty()) return signal;
+    if (signal.empty()) return std::vector<float>();
 
-    if (signal.size() > 10000000) {
-        qCritical() << "Signal too large for filtering:" << signal.size();
-        return std::vector<float>();
+    std::vector<float> demod(signal.size());
+
+    QMutexLocker phaseLock(&m_phaseMutex);
+    float currentPhase = m_lastPhase;
+    phaseLock.unlock();
+
+    // At signalRate (e.g. 160 kHz after decimation), FM deviation of 50 kHz gives:
+    //   max_delta = 2*pi * 50e3 / 160e3 = ~1.96 rad/sample
+    // Normalize so +/-deviation maps to +/-1.0:
+    //   output = delta / max_delta = delta * signalRate / (2*pi * deviation)
+    // At 160 kHz: normFactor = 160e3 / (2*pi*50e3) = ~0.509
+    // This gives output in range roughly +/-1.0 for normal FM audio.
+    float normFactor = static_cast<float>(signalRate / (2.0 * M_PI * fmDeviation));
+
+    for (size_t i = 0; i < signal.size(); i++) {
+        float phase = std::atan2(signal[i].imag(), signal[i].real());
+        float delta = unwrapPhase(phase, currentPhase);
+
+        demod[i] = delta * normFactor;
+
+        currentPhase = phase;
     }
 
-    try {
-        std::vector<float> coeffs = designLowPassFIR(65, cutoffFreq, sampleRate);
-        return applyFIRFilter(signal, coeffs);
-    }
-    catch (const std::exception& e) {
-        qCritical() << "Filter error:" << e.what();
-        return std::vector<float>();
-    }
+    phaseLock.relock();
+    m_lastPhase = currentPhase;
+
+    return demod;
 }
 
 std::vector<float> AudioDemodulator::decimate(
@@ -249,7 +371,7 @@ std::vector<float> AudioDemodulator::resample(
     for (size_t i = 0; i < outputSize; i++) {
         double srcPos = i * ratio;
         size_t idx = static_cast<size_t>(srcPos);
-        
+
         if (idx + 1 < signal.size()) {
             double frac = srcPos - idx;
             float interpolated = signal[idx] * (1.0 - frac) + signal[idx + 1] * frac;
@@ -267,9 +389,6 @@ void AudioDemodulator::emitAudioBuffer(const std::vector<float>& audio)
     if (audio.empty()) {
         return;
     }
-
-    static QElapsedTimer emitTimer;
-    if (!emitTimer.isValid()) emitTimer.start();
 
     for (float sample : audio) {
         float processed = sample * m_audioGain;
@@ -309,45 +428,101 @@ void AudioDemodulator::processSamples(const int8_t* data, size_t len)
 
 void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& samples)
 {
-
     if (!m_audioEnabled || samples.empty()) return;
 
+    // If audio carrier is above Nyquist, skip processing entirely
+    if (!m_audioCapable) return;
+
     try {
-        // 1. Frequency shift to baseband
-        auto audioSignal = frequencyShift(samples, -AUDIO_CARRIER);
+        // ============================================================
+        // Correct FM audio demod pipeline:
+        //   1. Freq shift audio carrier to baseband (complex)
+        //   2. Narrowband filter + decimate (complex) to reduce bandwidth
+        //      BEFORE FM demod — this is critical! FM demod on wideband
+        //      signal produces huge values from video/noise.
+        //   3. FM demodulate the narrowband signal
+        //   4. Continue decimation (real) to reach ~50 kHz
+        //   5. Resample to 48 kHz
+        //   6. Final audio bandwidth filter
+        // ============================================================
 
-        // 2. FM demodulate
-        auto audio = fmDemodulateAtan2(audioSignal);
+        // 1. Frequency shift audio carrier to baseband (complex IQ)
+        auto iq = frequencyShift(samples, -m_currentCarrierFreq);
 
-        double currentRate = SAMP_RATE;
+        // 2. Apply narrowband complex filter + decimate through the chain
+        //    until rate is low enough for FM demod.
+        //    We want to get to ~100-200 kHz before FM demod for clean results.
+        //    Apply decimation stages on complex IQ data until rate <= 200 kHz or
+        //    we've done at least the first aggressive stages.
+        double currentRate = m_inputSampleRate;
+        size_t stageIdx = 0;
 
-        // Stage 1: 16 MHz → 3.2 MHz (÷5)
-        audio = applyFIRFilter(audio, m_decimFilter1);
-        audio = decimate(audio, 5);
-        currentRate = 3.2e6;
+        // Decimate complex IQ through early stages (high rate stages)
+        // Stop when rate drops below 200 kHz — that's narrow enough for FM demod
+        while (stageIdx < m_decimChain.size() && currentRate > 200000.0) {
+            const auto& stage = m_decimChain[stageIdx];
 
-        // Stage 2: 3.2 MHz → 320 kHz (÷10)
-        audio = applyFIRFilter(audio, m_decimFilter2);
-        audio = decimate(audio, 10);
-        currentRate = 320e3;
+            // Apply FIR filter to I and Q separately
+            std::vector<float> realPart(iq.size());
+            std::vector<float> imagPart(iq.size());
+            for (size_t i = 0; i < iq.size(); i++) {
+                realPart[i] = iq[i].real();
+                imagPart[i] = iq[i].imag();
+            }
 
-        // Stage 3: 320 kHz → 160 kHz (÷2)
-        audio = applyFIRFilter(audio, m_decimFilter3);
-        audio = decimate(audio, 2);
-        currentRate = 160e3;
+            realPart = applyFIRFilter(realPart, stage.filterTaps);
+            imagPart = applyFIRFilter(imagPart, stage.filterTaps);
 
-        // Stage 4: 160 kHz → 53.33 kHz (÷3)
-        audio = applyFIRFilter(audio, m_decimFilter4);
-        audio = decimate(audio, 3);
-        currentRate = 160e3 / 3.0;
+            // Decimate
+            std::vector<std::complex<float>> decimated;
+            decimated.reserve(iq.size() / stage.decimFactor + 1);
+            for (size_t i = 0; i < realPart.size(); i += stage.decimFactor) {
+                decimated.emplace_back(realPart[i], imagPart[i]);
+            }
 
-        // Final resample: 53.33 kHz → 48 kHz
-        audio = resample(audio, currentRate, 48000.0);
-        currentRate = 48000.0;
+            iq = std::move(decimated);
+            currentRate = stage.outputRate;
+            stageIdx++;
+        }
 
-        // Final audio filter at 15 kHz
+        // 3. FM demodulate the narrowband signal
+        //    Now the signal is at ~160 kHz or lower — FM demod will give clean output
+        double fmDemodRate = currentRate;  // save for debug
+        auto audio = fmDemodulateNarrowband(iq, currentRate);
+
+        // 4. Continue remaining decimation stages (real-valued now)
+        while (stageIdx < m_decimChain.size()) {
+            const auto& stage = m_decimChain[stageIdx];
+            audio = applyFIRFilter(audio, stage.filterTaps);
+            audio = decimate(audio, stage.decimFactor);
+            currentRate = stage.outputRate;
+            stageIdx++;
+        }
+
+        // 5. Final resample to exactly 48 kHz
+        if (std::abs(currentRate - 48000.0) > 1.0) {
+            audio = resample(audio, currentRate, 48000.0);
+        }
+
+        // 6. Final audio bandwidth filter at 15 kHz
         audio = applyFIRFilter(audio, m_audioFilterTaps);
-        // Emit
+
+        static uint64_t dbgCounter = 0;
+        dbgCounter++;
+        if (dbgCounter % 50 == 1) {
+            float maxOut = 0.0f;
+            for (size_t i = 0; i < std::min(audio.size(), size_t(500)); i++) {
+                float a = std::fabs(audio[i]);
+                if (a > maxOut) maxOut = a;
+            }
+            qDebug() << "AudioDbg: input" << samples.size()
+                     << "output" << audio.size()
+                     << "peak" << maxOut
+                     << "fmDemodAt" << fmDemodRate / 1e3 << "kHz"
+                     << "carrier" << m_currentCarrierFreq / 1e6 << "MHz";
+        }
+
+        // 7. Emit
         emitAudioBuffer(audio);
 
     } catch (const std::exception& e) {
@@ -360,27 +535,50 @@ std::vector<float> AudioDemodulator::demodulateAudio(
 {
     QMutexLocker lock(&m_mutex);
 
-    if (samples.empty() || AUDIO_CARRIER <= 0) {
+    if (samples.empty() || m_currentCarrierFreq <= 0 || !m_audioCapable) {
         return std::vector<float>();
     }
 
-    auto audioSignal = frequencyShift(samples, -AUDIO_CARRIER);
-    auto audio = fmDemodulateAtan2(audioSignal);
+    // Same pipeline as processSamples: shift -> decimate complex -> FM demod -> decimate real
+    auto iq = frequencyShift(samples, -m_currentCarrierFreq);
 
-    // Optimized chain with cached filters
-    audio = applyFIRFilter(audio, m_decimFilter1);
-    audio = decimate(audio, 5);
+    double currentRate = m_inputSampleRate;
+    size_t stageIdx = 0;
 
-    audio = applyFIRFilter(audio, m_decimFilter2);
-    audio = decimate(audio, 10);
+    // Decimate complex IQ until rate <= 200 kHz
+    while (stageIdx < m_decimChain.size() && currentRate > 200000.0) {
+        const auto& stage = m_decimChain[stageIdx];
+        std::vector<float> realPart(iq.size()), imagPart(iq.size());
+        for (size_t i = 0; i < iq.size(); i++) {
+            realPart[i] = iq[i].real();
+            imagPart[i] = iq[i].imag();
+        }
+        realPart = applyFIRFilter(realPart, stage.filterTaps);
+        imagPart = applyFIRFilter(imagPart, stage.filterTaps);
+        std::vector<std::complex<float>> decimated;
+        decimated.reserve(iq.size() / stage.decimFactor + 1);
+        for (size_t i = 0; i < realPart.size(); i += stage.decimFactor) {
+            decimated.emplace_back(realPart[i], imagPart[i]);
+        }
+        iq = std::move(decimated);
+        currentRate = stage.outputRate;
+        stageIdx++;
+    }
 
-    audio = applyFIRFilter(audio, m_decimFilter3);
-    audio = decimate(audio, 2);
+    auto audio = fmDemodulateNarrowband(iq, currentRate);
 
-    audio = applyFIRFilter(audio, m_decimFilter4);
-    audio = decimate(audio, 3);
+    while (stageIdx < m_decimChain.size()) {
+        const auto& stage = m_decimChain[stageIdx];
+        audio = applyFIRFilter(audio, stage.filterTaps);
+        audio = decimate(audio, stage.decimFactor);
+        currentRate = stage.outputRate;
+        stageIdx++;
+    }
 
-    audio = resample(audio, 160e3 / 3.0, 48000.0);
+    if (std::abs(currentRate - 48000.0) > 1.0) {
+        audio = resample(audio, currentRate, 48000.0);
+    }
+
     audio = applyFIRFilter(audio, m_audioFilterTaps);
 
     return audio;
@@ -388,10 +586,31 @@ std::vector<float> AudioDemodulator::demodulateAudio(
 
 double AudioDemodulator::getSampleRate() const
 {
-    return sampleRate;
+    return m_inputSampleRate;
 }
 
 void AudioDemodulator::setSampleRate(double newSampleRate)
 {
-    sampleRate = newSampleRate;
+    QMutexLocker locker(&m_processMutex);
+
+    if (std::abs(newSampleRate - m_inputSampleRate) < 1.0) return;
+
+    m_inputSampleRate = newSampleRate;
+
+    // Recompute NCO phase increment for current carrier at new rate
+    m_audioPhaseIncrement = -2.0 * M_PI * m_currentCarrierFreq / m_inputSampleRate;
+
+    // Reset phase to avoid discontinuity
+    m_audioPhase = 0.0;
+    m_lastPhase = 0.0f;
+
+    // Clear audio buffer to avoid stale samples from old rate
+    m_audioBuffer.clear();
+
+    // Rebuild the entire decimation chain for the new rate
+    rebuildDecimationChain();
+
+    qDebug() << "AudioDemodulator::setSampleRate:" << m_inputSampleRate / 1e6 << "MHz"
+             << "capable:" << m_audioCapable
+             << "stages:" << m_decimChain.size();
 }

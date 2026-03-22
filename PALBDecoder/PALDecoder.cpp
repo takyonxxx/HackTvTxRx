@@ -61,6 +61,10 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_frameCount(0)
     , m_linesProcessed(0)
     , m_syncDetected(0)
+    , m_syncQualityWindow(0)
+    , m_syncFoundInWindow(0)
+    , m_syncErrorAccum(0.0)
+    , m_lastSyncQuality(0.0f)
     , m_vPhaseAlternate(false)
     , m_colorCarrierIndex(0)
 {
@@ -390,10 +394,32 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         m_totalSamples++;
 
         if (m_totalSamples % 10000000 == 0) {
-            float syncRate = m_linesProcessed > 0 ?
-                                 (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
-            QMetaObject::invokeMethod(this, [this, syncRate]() {
-                emit syncStatsUpdated(syncRate, m_ampMax, m_ampMin);
+            // Flywheel-based sync quality:
+            // Component 1: detection rate (0..1) - were sync pulses found?
+            // Component 2: error quality (0..1) - how small were flywheel corrections?
+            float detectionRate = (m_syncQualityWindow > 0)
+                ? static_cast<float>(m_syncFoundInWindow) / m_syncQualityWindow
+                : 0.0f;
+
+            // Average error per detected line (in samples)
+            float avgError = (m_syncFoundInWindow > 0)
+                ? static_cast<float>(m_syncErrorAccum / m_syncFoundInWindow)
+                : static_cast<float>(m_numberSamplesPerHTop);
+
+            // Normalize: 0 error = 1.0, error >= HTop = 0.0
+            float errorQuality = 1.0f - std::clamp(avgError / static_cast<float>(m_numberSamplesPerHTop), 0.0f, 1.0f);
+
+            // Combined: 60% detection rate + 40% error quality
+            float syncQuality = (detectionRate * 0.6f + errorQuality * 0.4f) * 100.0f;
+            m_lastSyncQuality = syncQuality;
+
+            // Reset window
+            m_syncQualityWindow = 0;
+            m_syncFoundInWindow = 0;
+            m_syncErrorAccum = 0.0;
+
+            QMetaObject::invokeMethod(this, [this, syncQuality]() {
+                emit syncStatsUpdated(syncQuality, m_ampMax, m_ampMin);
             }, Qt::QueuedConnection);
         }
 
@@ -474,12 +500,17 @@ void PALDecoder::processSample(float sample)
                     m_hSyncShift = hSyncShift;
                     m_hSyncErrorCount = 0;
                 }
+                // Large error: count as detected but record the error
+                m_syncErrorAccum += static_cast<double>(std::fabs(hSyncShift));
             } else {
                 m_hSyncShift = hSyncShift * 0.2f;
                 m_hSyncErrorCount = 0;
+                // Good sync: small error
+                m_syncErrorAccum += static_cast<double>(std::fabs(hSyncShift));
             }
 
             m_syncDetected++;
+            m_syncFoundInWindow++;
             m_sampleOffsetDetected = 0;
         }
         else {
@@ -506,6 +537,7 @@ void PALDecoder::processSample(float sample)
 
         m_lineIndex++;
         m_linesProcessed++;
+        m_syncQualityWindow++;
         processEndOfLine();
     }
 
