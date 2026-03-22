@@ -15,7 +15,7 @@ AudioDemodulator::AudioDemodulator(QObject *parent)
     , m_audioCapable(true)
     , m_lastPhase(0.0f)
     , m_audioPhase(0.0)
-    , m_audioGain(5.0f)
+    , m_audioGain(1.0f)
     , m_audioEnabled(true)
     , fmDeviation(FM_DEVIATION)
 {
@@ -314,19 +314,17 @@ std::vector<float> AudioDemodulator::fmDemodulateNarrowband(
     float currentPhase = m_lastPhase;
     phaseLock.unlock();
 
-    // At signalRate (e.g. 160 kHz after decimation), FM deviation of 50 kHz gives:
-    //   max_delta = 2*pi * 50e3 / 160e3 = ~1.96 rad/sample
-    // Normalize so +/-deviation maps to +/-1.0:
-    //   output = delta / max_delta = delta * signalRate / (2*pi * deviation)
-    // At 160 kHz: normFactor = 160e3 / (2*pi*50e3) = ~0.509
-    // This gives output in range roughly +/-1.0 for normal FM audio.
-    float normFactor = static_cast<float>(signalRate / (2.0 * M_PI * fmDeviation));
+    // Output scaled phase difference.
+    // Raw delta can peak at ~2 rad at 160 kHz narrowband.
+    // Scale by 0.1 to bring into comfortable range (~0.1-0.2 peak).
+    // User adjusts final level with Audio Gain slider.
+    static constexpr float FM_OUTPUT_SCALE = 0.3f;
 
     for (size_t i = 0; i < signal.size(); i++) {
         float phase = std::atan2(signal[i].imag(), signal[i].real());
         float delta = unwrapPhase(phase, currentPhase);
 
-        demod[i] = delta * normFactor;
+        demod[i] = delta * FM_OUTPUT_SCALE;
 
         currentPhase = phase;
     }
@@ -487,7 +485,6 @@ void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& sa
 
         // 3. FM demodulate the narrowband signal
         //    Now the signal is at ~160 kHz or lower — FM demod will give clean output
-        double fmDemodRate = currentRate;  // save for debug
         auto audio = fmDemodulateNarrowband(iq, currentRate);
 
         // 4. Continue remaining decimation stages (real-valued now)
@@ -506,21 +503,6 @@ void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& sa
 
         // 6. Final audio bandwidth filter at 15 kHz
         audio = applyFIRFilter(audio, m_audioFilterTaps);
-
-        static uint64_t dbgCounter = 0;
-        dbgCounter++;
-        if (dbgCounter % 50 == 1) {
-            float maxOut = 0.0f;
-            for (size_t i = 0; i < std::min(audio.size(), size_t(500)); i++) {
-                float a = std::fabs(audio[i]);
-                if (a > maxOut) maxOut = a;
-            }
-            qDebug() << "AudioDbg: input" << samples.size()
-                     << "output" << audio.size()
-                     << "peak" << maxOut
-                     << "fmDemodAt" << fmDemodRate / 1e3 << "kHz"
-                     << "carrier" << m_currentCarrierFreq / 1e6 << "MHz";
-        }
 
         // 7. Emit
         emitAudioBuffer(audio);

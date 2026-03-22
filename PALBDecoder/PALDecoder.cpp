@@ -80,9 +80,10 @@ PALDecoder::PALDecoder(QObject *parent)
 
 PALDecoder::~PALDecoder()
 {
-    float syncRate = m_linesProcessed > 0 ?
-                         (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
-    qDebug() << "PALDecoder: Frames:" << m_frameCount << "Sync rate:" << syncRate << "%";
+    qDebug() << "PALDecoder: Frames:" << m_frameCount
+             << "Lines:" << m_linesProcessed
+             << "SyncDetected:" << m_syncDetected
+             << "LastQuality:" << m_lastSyncQuality << "%";
 }
 
 void PALDecoder::setSampleRate(int sampleRate)

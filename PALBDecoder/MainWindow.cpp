@@ -250,15 +250,15 @@ void MainWindow::setupUI()
     audioGainLayout->addWidget(new QLabel("Audio Gain:", this));
 
     m_audioGainSlider = new QSlider(Qt::Horizontal, this);
-    m_audioGainSlider->setRange(0, 100);
-    m_audioGainSlider->setValue(50);  // 5.0x gain
+    m_audioGainSlider->setRange(0, 50);
+    m_audioGainSlider->setValue(10);  // 1.0x gain
     m_audioGainSlider->setTickPosition(QSlider::TicksBelow);
-    m_audioGainSlider->setTickInterval(10);
+    m_audioGainSlider->setTickInterval(5);
 
     m_audioGainSpinBox = new QDoubleSpinBox(this);
-    m_audioGainSpinBox->setRange(0.0, 10.0);
+    m_audioGainSpinBox->setRange(0.0, 5.0);
     m_audioGainSpinBox->setSingleStep(0.1);
-    m_audioGainSpinBox->setValue(5.0);
+    m_audioGainSpinBox->setValue(1.0);
     m_audioGainSpinBox->setDecimals(1);
     m_audioGainSpinBox->setMaximumWidth(80);
 
@@ -317,12 +317,8 @@ void MainWindow::setupUI()
     m_sampleRateComboBox = new QComboBox(this);
     m_sampleRateComboBox->setStyleSheet("QComboBox { font-weight: bold; }");
 
-    // Add sample rates
+    // Add sample rates (min 12.5 MHz - below this audio carrier exceeds Nyquist)
     std::map<int, QString> sortedSampleRates {
-        {2000000, "2"},
-        {4000000, "4"},
-        {8000000, "8"},
-        {10000000, "10"},
         {12500000, "12.5"},
         {16000000, "16"},
         {20000000, "20"}
@@ -512,7 +508,7 @@ void MainWindow::setupUI()
 
     m_syncThresholdSlider = new QSlider(Qt::Horizontal, this);
     m_syncThresholdSlider->setRange(0, 50);
-    m_syncThresholdSlider->setValue(0);
+    m_syncThresholdSlider->setValue(0);  // default 0
     m_syncThresholdSlider->setTickPosition(QSlider::TicksBelow);
     m_syncThresholdSlider->setTickInterval(5);
 
@@ -535,7 +531,7 @@ void MainWindow::setupUI()
     syncControlLayout->addLayout(syncThresholdLayout);
 
     QLabel* syncHelpLabel = new QLabel(
-        "<i>Adjust for stable sync (try -0.2 to -0.3)</i>", this);
+        "<i>Default 0. Increase if sync is unstable.</i>", this);
     syncHelpLabel->setWordWrap(true);
     syncHelpLabel->setStyleSheet("QLabel { color: #666; font-size: 8pt; }");
     syncControlLayout->addWidget(syncHelpLabel);
