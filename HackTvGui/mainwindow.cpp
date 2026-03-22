@@ -777,67 +777,64 @@ void MainWindow::addRxGroup()
     controlsGrid->addWidget(rxAmpSlider, 0, 10);
     controlsGrid->addWidget(rxAmpLevelLabel, 0, 11);
 
-    // RTL-SDR specific gain controls (hidden by default, shown when RTL-SDR selected)
-    rtlGainLabel = new QLabel("Gain:", rxGroup);
-    rtlGainLabel->setStyleSheet("QLabel { color: #c8f0ff; font-size: 11px; font-weight: bold; }");
-    rtlGainCombo = new QComboBox(rxGroup);
-    rtlGainCombo->setMinimumWidth(80);
-    // R820T typical gain values (dB)
-    QVector<QPair<QString, int>> rtlGains = {
-        {"0.0 dB", 0}, {"0.9 dB", 9}, {"1.4 dB", 14}, {"2.7 dB", 27},
-        {"3.7 dB", 37}, {"7.7 dB", 77}, {"8.7 dB", 87}, {"12.5 dB", 125},
-        {"14.4 dB", 144}, {"15.7 dB", 157}, {"16.6 dB", 166}, {"19.7 dB", 197},
-        {"20.7 dB", 207}, {"22.9 dB", 229}, {"25.4 dB", 254}, {"28.0 dB", 280},
-        {"29.7 dB", 297}, {"32.8 dB", 328}, {"33.8 dB", 338}, {"36.4 dB", 364},
-        {"37.2 dB", 372}, {"38.6 dB", 386}, {"40.2 dB", 402}, {"42.1 dB", 421},
-        {"43.4 dB", 434}, {"43.9 dB", 439}, {"44.5 dB", 445}, {"48.0 dB", 480},
-        {"49.6 dB", 496}
-    };
-    for (const auto& g : rtlGains) {
-        rtlGainCombo->addItem(g.first, g.second);
-    }
-    // Default to ~20 dB
-    int defaultGainIdx = rtlGainCombo->findData(207);
-    if (defaultGainIdx >= 0) rtlGainCombo->setCurrentIndex(defaultGainIdx);
+    // RTL-SDR specific controls (hidden by default, shown when RTL-SDR selected)
+    rtlPpmLabel = new QLabel("PPM:", rxGroup);
+    rtlPpmLabel->setStyleSheet("QLabel { color: #c8f0ff; font-size: 11px; font-weight: bold; }");
+    rtlPpmSpinBox = new QSpinBox(rxGroup);
+    rtlPpmSpinBox->setRange(-200, 200);
+    rtlPpmSpinBox->setValue(0);
+    rtlPpmSpinBox->setSuffix(" ppm");
+    rtlPpmSpinBox->setToolTip("Frequency correction in PPM");
 
-    rtlAgcLabel = new QLabel("AGC:", rxGroup);
-    rtlAgcLabel->setStyleSheet("QLabel { color: #c8f0ff; font-size: 11px; font-weight: bold; }");
-    rtlAgcCheckBox = new QCheckBox("Auto", rxGroup);
-    rtlAgcCheckBox->setChecked(false);
+    rtlDirectLabel = new QLabel("Sampling:", rxGroup);
+    rtlDirectLabel->setStyleSheet("QLabel { color: #c8f0ff; font-size: 11px; font-weight: bold; }");
+    rtlDirectCombo = new QComboBox(rxGroup);
+    rtlDirectCombo->addItem("Normal", 0);
+    rtlDirectCombo->addItem("Direct I (HF)", 1);
+    rtlDirectCombo->addItem("Direct Q (HF)", 2);
+    rtlDirectCombo->setToolTip("Direct sampling for HF reception (0-28.8 MHz)");
 
-    controlsGrid->addWidget(rtlGainLabel, 1, 0);
-    controlsGrid->addWidget(rtlGainCombo, 1, 1, 1, 2);
-    controlsGrid->addWidget(rtlAgcLabel, 1, 3);
-    controlsGrid->addWidget(rtlAgcCheckBox, 1, 4);
+    rtlOffsetCheck = new QCheckBox("Offset Tuning", rxGroup);
+    rtlOffsetCheck->setChecked(false);
+    rtlOffsetCheck->setToolTip("Avoid DC spike by offset tuning");
 
-    // Connect RTL-SDR gain controls
-    connect(rtlGainCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    controlsGrid->addWidget(rtlPpmLabel, 1, 0);
+    controlsGrid->addWidget(rtlPpmSpinBox, 1, 1);
+    controlsGrid->addWidget(rtlDirectLabel, 1, 3);
+    controlsGrid->addWidget(rtlDirectCombo, 1, 4, 1, 2);
+    controlsGrid->addWidget(rtlOffsetCheck, 1, 6, 1, 2);
+
+    // Connect RTL-SDR controls
+    connect(rtlPpmSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, [this](int ppm) {
+        if (m_isProcessing && m_hackTvLib) {
+            m_hackTvLib->setFreqCorrection(ppm);
+        }
+        saveSettings();
+    });
+
+    connect(rtlDirectCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int idx) {
-        int gainValue = rtlGainCombo->currentData().toInt();
+        int mode = rtlDirectCombo->currentData().toInt();
         if (m_isProcessing && m_hackTvLib) {
-            // Pass gain value directly — hacktvlib routes to rtlSdrDevice->setGain()
-            // We use LNA slider value as a carrier: encode RTL gain as-is
-            // But LNA is unsigned int 0-40 range... use setRxAmpGain as proxy
-            // Actually, map gainValue back to LNA range: gain/496*40
-            unsigned int lnaEquiv = static_cast<unsigned int>(gainValue * 40.0f / 496.0f);
-            m_hackTvLib->setLnaGain(lnaEquiv);
+            m_hackTvLib->setDirectSampling(mode);
         }
         saveSettings();
     });
 
-    connect(rtlAgcCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
-        rtlGainCombo->setEnabled(!checked);
+    connect(rtlOffsetCheck, &QCheckBox::toggled, this, [this](bool checked) {
         if (m_isProcessing && m_hackTvLib) {
-            m_hackTvLib->setVgaGain(checked ? 0 : 1);
+            m_hackTvLib->setOffsetTuning(checked);
         }
         saveSettings();
     });
 
-    // Initially hide RTL-SDR controls (shown when RTL-SDR selected)
-    rtlGainLabel->setVisible(false);
-    rtlGainCombo->setVisible(false);
-    rtlAgcLabel->setVisible(false);
-    rtlAgcCheckBox->setVisible(false);
+    // Initially hide RTL-SDR controls
+    rtlPpmLabel->setVisible(false);
+    rtlPpmSpinBox->setVisible(false);
+    rtlDirectLabel->setVisible(false);
+    rtlDirectCombo->setVisible(false);
+    rtlOffsetCheck->setVisible(false);
 
     // Stretch the slider columns equally
     controlsGrid->setColumnStretch(1, 1);
@@ -870,11 +867,12 @@ void MainWindow::updateGainControlsForDevice(const QString& device)
     rxAmpSlider->setVisible(!isRtlSdr);
     rxAmpLevelLabel->setVisible(!isRtlSdr);
 
-    // RTL-SDR: no gain controls — auto gain only
-    rtlGainLabel->setVisible(false);
-    rtlGainCombo->setVisible(false);
-    rtlAgcLabel->setVisible(false);
-    rtlAgcCheckBox->setVisible(false);
+    // RTL-SDR controls: PPM, Direct Sampling, Offset Tuning
+    rtlPpmLabel->setVisible(isRtlSdr);
+    rtlPpmSpinBox->setVisible(isRtlSdr);
+    rtlDirectLabel->setVisible(isRtlSdr);
+    rtlDirectCombo->setVisible(isRtlSdr);
+    rtlOffsetCheck->setVisible(isRtlSdr);
 }
 
 void MainWindow::onVolumeSliderValueChanged(int value)

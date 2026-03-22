@@ -309,6 +309,30 @@ void HackTvLib::setRxAmpGain(unsigned int rx_amp_gain)
     }
 }
 
+void HackTvLib::setFreqCorrection(int ppm)
+{
+    if (rtlSdrDevice) {
+        rtlSdrDevice->setFrequencyCorrection(ppm);
+    }
+}
+
+void HackTvLib::setDirectSampling(int mode)
+{
+    if (rtlSdrDevice) {
+        rtlSdrDevice->setDirectSampling(mode);
+        // Re-apply auto gain — direct sampling mode change can reset tuner state
+        rtlSdrDevice->setAutoGain(true);
+        rtlSdrDevice->setAgcMode(true);
+    }
+}
+
+void HackTvLib::setOffsetTuning(bool enable)
+{
+    if (rtlSdrDevice) {
+        rtlSdrDevice->setOffsetTuning(enable);
+    }
+}
+
 void HackTvLib::dataReceived(const int8_t *data, size_t len)
 {
     emitReceivedData(data, len);

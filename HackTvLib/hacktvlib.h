@@ -135,6 +135,11 @@ public:
     void setTxAmpGain(unsigned int tx_amp_gain);
     void setRxAmpGain(unsigned int rx_amp_gain);
 
+    // RTL-SDR specific
+    void setFreqCorrection(int ppm);
+    void setDirectSampling(int mode);
+    void setOffsetTuning(bool enable);
+
     bool isInitialized() const {
         return (s != nullptr);
     }

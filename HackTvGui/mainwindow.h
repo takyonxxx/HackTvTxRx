@@ -93,10 +93,11 @@ private:
     QDoubleSpinBox *txAmplitudeSpinBox, *txFilterSizeSpinBox, *txModulationIndexSpinBox, *txInterpolationSpinBox;
     QSpinBox *txAmpSpinBox;
     QLabel *volumeLabel, *volumeLevelLabel, *lnaLabel, *lnaLevelLabel, *vgaLabel, *vgaLevelLabel,
-        *rxAmpLabel, *rxAmpLevelLabel, *rtlGainLabel, *rtlAgcLabel;
+        *rxAmpLabel, *rxAmpLevelLabel, *rtlPpmLabel, *rtlDirectLabel;
     QSlider *volumeSlider, *lnaSlider, *vgaSlider, *txAmpSlider, *rxAmpSlider;
-    QComboBox *rtlGainCombo;
-    QCheckBox *rtlAgcCheckBox;
+    QSpinBox *rtlPpmSpinBox;
+    QComboBox *rtlDirectCombo;
+    QCheckBox *rtlOffsetCheck;
     QFileDialog *fileDialog;
     CFreqCtrl *freqCtrl;
     CPlotter *cPlotter;
