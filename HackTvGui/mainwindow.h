@@ -125,7 +125,7 @@ private:
     int m_rxAmpGain = 0;
 
     QString mode;
-    bool isTx, isFmTransmit, isFile, isTest, isFFmpeg;
+    bool isTx, isFmTransmit, isFmFile, isFile, isTest, isFFmpeg;
 
     float audioGain = 0.75f;
     int m_LowCutFreq = -75e3;

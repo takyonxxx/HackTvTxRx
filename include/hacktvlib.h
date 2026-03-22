@@ -47,6 +47,7 @@ public:
     void clearCallbacks();
     bool setArguments(const std::vector<std::string>& args);
     void setMicEnabled(bool newMicEnabled);
+    void setAudioFilePath(const std::string& filePath, bool loop = true);
     void setFrequency(uint64_t frequency_hz);
     void setSampleRate(uint32_t sample_rate);
     void setAmplitude(float newAmplitude);

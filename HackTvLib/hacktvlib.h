@@ -121,6 +121,8 @@ public:
     void clearCallbacks();
     bool setArguments(const std::vector<std::string>& args);
     void setMicEnabled(bool newMicEnabled);
+    void setAudioFileEnabled(bool enable, const std::string& filePath = "", bool loop = true);
+    void setAudioFilePath(const std::string& filePath, bool loop = true);
     void setFrequency(uint64_t frequency_hz);
     void setSampleRate(uint32_t sample_rate);
     void setAmplitude(float newAmplitude);
@@ -168,6 +170,8 @@ private:
     hacktv_t* s = nullptr;
     rxtx_mode m_rxTxMode = RX_MODE;
     bool micEnabled = false;
+    std::string m_audioFilePath;
+    bool m_audioFileLoop = true;
 
     // Devices - CRITICAL: Initialize to nullptr!
     HackRfDevice* hackRfDevice = nullptr;

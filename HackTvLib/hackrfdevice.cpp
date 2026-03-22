@@ -1,4 +1,5 @@
 #include "hackrfdevice.h"
+#include "audiofileinput.h"
 #include "modulation.h"
 #include <iostream>
 #include "constants.h"
@@ -181,6 +182,10 @@ int HackRfDevice::stop()
             m_audioInput->stop();
             m_audioInput.reset();
         }
+        if (m_audioFileInput) {
+            m_audioFileInput->stop();
+            delete m_audioFileInput; m_audioFileInput = nullptr;
+        }
 
         int r = HACKRF_SUCCESS;
 
@@ -244,6 +249,10 @@ void HackRfDevice::reset()
         m_audioInput->stop();
         m_audioInput.reset();
     }
+    if(m_audioFileInput) {
+        m_audioFileInput->stop();
+        delete m_audioFileInput; m_audioFileInput = nullptr;
+    }
 
     // Stream buffer'ları temizle
     stream_tx.free();
@@ -281,6 +290,10 @@ int HackRfDevice::hardReset()
             if (m_audioInput) {
                 m_audioInput->stop();
                 m_audioInput.reset();
+            }
+            if (m_audioFileInput) {
+                m_audioFileInput->stop();
+                delete m_audioFileInput; m_audioFileInput = nullptr;
             }
 
             if (hackrf_is_streaming(h_device) == HACKRF_TRUE) {
@@ -753,6 +766,12 @@ void HackRfDevice::setMicEnabled(bool enable)
 {
     if(!m_audioInput && enable)
     {
+        // Stop file input if running
+        if (m_audioFileInput) {
+            m_audioFileInput->stop();
+            delete m_audioFileInput; m_audioFileInput = nullptr;
+        }
+
         m_audioInput = std::make_unique<PortAudioInput>(stream_tx);
         if (!m_audioInput->start()) {
             std::cerr << "Failed to start PortAudioInput" << std::endl;
@@ -761,6 +780,33 @@ void HackRfDevice::setMicEnabled(bool enable)
     else if (m_audioInput && !enable) {
         m_audioInput->stop();
         m_audioInput.reset();
+    }
+}
+
+void HackRfDevice::setAudioFileEnabled(bool enable, const std::string& filePath, bool loop)
+{
+    if (enable && !filePath.empty())
+    {
+        // Stop mic if running
+        if (m_audioInput) {
+            m_audioInput->stop();
+            m_audioInput.reset();
+        }
+        // Stop previous file playback if running
+        if (m_audioFileInput) {
+            m_audioFileInput->stop();
+            delete m_audioFileInput; m_audioFileInput = nullptr;
+        }
+
+        m_audioFileInput = new AudioFileInput(stream_tx);
+        if (!m_audioFileInput->start(filePath, loop)) {
+            std::cerr << "Failed to start AudioFileInput: " << filePath << std::endl;
+            delete m_audioFileInput; m_audioFileInput = nullptr;
+        }
+    }
+    else if (m_audioFileInput && !enable) {
+        m_audioFileInput->stop();
+        delete m_audioFileInput; m_audioFileInput = nullptr;
     }
 }
 

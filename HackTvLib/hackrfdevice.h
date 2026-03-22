@@ -16,6 +16,9 @@
 #include "audioinput.h"
 #include "types.h"
 
+// Forward declaration - full include only in .cpp
+class AudioFileInput;
+
 typedef enum RfMode {
     TX,
     RX,
@@ -63,6 +66,7 @@ public:
     void setDecimation(int newDecimation);
     void setInterpolation(float newInterpolation);
     void setMicEnabled(bool enable);
+    void setAudioFileEnabled(bool enable, const std::string& filePath = "", bool loop = true);
 
     // Getter'lar
     uint64_t getFrequency() const;
@@ -87,6 +91,7 @@ private:
 
     // Audio input
     std::unique_ptr<PortAudioInput> m_audioInput;
+    AudioFileInput* m_audioFileInput = nullptr;
 
     // Thread safety için mutex
     std::shared_ptr<std::mutex> m_deviceMutex;

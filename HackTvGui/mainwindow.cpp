@@ -540,7 +540,7 @@ void MainWindow::addinputTypeGroup()
     inputTypeLayout->setSpacing(6);
     inputTypeLayout->setContentsMargins(8, 16, 8, 6);
     inputTypeCombo = new QComboBox(this);
-    inputTypeCombo->addItems({ "Fm Transmitter Mic", "Video File", "Video Test Signal", "Video Rtsp Stream"});
+    inputTypeCombo->addItems({ "Fm Transmitter Mic", "Fm Transmitter File", "Video File", "Video Test Signal", "Video Rtsp Stream"});
     inputTypeLayout->addWidget(inputTypeCombo);
 
     inputFileEdit = new QLineEdit(this);
@@ -1061,7 +1061,7 @@ QStringList MainWindow::buildCommand()
 
     switch(inputTypeCombo->currentIndex())
     {
-    case 0: // fmtransmitter
+    case 0: // Fm Transmitter Mic
         args << "fmtransmitter";
         if(mode == "tx")
         {
@@ -1069,15 +1069,24 @@ QStringList MainWindow::buildCommand()
             sampleRateCombo->setCurrentIndex(0);
         }
         break;
-    case 1: // File
+    case 1: // Fm Transmitter File
+        args << "fmtransmitter";
+        if(mode == "tx" && !inputFileEdit->text().isEmpty())
+        {
+            m_hackTvLib->setMicEnabled(false);
+            m_hackTvLib->setAudioFilePath(inputFileEdit->text().toStdString(), true);
+            sampleRateCombo->setCurrentIndex(0);
+        }
+        break;
+    case 2: // Video File
         if (!inputFileEdit->text().isEmpty()) {
             args << inputFileEdit->text();
         }
         break;
-    case 2: // Test
+    case 3: // Video Test Signal
         args << "test";
         break;
-    case 3: // FFmpeg
+    case 4: // Video Rtsp Stream
     {
         QString ffmpegArg = "ffmpeg:";
         if (!ffmpegOptionsEdit->text().isEmpty()) {
@@ -1105,6 +1114,23 @@ QStringList MainWindow::buildCommand()
 
 void MainWindow::chooseFile()
 {
+    // Set file filter and directory based on current input type
+    if (isFmFile) {
+        fileDialog->setNameFilter("Audio Files (*.wav *.mp3 *.flac *.ogg *.aac *.wma *.m4a);;Video Files (*.mp4 *.mkv *.avi *.flv *.mov *.webm);;All Files (*)");
+        QString musicDir = QStandardPaths::writableLocation(QStandardPaths::MusicLocation);
+        if (musicDir.isEmpty() || !QDir(musicDir).exists()) {
+            musicDir = QDir::homePath() + "/Music";
+        }
+        fileDialog->setDirectory(musicDir);
+    } else {
+        fileDialog->setNameFilter("Video Files (*.flv *.mp4 *.mkv *.avi *.mov);;All Files (*)");
+        QString videoDir = QDir::homePath() + "/Desktop/Videos";
+        if (!QDir(videoDir).exists()) {
+            videoDir = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+        }
+        fileDialog->setDirectory(videoDir);
+    }
+
     if (fileDialog->exec()) {
         QStringList selectedFiles = fileDialog->selectedFiles();
         if (!selectedFiles.isEmpty()) {
@@ -1131,12 +1157,16 @@ void MainWindow::updateLogDisplay()
 
 void MainWindow::onInputTypeChanged(int index)
 {   
+    // 0: Fm Transmitter Mic, 1: Fm Transmitter File, 2: Video File, 3: Video Test Signal, 4: Video Rtsp Stream
     isFmTransmit = (index == 0);
-    isFile = (index == 1);
-    isTest = (index == 2);
-    isFFmpeg = (index == 3);
+    isFmFile = (index == 1);
+    isFile = (index == 2);
+    isTest = (index == 3);
+    isFFmpeg = (index == 4);
 
-    if(isFmTransmit)
+    bool isFmAny = isFmTransmit || isFmFile;
+
+    if(isFmAny)
         sampleRateCombo->setCurrentIndex(0);
     else
     {
@@ -1147,29 +1177,29 @@ void MainWindow::onInputTypeChanged(int index)
         }
     }
 
-    inputFileEdit->setVisible(isFile);
-    chooseFileButton->setVisible(isFile);
+    inputFileEdit->setVisible(isFile || isFmFile);
+    chooseFileButton->setVisible(isFile || isFmFile);
     ffmpegOptionsEdit->setVisible(isFFmpeg);
     modeGroup->setVisible(isFile || isTest || isFFmpeg);
 
-    txAmplitudeSlider->setVisible(isFmTransmit);
-    txAmplitudeSpinBox->setVisible(isFmTransmit);
-    txFilterSizeSlider->setVisible(isFmTransmit);
-    txFilterSizeSpinBox->setVisible(isFmTransmit);
-    txModulationIndexSlider->setVisible(isFmTransmit);
-    txModulationIndexSpinBox->setVisible(isFmTransmit);
-    txInterpolationSlider->setVisible(isFmTransmit);
-    txInterpolationSpinBox->setVisible(isFmTransmit);
-    txAmpSlider->setVisible(isFmTransmit);
-    txAmpSpinBox->setVisible(isFmTransmit);
-    tx_line->setVisible(isFmTransmit);
+    txAmplitudeSlider->setVisible(isFmAny);
+    txAmplitudeSpinBox->setVisible(isFmAny);
+    txFilterSizeSlider->setVisible(isFmAny);
+    txFilterSizeSpinBox->setVisible(isFmAny);
+    txModulationIndexSlider->setVisible(isFmAny);
+    txModulationIndexSpinBox->setVisible(isFmAny);
+    txInterpolationSlider->setVisible(isFmAny);
+    txInterpolationSpinBox->setVisible(isFmAny);
+    txAmpSlider->setVisible(isFmAny);
+    txAmpSpinBox->setVisible(isFmAny);
+    tx_line->setVisible(isFmAny);
 
     // Also hide/show labels (columns 0 and 3 in the 2-column grid)
     for (int i = 0; i < txControlsLayout->rowCount(); ++i) {
         for (int c : {0, 3}) {
             QLayoutItem* item = txControlsLayout->itemAtPosition(i, c);
             if (item && item->widget()) {
-                item->widget()->setVisible(isFmTransmit);
+                item->widget()->setVisible(isFmAny);
             }
         }
     }

@@ -223,6 +223,7 @@ SOURCES += \
     rtlsdrdevice.cpp
 
 HEADERS += \
+    audiofileinput.h \
     audioinput.h \
     constants.h \
     hackrfdevice.h \
