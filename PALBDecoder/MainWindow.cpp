@@ -172,6 +172,7 @@ void MainWindow::setupUI()
 
     // Invert checkbox
     m_invertVideoCheckBox = new QCheckBox("Invert Video (Negative)", this);
+    m_invertVideoCheckBox->setChecked(true);
     m_invertVideoCheckBox->setStyleSheet("QCheckBox { font-weight: bold; }");
     connect(m_invertVideoCheckBox, &QCheckBox::stateChanged,
             this, &MainWindow::onInvertVideoChanged);
@@ -770,6 +771,21 @@ void MainWindow::applyFrequencyChange()
     if (m_palDecoder) {
         m_palDecoder->setTuneFrequency(m_currentFrequency);
     }
+
+    // Update audio carrier: audio carrier in baseband = (videoCarrier + 5.5MHz) - tuneFreq
+    if (m_audioDemodulator) {
+        double tuneMHz = m_currentFrequency / 1.0e6;
+        double videoCarrierMHz;
+        if (tuneMHz >= 470.0 && tuneMHz <= 862.0) {
+            int ch = static_cast<int>(std::floor((tuneMHz - 470.0 - 0.001) / 8.0));
+            if (ch < 0) ch = 0;
+            videoCarrierMHz = 470.0 + ch * 8.0 + 1.25;
+        } else {
+            videoCarrierMHz = tuneMHz;
+        }
+        double audioCarrierBasebandHz = (videoCarrierMHz + 5.5 - tuneMHz) * 1.0e6;
+        m_audioDemodulator->setAudioCarrierFreq(audioCarrierBasebandHz);
+    }
 }
 
 void MainWindow::onVideoGainChanged(int value)
@@ -944,9 +960,8 @@ void MainWindow::toggleHackRF()
             m_hackTvLib->setRxAmpGain(14);
 
             // Set PAL decoder tune frequency for correct NCO offset
-            if (m_palDecoder) {
-                m_palDecoder->setTuneFrequency(m_currentFrequency);
-            }
+            // and audio carrier frequency
+            applyFrequencyChange();
 
             m_startStopButton->setText("Stop HackRF");
             m_startStopButton->setStyleSheet(
