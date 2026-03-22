@@ -80,6 +80,7 @@ private:
     void processDemod(const std::vector<std::complex<float>>& samples);    
     void handleLog(const std::string& logMessage);
     void handleReceivedData(const int8_t *data, size_t len);
+    void updateGainControlsForDevice(const QString& device);
 
     QVBoxLayout *mainLayout;
 
@@ -92,8 +93,10 @@ private:
     QDoubleSpinBox *txAmplitudeSpinBox, *txFilterSizeSpinBox, *txModulationIndexSpinBox, *txInterpolationSpinBox;
     QSpinBox *txAmpSpinBox;
     QLabel *volumeLabel, *volumeLevelLabel, *lnaLabel, *lnaLevelLabel, *vgaLabel, *vgaLevelLabel,
-        *rxAmpLabel, *rxAmpLevelLabel;
+        *rxAmpLabel, *rxAmpLevelLabel, *rtlGainLabel, *rtlAgcLabel;
     QSlider *volumeSlider, *lnaSlider, *vgaSlider, *txAmpSlider, *rxAmpSlider;
+    QComboBox *rtlGainCombo;
+    QCheckBox *rtlAgcCheckBox;
     QFileDialog *fileDialog;
     CFreqCtrl *freqCtrl;
     CPlotter *cPlotter;
@@ -128,9 +131,9 @@ private:
     bool isTx, isFmTransmit, isFmFile, isFile, isTest, isFFmpeg;
 
     float audioGain = 0.75f;
-    int m_LowCutFreq = -75e3;
-    int m_HiCutFreq = 75e3;
-    int m_CutFreq = 75e3;
+    int m_LowCutFreq = -120e3;
+    int m_HiCutFreq = 120e3;
+    int m_CutFreq = 120e3;
     int flo = -5000;
     int fhi = 5000;
     int click_res = 100;

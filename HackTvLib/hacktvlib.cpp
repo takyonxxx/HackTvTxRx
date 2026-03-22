@@ -286,11 +286,6 @@ void HackTvLib::setLnaGain(unsigned int lna_gain)
     if (hackRfDevice) {
         hackRfDevice->setLnaGain(lna_gain);
     }
-    if (rtlSdrDevice) {
-        // RTL-SDR: LNA slider maps to tuner gain (tenths of dB)
-        // GUI range 0-40 → RTL-SDR 0-400 (0.0 - 40.0 dB)
-        rtlSdrDevice->setGain(static_cast<int>(lna_gain * 10));
-    }
 }
 
 void HackTvLib::setVgaGain(unsigned int vga_gain)
@@ -298,7 +293,6 @@ void HackTvLib::setVgaGain(unsigned int vga_gain)
     if (hackRfDevice) {
         hackRfDevice->setVgaGain(vga_gain);
     }
-    // RTL-SDR has no separate VGA gain - ignore
 }
 
 void HackTvLib::setTxAmpGain(unsigned int tx_amp_gain)
@@ -306,18 +300,12 @@ void HackTvLib::setTxAmpGain(unsigned int tx_amp_gain)
     if (hackRfDevice) {
         hackRfDevice->setTxAmpGain(tx_amp_gain);
     }
-    // RTL-SDR is RX only - no TX amp
 }
 
 void HackTvLib::setRxAmpGain(unsigned int rx_amp_gain)
 {
     if (hackRfDevice) {
         hackRfDevice->setRxAmpGain(rx_amp_gain);
-    }
-    if (rtlSdrDevice) {
-        // RTL-SDR: Amp slider toggles AGC mode
-        // 0 = AGC on, >0 = AGC off (manual gain via LNA slider)
-        rtlSdrDevice->setAgcMode(rx_amp_gain == 0);
     }
 }
 
@@ -1853,9 +1841,13 @@ bool HackTvLib::start()
                 rtlSampleRate = 2000000;
             }
 
-            if (rtlSdrDevice->initialize(0, rtlSampleRate, s->frequency, s->gain)) {
+            if (rtlSdrDevice->initialize(0, rtlSampleRate, s->frequency, 0)) {
+                // RTL-SDR: use auto gain for best results
+                rtlSdrDevice->setAutoGain(true);
+                rtlSdrDevice->setAgcMode(true);
+
                 rtlSdrDevice->start();
-                log("HackTvLib started in RX mode with RTL-SDR.");
+                log("HackTvLib started in RX mode with RTL-SDR (auto gain).");
                 return true;
             } else {
                 log("Could not open RTL-SDR. Please check the device.");

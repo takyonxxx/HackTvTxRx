@@ -20,8 +20,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_frequency(DEFAULT_FREQUENCY),
     m_sampleRate(DEFAULT_SAMPLE_RATE),
     m_volumeLevel(10),
-    m_LowCutFreq(-1*int(DEFAULT_CUT_OFF)),
-    m_HiCutFreq(DEFAULT_CUT_OFF),
+    m_LowCutFreq(-120000),
+    m_HiCutFreq(120000),
     m_shuttingDown(false),
     m_isProcessing(false)
 {
@@ -116,13 +116,13 @@ void MainWindow::setupUi()
     connect(sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onSampleRateChanged);
 
-    // When device type changes, enforce RTL-SDR sample rate limit
+    // When device type changes, update gain controls and sample rate
     connect(outputCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int index) {
         QString device = outputCombo->currentData().toString();
+        updateGainControlsForDevice(device);
         if (device == "rtlsdr") {
-            // RTL-SDR max ~2.4 MHz - force 2 MHz
-            sampleRateCombo->setCurrentIndex(0); // "2 MHz" is first item
+            sampleRateCombo->setCurrentIndex(0); // 2 MHz for RTL-SDR
         }
     });
 }
@@ -665,7 +665,7 @@ void MainWindow::addRxGroup()
 
     cPlotter->setFftRange(-100.0f, 0.0f);
     cPlotter->setPandapterRange(-140.f, 20.f);
-    cPlotter->setDemodRanges(-1*DEFAULT_CUT_OFF, -_KHZ(5), _KHZ(5), DEFAULT_CUT_OFF, true);
+    cPlotter->setDemodRanges(-200000, -_KHZ(5), _KHZ(5), 200000, true);
 
     cPlotter->setFreqUnits(1000);
     cPlotter->setPercent2DScreen(50);
@@ -777,6 +777,68 @@ void MainWindow::addRxGroup()
     controlsGrid->addWidget(rxAmpSlider, 0, 10);
     controlsGrid->addWidget(rxAmpLevelLabel, 0, 11);
 
+    // RTL-SDR specific gain controls (hidden by default, shown when RTL-SDR selected)
+    rtlGainLabel = new QLabel("Gain:", rxGroup);
+    rtlGainLabel->setStyleSheet("QLabel { color: #c8f0ff; font-size: 11px; font-weight: bold; }");
+    rtlGainCombo = new QComboBox(rxGroup);
+    rtlGainCombo->setMinimumWidth(80);
+    // R820T typical gain values (dB)
+    QVector<QPair<QString, int>> rtlGains = {
+        {"0.0 dB", 0}, {"0.9 dB", 9}, {"1.4 dB", 14}, {"2.7 dB", 27},
+        {"3.7 dB", 37}, {"7.7 dB", 77}, {"8.7 dB", 87}, {"12.5 dB", 125},
+        {"14.4 dB", 144}, {"15.7 dB", 157}, {"16.6 dB", 166}, {"19.7 dB", 197},
+        {"20.7 dB", 207}, {"22.9 dB", 229}, {"25.4 dB", 254}, {"28.0 dB", 280},
+        {"29.7 dB", 297}, {"32.8 dB", 328}, {"33.8 dB", 338}, {"36.4 dB", 364},
+        {"37.2 dB", 372}, {"38.6 dB", 386}, {"40.2 dB", 402}, {"42.1 dB", 421},
+        {"43.4 dB", 434}, {"43.9 dB", 439}, {"44.5 dB", 445}, {"48.0 dB", 480},
+        {"49.6 dB", 496}
+    };
+    for (const auto& g : rtlGains) {
+        rtlGainCombo->addItem(g.first, g.second);
+    }
+    // Default to ~20 dB
+    int defaultGainIdx = rtlGainCombo->findData(207);
+    if (defaultGainIdx >= 0) rtlGainCombo->setCurrentIndex(defaultGainIdx);
+
+    rtlAgcLabel = new QLabel("AGC:", rxGroup);
+    rtlAgcLabel->setStyleSheet("QLabel { color: #c8f0ff; font-size: 11px; font-weight: bold; }");
+    rtlAgcCheckBox = new QCheckBox("Auto", rxGroup);
+    rtlAgcCheckBox->setChecked(false);
+
+    controlsGrid->addWidget(rtlGainLabel, 1, 0);
+    controlsGrid->addWidget(rtlGainCombo, 1, 1, 1, 2);
+    controlsGrid->addWidget(rtlAgcLabel, 1, 3);
+    controlsGrid->addWidget(rtlAgcCheckBox, 1, 4);
+
+    // Connect RTL-SDR gain controls
+    connect(rtlGainCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int idx) {
+        int gainValue = rtlGainCombo->currentData().toInt();
+        if (m_isProcessing && m_hackTvLib) {
+            // Pass gain value directly — hacktvlib routes to rtlSdrDevice->setGain()
+            // We use LNA slider value as a carrier: encode RTL gain as-is
+            // But LNA is unsigned int 0-40 range... use setRxAmpGain as proxy
+            // Actually, map gainValue back to LNA range: gain/496*40
+            unsigned int lnaEquiv = static_cast<unsigned int>(gainValue * 40.0f / 496.0f);
+            m_hackTvLib->setLnaGain(lnaEquiv);
+        }
+        saveSettings();
+    });
+
+    connect(rtlAgcCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
+        rtlGainCombo->setEnabled(!checked);
+        if (m_isProcessing && m_hackTvLib) {
+            m_hackTvLib->setVgaGain(checked ? 0 : 1);
+        }
+        saveSettings();
+    });
+
+    // Initially hide RTL-SDR controls (shown when RTL-SDR selected)
+    rtlGainLabel->setVisible(false);
+    rtlGainCombo->setVisible(false);
+    rtlAgcLabel->setVisible(false);
+    rtlAgcCheckBox->setVisible(false);
+
     // Stretch the slider columns equally
     controlsGrid->setColumnStretch(1, 1);
     controlsGrid->setColumnStretch(4, 1);
@@ -791,6 +853,28 @@ void MainWindow::addRxGroup()
 
     rxLayout->addLayout(controlsGrid);
     mainLayout->addWidget(rxGroup, 1); // stretch factor 1 so rxGroup expands
+}
+
+void MainWindow::updateGainControlsForDevice(const QString& device)
+{
+    bool isRtlSdr = (device == "rtlsdr");
+
+    // HackRF controls
+    lnaLabel->setVisible(!isRtlSdr);
+    lnaSlider->setVisible(!isRtlSdr);
+    lnaLevelLabel->setVisible(!isRtlSdr);
+    vgaLabel->setVisible(!isRtlSdr);
+    vgaSlider->setVisible(!isRtlSdr);
+    vgaLevelLabel->setVisible(!isRtlSdr);
+    rxAmpLabel->setVisible(!isRtlSdr);
+    rxAmpSlider->setVisible(!isRtlSdr);
+    rxAmpLevelLabel->setVisible(!isRtlSdr);
+
+    // RTL-SDR: no gain controls — auto gain only
+    rtlGainLabel->setVisible(false);
+    rtlGainCombo->setVisible(false);
+    rtlAgcLabel->setVisible(false);
+    rtlAgcCheckBox->setVisible(false);
 }
 
 void MainWindow::onVolumeSliderValueChanged(int value)
@@ -921,8 +1005,9 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
 {
     m_LowCutFreq = low;
     m_HiCutFreq = high;
-    if (m_isProcessing)
-        lowPassFilter->designFilter(m_sampleRate, m_LowCutFreq, transitionWidth);
+    m_CutFreq = std::abs(high);
+    if (m_isProcessing && lowPassFilter)
+        lowPassFilter->designFilter(m_sampleRate, m_CutFreq, 50000);
     saveSettings();
 }
 
@@ -963,9 +1048,50 @@ void MainWindow::executeCommand()
 
         if(mode == "rx")
         {
-            lowPassFilter = std::make_unique<LowPassFilter>(m_sampleRate, m_CutFreq, transitionWidth);
-            rationalResampler = std::make_unique<RationalResampler>(interpolation, decimation);
-            fmDemodulator = std::make_unique<FMDemodulator>(quadratureRate, audioDecimation);
+            // WFM demodulation chain:
+            // LowPassFilter: sampleRate → cutoff filter + internal decimation
+            //   (2 MHz → decim=7 → ~286 kHz output)
+            // RationalResampler: pass-through (1:1) — LPF already decimated
+            // FMDemodulator: quadratureRate with internal audio decimation to ~48 kHz
+            //
+            // LowPassFilter.calculateDecimation gives:
+            //   2 MHz → 7, 4 MHz → 14, 8 MHz → 28, 16 MHz → 56
+            // So post-LPF rate ≈ sampleRate / decim ≈ 286 kHz
+
+            int wfmCutoff = 120000; // 120 kHz for full WFM bandwidth
+            double wfmTransition = 50000;
+
+            // Calculate what LowPassFilter will decimate to
+            int lpfDecim;
+            if (m_sampleRate <= 2000000) lpfDecim = 7;
+            else if (m_sampleRate <= 4000000) lpfDecim = 14;
+            else if (m_sampleRate <= 8000000) lpfDecim = 28;
+            else if (m_sampleRate <= 10000000) lpfDecim = 35;
+            else if (m_sampleRate <= 12500000) lpfDecim = 44;
+            else if (m_sampleRate <= 16000000) lpfDecim = 56;
+            else lpfDecim = 70;
+
+            double postLpfRate = static_cast<double>(m_sampleRate) / lpfDecim;
+
+            // RationalResampler: 1:1 pass-through (no additional resampling needed)
+            int rxInterpolation = 1;
+            int rxDecimation = 1;
+
+            // Audio decimation: target exactly 48 kHz for AudioOutput compatibility
+            // Use round() instead of floor() to get closest match
+            int rxAudioDecimation = std::max(1, static_cast<int>(std::round(postLpfRate / 48000.0)));
+            double actualAudioRate = postLpfRate / rxAudioDecimation;
+
+            qDebug() << "RX demod chain:"
+                     << "sampleRate=" << m_sampleRate
+                     << "lpfDecim=" << lpfDecim
+                     << "postLpfRate=" << postLpfRate
+                     << "audioDecim=" << rxAudioDecimation
+                     << "audioRate=" << actualAudioRate;
+
+            lowPassFilter = std::make_unique<LowPassFilter>(m_sampleRate, wfmCutoff, wfmTransition);
+            rationalResampler = std::make_unique<RationalResampler>(rxInterpolation, rxDecimation);
+            fmDemodulator = std::make_unique<FMDemodulator>(postLpfRate, rxAudioDecimation);
         }
 
         cPlotter->setSampleRate(m_sampleRate);
