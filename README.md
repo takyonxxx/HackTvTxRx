@@ -1,6 +1,6 @@
 # HackTvRxTx - SDR Transceiver & Analog TV Decoder
 
-A Qt 6.x based SDR (Software Defined Radio) application for HackRF One and RTL-SDR devices. Includes wideband FM receiver with real-time FFT spectrum analyzer, waterfall display, FM stereo transmitter (mic & file), analog TV PAL B/G transmitter, and a standalone PAL-B/G TV decoder.
+A Qt 6.x based SDR (Software Defined Radio) application for HackRF One and RTL-SDR devices. Includes wideband FM receiver with real-time FFT spectrum analyzer, waterfall display, FM stereo transmitter (mic & file), analog TV PAL B/G transmitter, and a standalone PAL-B/G TV decoder with real-time FM audio demodulation.
 
 Based on [fsphil/hacktv](https://github.com/fsphil/hacktv) with significant modifications for cross-platform GUI operation.
 
@@ -27,16 +27,59 @@ Based on [fsphil/hacktv](https://github.com/fsphil/hacktv) with significant modi
 - **Cross-platform**: Windows (MinGW 64-bit) and macOS
 
 ### PALBDecoder - Analog TV Receiver
-- **PAL-B/G Video Decoder**: Real-time analog TV reception and decoding at 576x384 resolution
-- **UHF TV Band**: Channel selection from E21 (470 MHz) to E69 (862 MHz)
-- **Video Processing**: Adjustable gain, offset, chroma gain, video inversion, color/monochrome mode
-- **Sync Detection**: Real-time sync percentage display with adjustable threshold
-- **Audio Demodulation**: FM audio carrier demodulation with adjustable gain and volume
+- **PAL-B/G Video Decoder**: Real-time analog TV reception and decoding at 720x576 resolution with SDRangel-style sync detection
+- **Dynamic Sample Rate**: Selectable 12.5, 16, 20 MHz — all timing, filters, and decimation chains automatically recalculated per rate
+- **Full TV Band Coverage**: VHF Band I (E2-E4, 47-68 MHz), VHF Band III (E5-E12, 174-230 MHz), UHF Band IV/V (E21-E69, 470-862 MHz) with automatic video carrier offset calculation per channel
+- **Video Processing**: Adjustable gain, offset, chroma gain, video inversion, color/monochrome mode with automatic AGC
+- **Flywheel Sync Detection**: SDRangel-style horizontal sync with fractional zero-crossing detection, flywheel error tracking, and combined quality metric (detection rate + error magnitude). Real-time sync quality percentage display
+- **FM Audio Demodulation**: Narrowband FM audio demod pipeline — frequency shift to baseband, complex IQ decimation, narrowband FM demod at ~160 kHz, multi-stage decimation to 48 kHz output. Automatic Nyquist check disables audio when carrier exceeds bandwidth. Adjustable audio gain and volume controls
+- **IQ Recording**: Record raw int8 IQ data to file (0.5 second capture) for offline analysis
 - **HackRF Integration**: Direct HackRF One control with LNA, VGA, and RX Amp gain settings
+- **Multi-threaded Processing**: Separate thread pool for video and audio demodulation with atomic frame-skip guards for video and continuous processing for audio
 
 ![PALBDecoder Screenshot](paldecoder.jpg)
 
 ## Architecture
+
+### PAL-B/G Audio Demodulation Pipeline
+
+```
+HackRF IQ (16 MHz)
+       │
+       ▼
+┌──────────────────────────────────────────────────────────┐
+│  Frequency Shift: carrier (5.5 MHz + tune offset) → DC  │
+│  Complex IQ, NCO with persistent phase                   │
+└──────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌──────────────────────────────────────────────────────────┐
+│  Complex IQ Decimation (narrowband filtering)            │
+│  Stage 0: 16 MHz → 1.6 MHz (÷10, 33-tap FIR)          │
+│  Stage 1: 1.6 MHz → 160 kHz (÷10, 33-tap FIR)         │
+│  Anti-alias filter applied to I and Q separately         │
+└──────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌──────────────────────────────────────────────────────────┐
+│  FM Demodulation (atan2 phase difference)                │
+│  Narrowband signal at 160 kHz — clean FM demod           │
+│  Output: scaled phase delta (×0.3)                       │
+└──────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌──────────────────────────────────────────────────────────┐
+│  Real-valued Decimation                                   │
+│  Stage 2: 160 kHz → 53.3 kHz (÷3, 17-tap FIR)         │
+│  Resample: 53.3 kHz → 48 kHz (linear interpolation)     │
+│  Final: 15 kHz bandwidth filter at 48 kHz                │
+└──────────────────────────────────────────────────────────┘
+       │
+       ▼
+  Audio Output (48 kHz, 16-bit stereo, 10ms chunks)
+```
+
+The decimation chain is dynamically computed by `rebuildDecimationChain()` when the sample rate changes. At each stage, the algorithm greedily selects the largest safe integer decimation factor. Complex IQ decimation runs before FM demod (critical — FM demod on wideband signal produces noise), then remaining stages run on the real-valued demodulated audio.
 
 ### FM Transmitter Audio Pipeline
 
@@ -120,9 +163,11 @@ HackTvRxTx/
 │   ├── audiooutput.cpp/h  # Audio playback engine
 │   └── modulator.h        # FM/AM modulation DSP (RX side)
 ├── PALBDecoder/           # Standalone PAL-B/G TV decoder application
-│   ├── MainWindow.cpp/h   # Decoder GUI with video display
-│   ├── PALDecoder.cpp/h   # PAL video decoding engine
-│   └── audiodemodulator.*  # FM audio demodulator
+│   ├── MainWindow.cpp/h   # Decoder GUI with video display & HackRF control
+│   ├── PALDecoder.cpp/h   # PAL video decoding engine (sync, AGC, color)
+│   ├── audiodemodulator.*  # FM audio demodulator (dynamic decimation chain)
+│   ├── audiooutput.cpp/h  # Audio playback engine (48 kHz, FFmpeg backend)
+│   └── FrameBuffer.h      # IQ frame accumulator (40ms PAL frames)
 ├── include/               # Shared headers
 └── lib/                   # Pre-built libraries (windows/macos/linux)
 ```
