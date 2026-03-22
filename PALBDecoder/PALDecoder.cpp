@@ -157,7 +157,7 @@ std::vector<float> PALDecoder::designLowPassFIR(float cutoff, float sampleRate, 
 }
 
 std::vector<float> PALDecoder::designBandPassFIR(float centerFreq, float bandwidth,
-                                                   float sampleRate, int numTaps)
+                                                 float sampleRate, int numTaps)
 {
     std::vector<float> taps(numTaps);
     float fc = centerFreq / sampleRate;
@@ -316,7 +316,7 @@ void PALDecoder::processSamples(const int8_t* data, size_t len)
         samples.emplace_back(
             static_cast<float>(data[i]) / 128.0f,
             static_cast<float>(data[i + 1]) / 128.0f
-        );
+            );
     }
     processSamples(samples);
 }
@@ -334,8 +334,8 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
             float syncRate = m_linesProcessed > 0 ?
                                  (m_syncDetected * 100.0f / m_linesProcessed) : 0.0f;
             QMetaObject::invokeMethod(this, [this, syncRate]() {
-                emit syncStatsUpdated(syncRate, m_peakLevel, m_minLevel);
-            }, Qt::QueuedConnection);
+                    emit syncStatsUpdated(syncRate, m_peakLevel, m_minLevel);
+                }, Qt::QueuedConnection);
         }
 
         // NCO frequency shift
@@ -348,7 +348,7 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         std::complex<float> shifted(
             sample.real() * ncoI - sample.imag() * ncoQ,
             sample.real() * ncoQ + sample.imag() * ncoI
-        );
+            );
 
         // Video IQ LPF (4.8 MHz cutoff - rejects audio carrier)
         std::complex<float> filtered = applyVideoFilter(shifted);
@@ -477,7 +477,7 @@ void PALDecoder::finalizeLine()
                 // Luma with linear interpolation
                 float Y0 = (m_lineBuffer[idx] + 1.0f) * 0.5f;
                 float Y1 = (idx + 1 < samplesToUse) ?
-                                (m_lineBuffer[idx + 1] + 1.0f) * 0.5f : Y0;
+                               (m_lineBuffer[idx + 1] + 1.0f) * 0.5f : Y0;
                 float Y = Y0 + (Y1 - Y0) * frac;
                 Y = Y * m_videoGain + m_videoOffset;
                 Y = clipValue(Y, 0.0f, 1.0f);

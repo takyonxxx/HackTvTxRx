@@ -67,7 +67,7 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     qDebug() << "MainWindow destructor started";
-    m_shuttingDown = true;   
+    m_shuttingDown = true;
 
     // Stop HackRF FIRST
     if (m_hackTvLib && m_hackRfRunning) {
@@ -245,7 +245,7 @@ void MainWindow::setupUI()
             this, &MainWindow::onAudioGainChanged);
     connect(m_audioGainSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             [this](double value) {
-                m_audioGainSlider->setValue(static_cast<int>(value * 10));                
+                m_audioGainSlider->setValue(static_cast<int>(value * 10));
             });
 
     audioGainLayout->addWidget(m_audioGainSlider, 1);
@@ -703,7 +703,7 @@ void MainWindow::onColorModeChanged(int state)
 void MainWindow::onChromaGainChanged(int value)
 {
     float chromaGain = value / 100.0f;
-    
+
     m_chromaGainSpinBox->blockSignals(true);
     m_chromaGainSpinBox->setValue(chromaGain);
     m_chromaGainSpinBox->blockSignals(false);
@@ -1150,7 +1150,7 @@ void MainWindow::startPalAudioProcessing(std::shared_ptr<std::vector<std::comple
 {
     QtConcurrent::run(QThreadPool::globalInstance(), [this, audioPtr]() {
         AtomicGuard guard(audioDemodulationInProgress);
-        try {          
+        try {
             if (m_audioDemodulator) {
                 m_audioDemodulator->processSamples(*audioPtr);
             }
@@ -1170,7 +1170,7 @@ void MainWindow::startPalVideoProcessing(std::shared_ptr<std::vector<std::comple
 {
     QtConcurrent::run(m_threadPool, [this, framePtr]() {
         AtomicGuard guard(palDemodulationInProgress);
-        try {          
+        try {
             if(m_palDecoder)
             {
                 m_palDecoder->processSamples(*framePtr);
@@ -1184,4 +1184,3 @@ void MainWindow::startPalVideoProcessing(std::shared_ptr<std::vector<std::comple
         }
     });
 }
-
