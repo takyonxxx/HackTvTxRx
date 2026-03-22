@@ -115,6 +115,16 @@ void MainWindow::setupUi()
             this, &MainWindow::onRxTxTypeChanged);
     connect(sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onSampleRateChanged);
+
+    // When device type changes, enforce RTL-SDR sample rate limit
+    connect(outputCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
+        QString device = outputCombo->currentData().toString();
+        if (device == "rtlsdr") {
+            // RTL-SDR max ~2.4 MHz - force 2 MHz
+            sampleRateCombo->setCurrentIndex(0); // "2 MHz" is first item
+        }
+    });
 }
 
 void MainWindow::setCurrentSampleRate(int sampleRate)

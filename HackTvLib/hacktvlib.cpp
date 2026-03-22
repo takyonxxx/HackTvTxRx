@@ -1833,7 +1833,15 @@ bool HackTvLib::start()
                 this->dataReceived(data, len);
             });
 
-            if (rtlSdrDevice->initialize(s->samplerate, s->frequency)) {
+            // RTL-SDR supports max ~3.2 MHz sample rate. Clamp to 2 MHz for stability.
+            uint32_t rtlSampleRate = s->samplerate;
+            if (rtlSampleRate > 2400000) {
+                fprintf(stderr, "RTL-SDR: clamping sample rate from %u to 2000000\n", rtlSampleRate);
+                fflush(stderr);
+                rtlSampleRate = 2000000;
+            }
+
+            if (rtlSdrDevice->initialize(0, rtlSampleRate, s->frequency, s->gain)) {
                 rtlSdrDevice->start();
                 log("HackTvLib started in RX mode with RTL-SDR.");
                 return true;
