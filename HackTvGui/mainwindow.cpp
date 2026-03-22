@@ -89,7 +89,6 @@ void MainWindow::setupUi()
     labelStyle = "QLabel { background-color: #ad6d0a ; color: white; border-radius: 3px; font-weight: bold; padding: 1px 4px; font-size: 11px; }";
 
     setWindowTitle("HackTvRxTx");
-    setMinimumSize(800, 500);
 
     QWidget *centralWidget = new QWidget(this);
     mainLayout = new QVBoxLayout(centralWidget);
@@ -541,7 +540,7 @@ void MainWindow::addinputTypeGroup()
     inputTypeLayout->setSpacing(6);
     inputTypeLayout->setContentsMargins(8, 16, 8, 6);
     inputTypeCombo = new QComboBox(this);
-    inputTypeCombo->addItems({ "Fm Transmitter", "File", "Test", "Video Stream"});
+    inputTypeCombo->addItems({ "Fm Transmitter Mic", "Video File", "Video Test Signal", "Video Rtsp Stream"});
     inputTypeLayout->addWidget(inputTypeCombo);
 
     inputFileEdit = new QLineEdit(this);
@@ -569,8 +568,20 @@ void MainWindow::addinputTypeGroup()
     clearButton = new QPushButton("CLEAR", this);
     clearButton->setMinimumHeight(28);
     connect(clearButton, &QPushButton::clicked, this, &MainWindow::clear);
+    hardResetButton = new QPushButton("HARD RESET", this);
+    hardResetButton->setMinimumHeight(28);
+    hardResetButton->setStyleSheet(
+        "QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #7a1a1a, stop:1 #551010); "
+        "color: #ffcccc; border: 1px solid #cc3333; border-radius: 4px; padding: 6px 15px; "
+        "font-weight: bold; text-transform: uppercase; font-size: 11px; }"
+        "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #992222, stop:1 #701515); "
+        "border: 1px solid #ff4444; }"
+        "QPushButton:pressed { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #551010, stop:1 #3a0a0a); }"
+    );
+    connect(hardResetButton, &QPushButton::clicked, this, &MainWindow::hardReset);
 
     buttonLayout->addWidget(executeButton, 2);
+    buttonLayout->addWidget(hardResetButton, 1);
     buttonLayout->addWidget(clearButton, 1);
     buttonLayout->addWidget(exitButton, 1);
 
@@ -910,6 +921,11 @@ void MainWindow::executeCommand()
 
     if (executeButton->text() == "START")
     {
+        // CRITICAL: frequencyEdit is the authoritative frequency source.
+        // Sync m_frequency, freqCtrl and cPlotter from it before anything else.
+        m_frequency = frequencyEdit->text().toLongLong();
+        freqCtrl->setFrequency(m_frequency);
+
         // Hard reset: destroy existing instance and create fresh one
         // This ensures clean USB state even after previous crash
         if (m_hackTvLib) {
@@ -1195,7 +1211,7 @@ void MainWindow::onRxTxTypeChanged(int index)
         }
     }
 
-    adjustSize();
+    // No adjustSize() - window is fixed size (1024x740)
     update();
 }
 
@@ -1320,6 +1336,68 @@ void MainWindow::onChannelChanged(int index)
         m_hackTvLib->setFrequency(m_frequency);
     }
     saveSettings();
+}
+
+void MainWindow::hardReset()
+{
+    qDebug() << "=== USB HARD RESET initiated ===";
+
+    // 1. Stop processing immediately
+    m_isProcessing.store(false);
+
+    // 2. If HackTvLib exists, use it for hard reset then destroy
+    if (m_hackTvLib) {
+        qDebug() << "Hard reset: clearing callbacks...";
+        m_hackTvLib->clearCallbacks();
+
+        qDebug() << "Hard reset: calling hackrf_reset() via HackTvLib...";
+        int result = m_hackTvLib->hardReset();
+        qDebug() << "Hard reset: hackrf_reset() result:" << result;
+
+        qDebug() << "Hard reset: deleting HackTvLib...";
+        delete m_hackTvLib;
+        m_hackTvLib = nullptr;
+    } else {
+        // No HackTvLib instance - create temporary one just for reset
+        qDebug() << "Hard reset: no active session, creating temporary HackTvLib for USB reset...";
+        HackTvLib* tempLib = new HackTvLib(this);
+        int result = tempLib->hardReset();
+        qDebug() << "Hard reset: hackrf_reset() result:" << result;
+        delete tempLib;
+    }
+
+    // 3. Wait for USB re-enumeration (device detaches and re-attaches)
+    qDebug() << "Hard reset: waiting for USB re-enumeration (3 seconds)...";
+    executeButton->setEnabled(false);
+    hardResetButton->setEnabled(false);
+
+    QTimer::singleShot(3000, this, [this]() {
+        executeButton->setEnabled(true);
+        hardResetButton->setEnabled(true);
+        qDebug() << "=== USB HARD RESET complete - device should be re-enumerated ===";
+    });
+
+    // 4. Reset DSP chain
+    lowPassFilter.reset();
+    rationalResampler.reset();
+    fmDemodulator.reset();
+
+    // 5. Reset UI state
+    executeButton->setText("START");
+
+    // 6. Sync frequency from frequencyEdit (authoritative source)
+    m_frequency = frequencyEdit->text().toLongLong();
+    freqCtrl->setFrequency(m_frequency);
+    cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
+    cPlotter->setSampleRate(m_sampleRate);
+    cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
+
+    // 7. Clear FFT pending flag
+    m_fftUpdatePending.storeRelease(0);
+
+    // 8. Clear log
+    logBrowser->clear();
+    pendingLogs.clear();
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)

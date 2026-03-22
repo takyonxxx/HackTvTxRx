@@ -256,6 +256,111 @@ void HackRfDevice::reset()
     decimation = 1;
 }
 
+int HackRfDevice::hardReset()
+{
+    // USB hard reset: hackrf_reset() causes the device to detach and re-attach
+    // on the USB bus (you will hear the USB plug/unplug sound on Windows).
+    // This is equivalent to physically unplugging and re-plugging the device.
+
+    fprintf(stderr, "=== HackRfDevice::hardReset() - USB DEVICE RESET ===\n");
+    fflush(stderr);
+
+    if (!m_deviceMutex) {
+        fprintf(stderr, "hardReset: mutex is null\n");
+        fflush(stderr);
+        return RF_ERROR;
+    }
+
+    try {
+        std::lock_guard<std::mutex> lock(*m_deviceMutex);
+
+        // Stop streaming first if running
+        if (m_isRunning.load() && h_device) {
+            m_isRunning.store(false);
+
+            if (m_audioInput) {
+                m_audioInput->stop();
+                m_audioInput.reset();
+            }
+
+            if (hackrf_is_streaming(h_device) == HACKRF_TRUE) {
+                if (mode == RX) {
+                    hackrf_stop_rx(h_device);
+                } else {
+                    hackrf_stop_tx(h_device);
+                }
+                // Wait for streaming to actually stop
+                int timeout = 30;
+                while (hackrf_is_streaming(h_device) == HACKRF_TRUE && timeout-- > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            }
+        }
+
+        // If we don't have a device handle, try to open one just for reset
+        bool need_open = (h_device == nullptr);
+        if (need_open) {
+            fprintf(stderr, "hardReset: no device handle, opening for reset...\n");
+            fflush(stderr);
+
+            listDevices();
+            if (device_serials.empty()) {
+                fprintf(stderr, "hardReset: no HackRF devices found\n");
+                fflush(stderr);
+                return RF_ERROR;
+            }
+
+            int r = hackrf_open_by_serial(device_serials[0].c_str(), &h_device);
+            if (r != HACKRF_SUCCESS || !h_device) {
+                fprintf(stderr, "hardReset: hackrf_open() failed: %s (%d)\n",
+                        hackrf_error_name(static_cast<hackrf_error>(r)), r);
+                fflush(stderr);
+                h_device = nullptr;
+                return RF_ERROR;
+            }
+        }
+
+        // === THE ACTUAL USB HARD RESET ===
+        fprintf(stderr, "hardReset: calling hackrf_reset() - USB detach/re-attach...\n");
+        fflush(stderr);
+
+        int r = hackrf_reset(h_device);
+
+        // After hackrf_reset(), the device handle is INVALID regardless of return code.
+        // The device has detached from USB and will re-enumerate.
+        h_device = nullptr;
+        m_isRunning.store(false);
+        m_isStopped.store(true);
+
+        if (r != HACKRF_SUCCESS) {
+            fprintf(stderr, "hardReset: hackrf_reset() returned: %s (%d) - device may still have reset\n",
+                    hackrf_error_name(static_cast<hackrf_error>(r)), r);
+            fflush(stderr);
+        } else {
+            fprintf(stderr, "hardReset: hackrf_reset() OK - device is re-enumerating on USB bus\n");
+            fflush(stderr);
+        }
+
+        // Clear internal state
+        stream_tx.free();
+        device_serials.clear();
+        device_board_ids.clear();
+
+        fprintf(stderr, "=== hardReset complete - wait for USB re-enumeration ===\n");
+        fflush(stderr);
+
+        return RF_OK;
+
+    } catch (const std::exception& e) {
+        fprintf(stderr, "Exception in hardReset(): %s\n", e.what());
+        fflush(stderr);
+        h_device = nullptr;
+        m_isRunning.store(false);
+        m_isStopped.store(true);
+        return RF_ERROR;
+    }
+}
+
 int HackRfDevice::start(rf_mode _mode)
 {
     fprintf(stderr, "HackRfDevice::start() ENTRY, mode=%d\n", _mode);

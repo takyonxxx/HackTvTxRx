@@ -329,7 +329,7 @@ int main(int argc, char *argv[])
         );
 
     MainWindow w;
-    w.resize(1024, 768);
+    w.setFixedSize(1024, 740);
     w.show();
     return a.exec();
 }

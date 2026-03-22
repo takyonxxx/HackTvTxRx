@@ -62,6 +62,7 @@ private slots:
     void onRxAmpSliderValueChanged(int value);
     void clear();
     void exitApp();
+    void hardReset();
 
 private:
     void initializeHackTvLib();
@@ -86,7 +87,7 @@ private:
     QComboBox *outputCombo, *channelCombo, *sampleRateCombo, *rxtxCombo, *inputTypeCombo, *modeCombo;
     QCheckBox *ampEnabled, *colorDisabled;
     QLineEdit *frequencyEdit, *inputFileEdit, *ffmpegOptionsEdit;
-    QPushButton *chooseFileButton, *executeButton, *exitButton, *clearButton;
+    QPushButton *chooseFileButton, *executeButton, *exitButton, *clearButton, *hardResetButton;
     QSlider *txAmplitudeSlider, *txFilterSizeSlider, *txModulationIndexSlider, *txInterpolationSlider;
     QDoubleSpinBox *txAmplitudeSpinBox, *txFilterSizeSpinBox, *txModulationIndexSpinBox, *txInterpolationSpinBox;
     QSpinBox *txAmpSpinBox;

@@ -35,6 +35,7 @@ public:
     int start(rf_mode mode);
     int stop();
     void reset();
+    int hardReset();
     bool isRunning() const { return m_isRunning.load() && !m_isStopped.load(); }
     bool isStopped() const { return m_isStopped.load(); }
     bool isReady() const { return !device_serials.empty(); }

@@ -1565,6 +1565,50 @@ bool HackTvLib::stop()
     return true; // Always return true since thread is stopped
 }
 
+int HackTvLib::hardReset()
+{
+    fprintf(stderr, "\n========================================\n");
+    fprintf(stderr, "HackTvLib::hardReset() - USB HARD RESET\n");
+    fprintf(stderr, "========================================\n");
+    fflush(stderr);
+
+    // First stop everything cleanly
+    stop();
+
+    int result = RF_ERROR;
+
+    // Create a temporary HackRfDevice just for the reset if needed
+    if (!hackRfDevice) {
+        fprintf(stderr, "hardReset: creating temporary HackRfDevice for reset...\n");
+        fflush(stderr);
+        try {
+            hackRfDevice = new HackRfDevice();
+        } catch (...) {
+            fprintf(stderr, "hardReset: failed to create HackRfDevice\n");
+            fflush(stderr);
+            return RF_ERROR;
+        }
+    }
+
+    // Call the USB hard reset
+    result = hackRfDevice->hardReset();
+
+    // Device handle is now invalid after reset, destroy the object
+    delete hackRfDevice;
+    hackRfDevice = nullptr;
+
+    if (rtlSdrDevice) {
+        delete rtlSdrDevice;
+        rtlSdrDevice = nullptr;
+    }
+
+    fprintf(stderr, "hardReset: result=%d\n", result);
+    fflush(stderr);
+
+    log("USB Hard Reset %s", result == RF_OK ? "completed" : "failed");
+    return result;
+}
+
 bool HackTvLib::start()
 {
     fprintf(stderr, "\n========================================\n");

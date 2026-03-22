@@ -41,6 +41,7 @@ public:
 
     bool start();
     bool stop();
+    int hardReset();
     void setLogCallback(LogCallback callback);
     void setReceivedDataCallback(DataCallback callback);
     void clearCallbacks();
