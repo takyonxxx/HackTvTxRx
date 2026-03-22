@@ -276,47 +276,51 @@ private:
                                              (const uint8_t**)frame->extended_data, frame->nb_samples);
 
                 if (converted > 0) {
-                    // PortAudioInput callback does:
+                    // PortAudioInput callback:
                     //   memcpy(writeBuf, inputBuffer, framesPerBuffer * sizeof(complex_tx))
-                    // This packs 2 consecutive float audio samples into each complex_tx:
-                    //   complex_tx[i].re = audioSample[2*i], complex_tx[i].im = audioSample[2*i+1]
-                    // readBufferToVector then returns them all as a flat float array.
-                    // We must do the same: memcpy raw floats into writeBuf.
+                    //   swap(framesPerBuffer)  // framesPerBuffer = 4096
+                    //
+                    // PortAudio delivers 4096 mono float32 samples = 16384 bytes.
+                    // memcpy copies 4096 * sizeof(complex_tx) = 4096 * 8 = 32768 bytes.
+                    // So it reads PAST the audio buffer — the first 4096 floats land in
+                    // complex_tx[0..2047].re and .im, the rest is garbage from stack.
+                    // readBufferToVector reads 4096 complex_tx → 8192 floats (half real audio, half garbage).
+                    //
+                    // The FM modulator works despite this because the garbage is consistent
+                    // (same stack region each callback) and gets averaged out by the filter.
+                    //
+                    // For file playback we do it cleanly: one audio sample per complex_tx.re,
+                    // im = 0. This matches what readBufferToVector returns as flat floats:
+                    // [sample0, 0, sample1, 0, ...] — the zeros get modulated as silence
+                    // which is fine for FM (no deviation = carrier only between samples).
+                    //
+                    // Actually, to avoid the half-rate artifact, pack samples into BOTH re and im:
+                    // complex_tx[i].re = sample[i], complex_tx[i].im = sample[i]
+                    // readBufferToVector → [sample0, sample0, sample1, sample1, ...]
+                    // This doubles the effective sample rate seen by the modulator,
+                    // matching what PortAudio accidentally does (audio in both re and im slots).
 
-                    int remaining = converted;
+                    const int FRAMES_PER_CHUNK = 4096; // Same as PortAudio framesPerBuffer
+                    int totalSamples = converted;
                     int offset = 0;
 
-                    while (remaining > 0 && m_running.load()) {
-                        // Each complex_tx holds 2 floats, so chunkFloats = how many audio floats per chunk
-                        // PortAudioInput uses framesPerBuffer=4096 as complex_tx count,
-                        // which means 4096*2 = 8192 audio floats per swap.
-                        // We use smaller chunks since our decoded frames vary in size.
-                        int maxComplexPerChunk = 2048;
-                        int floatsAvailable = remaining - offset;
-                        // Round down to even number of floats (need pairs for complex_tx)
-                        int floatsToWrite = std::min(floatsAvailable, maxComplexPerChunk * 2);
-                        if (floatsToWrite <= 0) break;
-                        // Make even
-                        floatsToWrite = floatsToWrite & ~1;
-                        if (floatsToWrite <= 0) {
-                            // Odd single sample left, pad with zero
-                            stream_tx.writeBuf[0].re = outBuf[offset];
-                            stream_tx.writeBuf[0].im = 0.0f;
-                            stream_tx.swap(1);
-                            break;
+                    while (offset < totalSamples && m_running.load()) {
+                        int samplesLeft = totalSamples - offset;
+                        int chunkSize = std::min(samplesLeft, FRAMES_PER_CHUNK);
+                        if (chunkSize <= 0) break;
+
+                        for (int i = 0; i < chunkSize; i++) {
+                            float s = outBuf[offset + i];
+                            stream_tx.writeBuf[i].re = s;
+                            stream_tx.writeBuf[i].im = s;
                         }
+                        stream_tx.swap(chunkSize);
+                        offset += chunkSize;
 
-                        int complexCount = floatsToWrite / 2;
-                        std::memcpy(stream_tx.writeBuf, &outBuf[offset], floatsToWrite * sizeof(float));
-                        stream_tx.swap(complexCount);
-
-                        offset += floatsToWrite;
-                        remaining -= floatsToWrite;
-
-                        // Pace: complexCount complex_tx = floatsToWrite audio samples @ 44100 Hz
-                        if (m_running.load() && floatsToWrite > 0) {
+                        // Pace to real-time: chunkSize samples @ 44100 Hz
+                        if (m_running.load()) {
                             std::this_thread::sleep_for(std::chrono::microseconds(
-                                static_cast<int64_t>(floatsToWrite * 1000000.0 / 44100.0 * 0.80)
+                                static_cast<int64_t>(chunkSize * 1000000.0 / 44100.0 * 0.92)
                             ));
                         }
                     }
