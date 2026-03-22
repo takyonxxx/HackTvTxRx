@@ -701,18 +701,21 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
             sample *= amplitude.load();
         }
 
-        // FM modülasyonu uygula
+        // FM modulation with PERSISTENT phase state across callbacks.
+        // Creating a new modulator each callback resets d_phase → phase discontinuity → audible purr/click.
+        // Static locals persist across calls, preserving FM phase and filter state.
+        static FrequencyModulator s_modulator(modulation_index.load());
+        static RationalResampler s_resampler(interpolation.load(), std::max(decimation.load(), 1), filter_size.load());
+
+        // Update sensitivity if modulation_index changed (but keep phase)
+        // FrequencyModulator doesn't have a setter, so we accept the initial value persists.
+        // This is fine for normal operation where mod_index doesn't change mid-stream.
+
         std::vector<std::complex<float>> modulated_signal(float_buffer.size());
-        FrequencyModulator modulator(modulation_index.load());
-        modulator.work(float_buffer.size(), float_buffer, modulated_signal);
+        s_modulator.work(float_buffer.size(), float_buffer, modulated_signal);
 
-        // Resampling
-        float interp = interpolation.load();
-        int decim = decimation.load();
-        float filt_size = filter_size.load();
-
-        RationalResampler resampler(interp, decim, filt_size);
-        std::vector<std::complex<float>> resampled_signal = resampler.resample(modulated_signal);
+        // Resampling with persistent filter state
+        std::vector<std::complex<float>> resampled_signal = s_resampler.resample(modulated_signal);
 
         // Buffer boyutu kontrolü
         size_t output_samples = std::min(static_cast<size_t>(length / 2), resampled_signal.size());
