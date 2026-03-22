@@ -665,10 +665,7 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
         std::vector<float> float_buffer;
 
         if (m_useAudioFileRing.load()) {
-            // File mode: read from ring buffer
-            // Pipeline: audio_samples → FM modulate → resample(interp:decim) → IQ output
-            // output_iq = input_audio * (interpolation / decimation)
-            // So: input_audio = output_iq / (interpolation / decimation)
+            // Ring buffer path (both mic and file)
             float interp = interpolation.load();
             int decim = decimation.load();
             float ratio = (interp > 0.0f) ? (interp / static_cast<float>(std::max(decim, 1))) : 48.0f;
@@ -676,7 +673,9 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
 
             float_buffer.resize(audio_needed, 0.0f);
             size_t got = ringRead(float_buffer.data(), audio_needed);
-            if (got == 0) {
+
+            // Need minimum samples for FM modulator + resampler to work properly
+            if (got < 64) {
                 std::memset(buffer, 0, length);
                 return 0;
             }

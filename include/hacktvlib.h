@@ -94,6 +94,8 @@ private:
     hacktv_t* s = nullptr;
     rxtx_mode m_rxTxMode;
     bool micEnabled = false;
+    std::string m_audioFilePath;
+    bool m_audioFileLoop = true;
 
     // Devices
     HackRfDevice* hackRfDevice = nullptr;
