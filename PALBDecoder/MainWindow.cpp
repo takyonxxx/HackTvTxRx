@@ -101,31 +101,28 @@ void MainWindow::setupUI()
     QVBoxLayout* leftColumn = new QVBoxLayout();
     leftColumn->setSpacing(10);
 
-    // Video display - 576x384 landscape
-    QGroupBox* videoGroup = new QGroupBox("PAL Video Display (576×384)", this);
+    // Video display - 720x576 PAL standard
+    QGroupBox* videoGroup = new QGroupBox("PAL Video Display (720x576)", this);
         QVBoxLayout* videoLayout = new QVBoxLayout(videoGroup);
 
     m_videoLabel = new QLabel(this);
-    m_videoLabel->setFixedSize(576, 384);  // Landscape gösterim
+    m_videoLabel->setFixedSize(720, 576);
     m_videoLabel->setScaledContents(false);
     m_videoLabel->setStyleSheet("QLabel { background-color: black; border: 2px solid #333; }");
     m_videoLabel->setAlignment(Qt::AlignCenter);
 
-    // Set initial placeholder (rotated)
-    QImage placeholder(384, 576, QImage::Format_Grayscale8);
+    // Set initial placeholder
+    QImage placeholder(720, 576, QImage::Format_Grayscale8);
     placeholder.fill(Qt::black);
-    QTransform transform;
-    transform.rotate(90); // Saat yönünde 90°
-    QImage rotated = placeholder.transformed(transform);
-    m_videoLabel->setPixmap(QPixmap::fromImage(rotated));
+    m_videoLabel->setPixmap(QPixmap::fromImage(placeholder));
 
     videoLayout->addWidget(m_videoLabel);
-    videoGroup->setFixedWidth(592);
+    videoGroup->setFixedWidth(736);
     leftColumn->addWidget(videoGroup);
 
     // Video Processing Controls (BELOW VIDEO)
     QGroupBox* videoControlGroup = new QGroupBox("Video Processing", this);
-    videoControlGroup->setMaximumWidth(592); // Video ile aynı genişlik
+    videoControlGroup->setMaximumWidth(736); // Video ile aynı genişlik
     QVBoxLayout* videoControlLayout = new QVBoxLayout(videoControlGroup);
 
     // Video Gain
@@ -216,7 +213,7 @@ void MainWindow::setupUI()
 
     // Audio Controls (NEW - BELOW VIDEO CONTROLS)
     QGroupBox* audioControlGroup = new QGroupBox("Audio Controls", this);
-    audioControlGroup->setMaximumWidth(592);
+    audioControlGroup->setMaximumWidth(736);
     QVBoxLayout* audioControlLayout = new QVBoxLayout(audioControlGroup);
 
     // Audio Enable Checkbox
