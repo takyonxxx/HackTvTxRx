@@ -701,37 +701,40 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
             sample *= amplitude.load();
         }
 
-        // FM modulation with PERSISTENT phase state across callbacks.
-        static FrequencyModulator s_modulator(modulation_index.load());
-        static RationalResampler s_resampler(interpolation.load(), std::max(decimation.load(), 1), filter_size.load());
+        // FM modulation + resampling with persistent state across callbacks.
+        // Recreate only when parameters change (user adjusts GUI sliders).
+        static FrequencyModulator* s_modulator = nullptr;
+        static RationalResampler* s_resampler = nullptr;
+        static float s_lastModIndex = -1.0f;
+        static float s_lastFilterSize = -1.0f;
+        static float s_lastInterp = -1.0f;
+        static int s_lastDecim = -1;
 
-        // Overlap: prepend last sample from previous callback for interpolation continuity.
-        // Without this, linear interpolation in RationalResampler has a discontinuity
-        // at each callback boundary → audible purr/click.
-        static std::complex<float> s_lastModSample(0.0f, 0.0f);
-        static bool s_hasLastSample = false;
+        float curModIndex = modulation_index.load();
+        float curFilterSize = filter_size.load();
+        float curInterp = interpolation.load();
+        int curDecim = std::max(decimation.load(), 1);
+
+        if (!s_modulator || curModIndex != s_lastModIndex) {
+            delete s_modulator;
+            s_modulator = new FrequencyModulator(curModIndex);
+            s_lastModIndex = curModIndex;
+        }
+
+        if (!s_resampler || curFilterSize != s_lastFilterSize ||
+            curInterp != s_lastInterp || curDecim != s_lastDecim) {
+            delete s_resampler;
+            s_resampler = new RationalResampler(curInterp, curDecim, curFilterSize);
+            s_lastFilterSize = curFilterSize;
+            s_lastInterp = curInterp;
+            s_lastDecim = curDecim;
+        }
 
         std::vector<std::complex<float>> modulated_signal(float_buffer.size());
-        s_modulator.work(float_buffer.size(), float_buffer, modulated_signal);
+        s_modulator->work(float_buffer.size(), float_buffer, modulated_signal);
 
-        // Prepend last sample from previous callback for seamless interpolation
-        std::vector<std::complex<float>> mod_with_overlap;
-        if (s_hasLastSample) {
-            mod_with_overlap.reserve(modulated_signal.size() + 1);
-            mod_with_overlap.push_back(s_lastModSample);
-            mod_with_overlap.insert(mod_with_overlap.end(), modulated_signal.begin(), modulated_signal.end());
-        } else {
-            mod_with_overlap = std::move(modulated_signal);
-        }
-
-        // Save last sample for next callback
-        if (!mod_with_overlap.empty()) {
-            s_lastModSample = mod_with_overlap.back();
-            s_hasLastSample = true;
-        }
-
-        // Resampling with persistent filter state
-        std::vector<std::complex<float>> resampled_signal = s_resampler.resample(mod_with_overlap);
+        // Resampling with persistent filter + interpolation state
+        std::vector<std::complex<float>> resampled_signal = s_resampler->resample(modulated_signal);
 
         // Buffer boyutu kontrolü
         size_t output_samples = std::min(static_cast<size_t>(length / 2), resampled_signal.size());

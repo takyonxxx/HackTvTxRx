@@ -83,32 +83,68 @@ private:
 class RationalResampler {
 public:
     RationalResampler(unsigned interpolation, unsigned decimation, float filter_size)
-        : interpolation(interpolation), decimation(decimation), filter_size(filter_size) {
+        : interpolation(interpolation), decimation(decimation), filter_size(filter_size),
+          m_lastSample(0.0f, 0.0f), m_hasHistory(false) {
         if (interpolation == 0 || decimation == 0) {
             throw std::out_of_range("Interpolation and decimation factors must be greater than zero");
+        }
+        // Pre-compute filter taps once (they never change)
+        if (filter_size > 0.0f) {
+            int num_taps = static_cast<int>(7 * filter_size);
+            if (num_taps > 0) {
+                m_taps.resize(num_taps);
+                float sum = 0.0f;
+                for (int i = 0; i < num_taps; ++i) {
+                    float tap_value = std::exp(-0.5f * std::pow(i - (num_taps - 1) / 2.0f, 2) / (2 * std::pow(filter_size, 2)));
+                    m_taps[i] = tap_value;
+                    sum += tap_value;
+                }
+                for (auto& tap : m_taps) {
+                    tap /= sum;
+                }
+                // Initialize filter history buffer (zeros)
+                m_filterHistory.resize(num_taps, std::complex<float>(0.0f, 0.0f));
+            }
         }
     }
 
     std::vector<std::complex<float>> resample(const std::vector<std::complex<float>>& input) {
+        if (input.empty()) return {};
+
+        // Apply low-pass filter with persistent history
         std::vector<std::complex<float>> filtered_input = apply_low_pass_filter(input);
 
+        if (filtered_input.empty()) return {};
+
+        // Interpolation with inter-callback continuity
         std::vector<std::complex<float>> interpolated_output;
         interpolated_output.reserve(filtered_input.size() * interpolation);
 
-        for (size_t i = 0; i < filtered_input.size() - 1; ++i) {
-            interpolated_output.push_back(filtered_input[i]);
-            for (unsigned j = 1; j < interpolation; ++j) {
-                std::complex<float> interpolated_sample;
-                float t = static_cast<float>(j) / static_cast<float>(interpolation);
-                interpolated_sample.real((1.0f - t) * filtered_input[i].real() + t * filtered_input[i + 1].real());
-                interpolated_sample.imag((1.0f - t) * filtered_input[i].imag() + t * filtered_input[i + 1].imag());
-                interpolated_output.push_back(interpolated_sample);
-            }
-        }
-        interpolated_output.push_back(filtered_input.back());
+        // Use last sample from previous callback for first interpolation span
+        std::complex<float> prev = m_hasHistory ? m_lastSample : filtered_input[0];
 
+        for (size_t i = 0; i < filtered_input.size(); ++i) {
+            std::complex<float> curr = filtered_input[i];
+
+            // Interpolate from prev to curr
+            for (unsigned j = 0; j < interpolation; ++j) {
+                float t = static_cast<float>(j) / static_cast<float>(interpolation);
+                std::complex<float> interp_sample;
+                interp_sample.real((1.0f - t) * prev.real() + t * curr.real());
+                interp_sample.imag((1.0f - t) * prev.imag() + t * curr.imag());
+                interpolated_output.push_back(interp_sample);
+            }
+
+            prev = curr;
+        }
+
+        // Save last sample for next callback
+        m_lastSample = filtered_input.back();
+        m_hasHistory = true;
+
+        // Decimation
         std::vector<std::complex<float>> output;
-        output.reserve(interpolated_output.size() / decimation);
+        output.reserve(interpolated_output.size() / decimation + 1);
 
         for (size_t i = 0; i < interpolated_output.size(); i += decimation) {
             output.push_back(interpolated_output[i]);
@@ -122,39 +158,35 @@ private:
     unsigned decimation;
     float filter_size;
 
+    // Persistent state across calls
+    std::vector<float> m_taps;                          // Pre-computed filter coefficients
+    std::vector<std::complex<float>> m_filterHistory;   // Filter delay line (past samples)
+    std::complex<float> m_lastSample;                   // Last output for interpolation continuity
+    bool m_hasHistory;
+
     std::vector<std::complex<float>> apply_low_pass_filter(const std::vector<std::complex<float>>& input) {
-        std::vector<float> filter;
-        int num_taps = static_cast<int>(7 * filter_size);
-        float sum = 0.0f;
-
-        for (int i = 0; i < num_taps; ++i) {
-            float tap_value = std::exp(-0.5f * std::pow(i - (num_taps - 1) / 2.0f, 2) / (2 * std::pow(filter_size, 2)));
-            filter.push_back(tap_value);
-            sum += tap_value;
-        }
-
-        // Filter normalization
-        for (auto& tap : filter) {
-            tap /= sum;
-        }
-
-        std::vector<std::complex<float>> filtered_input;
-
-        // Apply filter
-        for (size_t i = 0; i < input.size(); ++i) {
-            std::complex<float> sum = 0;
-            for (size_t j = 0; j < filter.size(); ++j) {
-                if (i >= j) {
-                    sum += input[i - j] * filter[j];
-                }
-            }
-            filtered_input.push_back(sum);
-        }
-
-        if(filter_size != 0)
-            return filtered_input;
-        else
+        if (m_taps.empty() || filter_size == 0.0f) {
             return input;
+        }
+
+        const size_t num_taps = m_taps.size();
+        std::vector<std::complex<float>> filtered_input;
+        filtered_input.reserve(input.size());
+
+        for (size_t i = 0; i < input.size(); ++i) {
+            // Shift history: remove oldest, add newest
+            m_filterHistory.erase(m_filterHistory.begin());
+            m_filterHistory.push_back(input[i]);
+
+            // Convolve with filter taps
+            std::complex<float> acc(0.0f, 0.0f);
+            for (size_t j = 0; j < num_taps; ++j) {
+                acc += m_filterHistory[j] * m_taps[num_taps - 1 - j];
+            }
+            filtered_input.push_back(acc);
+        }
+
+        return filtered_input;
     }
 };
 
