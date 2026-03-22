@@ -59,7 +59,66 @@ MainWindow::MainWindow(QWidget *parent)
 
     rxtxCombo->setCurrentIndex(0);
     onRxTxTypeChanged(0);
-    setCurrentSampleRate(DEFAULT_SAMPLE_RATE);
+
+    // Apply loaded settings to UI widgets
+    // (loadSettings already set member variables, now sync UI)
+    if (m_sampleRate > 0) {
+        setCurrentSampleRate(m_sampleRate);
+    } else {
+        setCurrentSampleRate(DEFAULT_SAMPLE_RATE);
+    }
+    if (m_frequency > 0) {
+        frequencyEdit->setText(QString::number(m_frequency));
+        freqCtrl->setFrequency(m_frequency);
+        cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
+    }
+    if (volumeSlider) {
+        volumeSlider->setValue(m_volumeLevel);
+        volumeLevelLabel->setText(QString::number(m_volumeLevel));
+    }
+    if (lnaSlider) {
+        lnaSlider->setValue(m_lnaGain);
+        lnaLevelLabel->setText(QString::number(m_lnaGain));
+    }
+    if (vgaSlider) {
+        vgaSlider->setValue(m_vgaGain);
+        vgaLevelLabel->setText(QString::number(m_vgaGain));
+    }
+    if (rxAmpSlider) {
+        rxAmpSlider->setValue(m_rxAmpGain);
+        rxAmpLevelLabel->setText(QString::number(m_rxAmpGain));
+    }
+    if (txAmpSlider) {
+        txAmpSlider->setValue(m_txAmpGain);
+        txAmpSpinBox->setValue(m_txAmpGain);
+    }
+    if (txAmplitudeSlider) {
+        txAmplitudeSlider->setValue(static_cast<int>(tx_amplitude * 100));
+        txAmplitudeSpinBox->setValue(tx_amplitude);
+    }
+    if (txModulationIndexSlider) {
+        txModulationIndexSlider->setValue(static_cast<int>(tx_modulation_index * 10));
+        txModulationIndexSpinBox->setValue(tx_modulation_index);
+    }
+    if (txInterpolationSlider) {
+        txInterpolationSlider->setValue(static_cast<int>(tx_interpolation));
+        txInterpolationSpinBox->setValue(tx_interpolation);
+    }
+
+    // Restore checkboxes from settings
+    {
+        QSettings settings(m_sSettingsFile, QSettings::IniFormat);
+        settings.beginGroup("Rf");
+        bool amp = settings.value("ampEnabled", true).toBool();
+        bool noColor = settings.value("colorDisabled", false).toBool();
+        settings.endGroup();
+        if (ampEnabled) ampEnabled->setChecked(amp);
+        if (colorDisabled) colorDisabled->setChecked(noColor);
+    }
+
+    // Connect checkboxes AFTER restore to avoid triggering saveSettings during init
+    connect(ampEnabled, &QCheckBox::stateChanged, this, [this]() { saveSettings(); });
+    connect(colorDisabled, &QCheckBox::stateChanged, this, [this]() { saveSettings(); });
 
     logTimer = new QTimer(this);
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
@@ -68,6 +127,7 @@ MainWindow::MainWindow(QWidget *parent)
     qDebug() << "Sdr device initialized.";
     // HackTvLib is created on-demand when START is pressed (lazy init)
     // This avoids DLL/USB subsystem crashes at startup
+    m_initDone = true;
 }
 
 MainWindow::~MainWindow()
@@ -214,15 +274,12 @@ void MainWindow::handleReceivedData(const int8_t *data, size_t len)
 
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-    if (lowPassFilter && rationalResampler && fmDemodulator && audioOutput)
+    if (wbfmDemodulator && audioOutput)
     {
         try {
-            auto filteredSamples = lowPassFilter->apply(samples);
-            auto resampledSamples = rationalResampler->resample(std::move(filteredSamples));
-            auto demodulatedAudio = fmDemodulator->demodulate(std::move(resampledSamples));
+            auto demodulatedAudio = wbfmDemodulator->demodulate(samples);
 
             if (!demodulatedAudio.empty()) {
-                // Kazanç ve kesme (clipping)
                 for (auto& sample : demodulatedAudio) {
                     sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
                 }
@@ -307,9 +364,7 @@ void MainWindow::addOutputGroup()
     rxtxCombo->addItem("TX", "tx");
 
     ampEnabled = new QCheckBox("Amp", this);
-    ampEnabled->setChecked(true);
     colorDisabled = new QCheckBox("No Color", this);
-    colorDisabled->setChecked(false);
     colorDisabled->setMinimumWidth(85);
 
     QLabel *channelLabel = new QLabel("Ch:", this);
@@ -919,6 +974,8 @@ void MainWindow::onRxAmpSliderValueChanged(int value)
 
 void MainWindow::saveSettings()
 {
+    if (!m_initDone) return;  // don't save during constructor init
+
     QSettings settings(m_sSettingsFile, QSettings::IniFormat);
     settings.beginGroup("Rf");
 
@@ -935,6 +992,9 @@ void MainWindow::saveSettings()
     settings.setValue("m_rxAmpGain", m_rxAmpGain);
     settings.setValue("m_lnaGain", m_lnaGain);
     settings.setValue("m_vgaGain", m_vgaGain);
+    settings.setValue("audioGain", static_cast<double>(audioGain));
+    settings.setValue("ampEnabled", ampEnabled->isChecked());
+    settings.setValue("colorDisabled", colorDisabled->isChecked());
     settings.endGroup();
 }
 
@@ -955,6 +1015,7 @@ void MainWindow::loadSettings()
     m_rxAmpGain = settings.value("m_rxAmpGain").toInt();
     m_lnaGain = settings.value("m_lnaGain").toInt();
     m_vgaGain = settings.value("m_vgaGain").toInt();
+    audioGain = settings.value("audioGain", 0.75).toFloat();
     settings.endGroup();
 }
 
@@ -1004,6 +1065,8 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
     m_LowCutFreq = low;
     m_HiCutFreq = high;
     m_CutFreq = std::abs(high);
+    if (m_isProcessing && wbfmDemodulator)
+        wbfmDemodulator->setBandwidth(m_CutFreq);
     if (m_isProcessing && lowPassFilter)
         lowPassFilter->designFilter(m_sampleRate, m_CutFreq, 50000);
     saveSettings();
@@ -1090,6 +1153,11 @@ void MainWindow::executeCommand()
             lowPassFilter = std::make_unique<LowPassFilter>(m_sampleRate, wfmCutoff, wfmTransition);
             rationalResampler = std::make_unique<RationalResampler>(rxInterpolation, rxDecimation);
             fmDemodulator = std::make_unique<FMDemodulator>(postLpfRate, rxAudioDecimation);
+
+            // New multi-stage WBFM demodulator (replaces the above chain for actual processing)
+            wbfmDemodulator = std::make_unique<WBFMDemodulator>(
+                static_cast<double>(m_sampleRate),
+                std::max(150000.0, static_cast<double>(m_CutFreq) * 2.0));
         }
 
         cPlotter->setSampleRate(m_sampleRate);
@@ -1346,6 +1414,7 @@ void MainWindow::onRxTxTypeChanged(int index)
     modeGroup->setVisible(isTx);
     rxGroup->setVisible(!isTx);
     colorDisabled->setVisible(isTx);
+    ampEnabled->setVisible(isTx);
 
     if(isTx)
     {
@@ -1386,6 +1455,8 @@ void MainWindow::onSampleRateChanged(int index)
     {
         m_isProcessing.store(false);
         executeButton->setText("START");    lowPassFilter->designFilter(m_sampleRate, m_CutFreq, 10e3);
+        if (wbfmDemodulator)
+            wbfmDemodulator->setSampleRate(static_cast<double>(m_sampleRate));
         cPlotter->setSampleRate(m_sampleRate);
         cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
         cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
@@ -1545,6 +1616,7 @@ void MainWindow::hardReset()
     lowPassFilter.reset();
     rationalResampler.reset();
     fmDemodulator.reset();
+    wbfmDemodulator.reset();
 
     // 5. Reset UI state
     executeButton->setText("START");

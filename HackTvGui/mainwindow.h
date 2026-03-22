@@ -153,11 +153,13 @@ private:
 
     std::atomic<bool> m_shuttingDown{false};
     std::atomic<bool> m_isProcessing;
+    bool m_initDone = false;  // guard: prevent saveSettings during constructor
     QAtomicInt m_fftUpdatePending{0};  // Frame-drop: skip queuing if update already pending
 
     std::unique_ptr<LowPassFilter> lowPassFilter;
     std::unique_ptr<RationalResampler> rationalResampler;
-    std::unique_ptr<FMDemodulator> fmDemodulator;    
+    std::unique_ptr<FMDemodulator> fmDemodulator;
+    std::unique_ptr<WBFMDemodulator> wbfmDemodulator;
     QImage currentFrame;
 
 
