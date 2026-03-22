@@ -793,14 +793,20 @@ void HackRfDevice::setMicEnabled(bool enable)
             delete m_audioFileInput; m_audioFileInput = nullptr;
         }
 
-        m_audioInput = std::make_unique<PortAudioInput>(stream_tx);
+        // Reset and enable ring buffer for mic
+        ringReset();
+        m_useAudioFileRing.store(true); // Same ring buffer path for both mic and file
+
+        m_audioInput = std::make_unique<PortAudioInput>(*this);
         if (!m_audioInput->start()) {
             std::cerr << "Failed to start PortAudioInput" << std::endl;
+            m_useAudioFileRing.store(false);
         }
     }
     else if (m_audioInput && !enable) {
         m_audioInput->stop();
         m_audioInput.reset();
+        m_useAudioFileRing.store(false);
     }
 }
 
@@ -903,4 +909,16 @@ void HackRfDevice::setAmpEnable(bool enable)
 void HackRfDevice::setDataCallback(DataCallback callback)
 {
     m_dataCallback = callback;
+}
+
+// PortAudioInput callback implementation — needs full HackRfDevice definition
+int PortAudioInput::audioCallback(const void *inputBuffer, void * /*outputBuffer*/, unsigned long framesPerBuffer,
+                                   const PaStreamCallbackTimeInfo * /*timeInfo*/, PaStreamCallbackFlags /*statusFlags*/, void *userData)
+{
+    PortAudioInput *paInput = static_cast<PortAudioInput*>(userData);
+    if (paInput && paInput->m_device && inputBuffer) {
+        const float* audio = static_cast<const float*>(inputBuffer);
+        paInput->m_device->ringWrite(audio, framesPerBuffer);
+    }
+    return paContinue;
 }
