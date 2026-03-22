@@ -37,6 +37,9 @@ HackRfDevice::HackRfDevice(QObject *parent):
     interpolation(48.0f),
     decimation(1)
 {
+    // Initialize audio ring buffer
+    m_audioRing.resize(AUDIO_RING_SIZE, 0.0f);
+
     // hackrf_init() must only be called ONCE per process lifetime.
     // Multiple init/exit cycles cause USB handle corruption and crashes.
     static bool s_hackrf_initialized = false;
@@ -658,22 +661,40 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
     }
 
     try {
-        size_t desired_size = length / 2;
+        size_t output_iq_needed = length / 2;
+        std::vector<float> float_buffer;
 
-        // CRITICAL: Check if stream has data available
-        // If stream is empty, send silence instead of blocking
-        if (stream_tx.isEmpty()) {
-            // Send silence (zeros) when no audio input available
-            std::memset(buffer, 0, length);
-            return 0;
-        }
+        if (m_useAudioFileRing.load()) {
+            // File mode: read from ring buffer
+            // Pipeline: audio_samples → FM modulate → resample(interp:decim) → IQ output
+            // output_iq = input_audio * (interpolation / decimation)
+            // So: input_audio = output_iq / (interpolation / decimation)
+            float interp = interpolation.load();
+            int decim = decimation.load();
+            float ratio = (interp > 0.0f) ? (interp / static_cast<float>(std::max(decim, 1))) : 48.0f;
+            size_t audio_needed = static_cast<size_t>(output_iq_needed / ratio) + 16;
 
-        std::vector<float> float_buffer = readStreamToSize(desired_size);
+            float_buffer.resize(audio_needed, 0.0f);
+            size_t got = ringRead(float_buffer.data(), audio_needed);
+            if (got == 0) {
+                std::memset(buffer, 0, length);
+                return 0;
+            }
+            float_buffer.resize(got);
+        } else {
+            // Mic mode: read from stream_tx (original unchanged path)
+            size_t desired_size = output_iq_needed;
+            if (stream_tx.isEmpty()) {
+                std::memset(buffer, 0, length);
+                return 0;
+            }
 
-        // If we couldn't get enough samples (timeout or no data), fill with silence
-        if (float_buffer.empty() || float_buffer.size() < desired_size) {
-            std::memset(buffer, 0, length);
-            return 0;
+            float_buffer = readStreamToSize(desired_size);
+
+            if (float_buffer.empty() || float_buffer.size() < desired_size) {
+                std::memset(buffer, 0, length);
+                return 0;
+            }
         }
 
         // Amplitude uygula
@@ -798,15 +819,23 @@ void HackRfDevice::setAudioFileEnabled(bool enable, const std::string& filePath,
             delete m_audioFileInput; m_audioFileInput = nullptr;
         }
 
-        m_audioFileInput = new AudioFileInput(stream_tx);
+        // Reset and enable ring buffer
+        ringReset();
+        m_useAudioFileRing.store(true);
+
+        m_audioFileInput = new AudioFileInput(*this);
         if (!m_audioFileInput->start(filePath, loop)) {
             std::cerr << "Failed to start AudioFileInput: " << filePath << std::endl;
             delete m_audioFileInput; m_audioFileInput = nullptr;
+            m_useAudioFileRing.store(false);
         }
     }
-    else if (m_audioFileInput && !enable) {
-        m_audioFileInput->stop();
-        delete m_audioFileInput; m_audioFileInput = nullptr;
+    else {
+        m_useAudioFileRing.store(false);
+        if (m_audioFileInput) {
+            m_audioFileInput->stop();
+            delete m_audioFileInput; m_audioFileInput = nullptr;
+        }
     }
 }
 

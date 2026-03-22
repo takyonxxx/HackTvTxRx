@@ -132,8 +132,53 @@ private:
     uint32_t m_basebandFilterBandwidth;
     bool m_antennaEnable;
 
-    // Stream
+    // Stream (for mic/PortAudio)
     dsp::stream_tx<dsp::complex_tx> stream_tx;
+
+public:
+    // Ring buffer for audio file playback (lock-free SPSC)
+    // Public so AudioFileInput can write directly
+    static constexpr size_t AUDIO_RING_SIZE = 1048576;
+    std::vector<float> m_audioRing;
+    std::atomic<size_t> m_ringWritePos{0};
+    std::atomic<size_t> m_ringReadPos{0};
+    std::atomic<bool> m_useAudioFileRing{false};
+
+    size_t ringAvailable() const {
+        size_t w = m_ringWritePos.load(std::memory_order_acquire);
+        size_t r = m_ringReadPos.load(std::memory_order_acquire);
+        return (w >= r) ? (w - r) : (AUDIO_RING_SIZE - r + w);
+    }
+
+    size_t ringFree() const {
+        return AUDIO_RING_SIZE - 1 - ringAvailable();
+    }
+
+    void ringWrite(const float* data, size_t count) {
+        size_t w = m_ringWritePos.load(std::memory_order_relaxed);
+        for (size_t i = 0; i < count; i++) {
+            m_audioRing[w] = data[i];
+            w = (w + 1) % AUDIO_RING_SIZE;
+        }
+        m_ringWritePos.store(w, std::memory_order_release);
+    }
+
+    size_t ringRead(float* out, size_t count) {
+        size_t avail = ringAvailable();
+        size_t toRead = std::min(count, avail);
+        size_t r = m_ringReadPos.load(std::memory_order_relaxed);
+        for (size_t i = 0; i < toRead; i++) {
+            out[i] = m_audioRing[r];
+            r = (r + 1) % AUDIO_RING_SIZE;
+        }
+        m_ringReadPos.store(r, std::memory_order_release);
+        return toRead;
+    }
+
+    void ringReset() {
+        m_ringWritePos.store(0, std::memory_order_relaxed);
+        m_ringReadPos.store(0, std::memory_order_relaxed);
+    }
 };
 
 #endif // HACKRFDEVICE_H
