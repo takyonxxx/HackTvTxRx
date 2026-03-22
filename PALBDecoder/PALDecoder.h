@@ -22,6 +22,7 @@ public:
     QImage getCurrentFrame() const;
 
     void setTuneFrequency(uint64_t freqHz);
+    void setSampleRate(int sampleRate);
 
     void setVideoGain(float gain) { m_videoGain = gain; }
     void setVideoOffset(float offset) { m_videoOffset = offset; }
@@ -42,41 +43,35 @@ signals:
     void syncStatsUpdated(float syncRate, float peakLevel, float minLevel);
 
 private:
-    // ========== Sampling ==========
-    static constexpr int SAMP_RATE = 16000000;
-    static constexpr int DECIM = 3;
-    static constexpr float DECIMATED_RATE = 16000000.0f / 3.0f;
-
-    // ========== PAL-B/G Standard ==========
+    // ========== PAL-B/G Standard (fixed) ==========
     static constexpr int NB_LINES = 625;
     static constexpr float FPS = 25.0f;
-    static constexpr float LINE_DURATION = 64.0e-6f;  // 64 us
+    static constexpr float LINE_DURATION_US = 64.0f;
 
-    // Timing in fractions of line duration (from ITU-R BT.1700)
-    static constexpr float SYNC_PULSE_FRAC    = 4.7f / 64.0f;   // "d" sync pulse duration
-    static constexpr float BLANKING_FRAC      = 12.0f / 64.0f;   // "a" line-blanking interval
-    static constexpr float HSYNC_FRAC         = 10.5f / 64.0f;   // "b" sync + back porch
-    static constexpr float HSYNC_CROP_FRAC    = 0.085f;           // crop from start (empirical)
-
-    // VSync detection (from ITU-R BT.1700 Table 3)
-    static constexpr float FIELD_DETECT_START = 2.35f / 64.0f;   // "p" equalizing pulse
-    static constexpr float FIELD_DETECT_END   = 27.3f / 64.0f;   // "q" field sync pulse
+    // Timing fractions (ITU-R BT.1700)
+    static constexpr float SYNC_PULSE_FRAC    = 4.7f / 64.0f;
+    static constexpr float BLANKING_FRAC      = 12.0f / 64.0f;
+    static constexpr float HSYNC_FRAC         = 10.5f / 64.0f;
+    static constexpr float HSYNC_CROP_FRAC    = 0.085f;
+    static constexpr float FIELD_DETECT_START = 2.35f / 64.0f;
+    static constexpr float FIELD_DETECT_END   = 27.3f / 64.0f;
     static constexpr float HALF_LINE          = 32.0f / 64.0f;
 
-    // PAL-B/G specific
     static constexpr int VSYNC_LINES = 3;
-    static constexpr int BLACK_LINES = 49;
     static constexpr int FIRST_VISIBLE_LINE = 23;
 
-    // Output
     static constexpr int VIDEO_WIDTH = 720;
     static constexpr int VIDEO_HEIGHT = 576;
 
-    // Color
     static constexpr float COLOR_CARRIER_FREQ = 4433618.75f;
-    static constexpr float CHROMA_BANDWIDTH = 1.2e6f;
 
     mutable QMutex m_processMutex;
+
+    // ========== Dynamic Sample Rate ==========
+    int m_sampleRate;           // input sample rate (8-20 MHz)
+    int m_decimFactor;          // decimation factor (1, 2, or 3)
+    float m_decimatedRate;      // m_sampleRate / m_decimFactor
+    float m_chromaBandwidth;    // adjusted per rate
 
     // ========== NCO ==========
     double m_ncoPhase;
@@ -85,23 +80,22 @@ private:
     uint64_t m_tuneFrequency;
     void updateNCO();
 
-    // ========== Sample Counter Line Timing (SDRangel approach) ==========
-    int m_samplesPerLine;           // integer part
-    float m_samplesPerLineFrac;     // fractional part
-    int m_sampleOffset;             // current position within the line
-    float m_sampleOffsetFrac;       // fractional position
-    int m_sampleOffsetDetected;     // sample count since last detected hsync
-    float m_hSyncShift;             // PLL correction to apply at end of line
-    int m_hSyncErrorCount;          // consecutive large errors
-    float m_prevSample;             // previous demodulated sample for zero-crossing
+    // ========== Sample Counter Line Timing (at m_sampleRate) ==========
+    int m_samplesPerLine;
+    float m_samplesPerLineFrac;
+    int m_sampleOffset;
+    float m_sampleOffsetFrac;
+    int m_sampleOffsetDetected;
+    float m_hSyncShift;
+    int m_hSyncErrorCount;
+    float m_prevSample;
 
-    // Computed timing values (in samples)
-    int m_numberSamplesPerHTop;     // sync pulse width in samples
-    int m_numberSamplesPerHSync;    // sync + back porch in samples
-    int m_numberSamplesPerLineSignals; // blanking interval in samples
-    int m_numberSamplesHSyncCrop;   // crop from line start
+    int m_numberSamplesPerHTop;
+    int m_numberSamplesPerHSync;
+    int m_numberSamplesPerLineSignals;
+    int m_numberSamplesHSyncCrop;
 
-    // ========== VSync Detection ==========
+    // ========== VSync ==========
     int m_lineIndex;
     int m_fieldIndex;
     int m_fieldDetectStartPos;
@@ -127,13 +121,13 @@ private:
     float m_dcBlockerY1;
     int m_resampleCounter;
 
-    // ========== AGC (SDRangel 2-frame period) ==========
+    // ========== AGC ==========
     float m_ampMin;
     float m_ampMax;
     float m_ampDelta;
-    float m_effMin;    // tracking min within current period
-    float m_effMax;    // tracking max within current period
-    int m_amSampleIndex; // sample counter for AGC period
+    float m_effMin;
+    float m_effMax;
+    int m_amSampleIndex;
 
     // ========== Frame Buffer ==========
     std::vector<float> m_lineBuffer;
@@ -145,7 +139,7 @@ private:
     float m_videoGain;
     float m_videoOffset;
     bool m_videoInvert;
-    float m_syncLevel;   // sync tip threshold (e.g. -0.2)
+    float m_syncLevel;
     bool m_colorMode;
     float m_chromaGain;
     bool m_hSyncEnabled;
@@ -162,13 +156,13 @@ private:
     std::vector<float> m_colorCarrierSin;
     std::vector<float> m_colorCarrierCos;
     int m_colorCarrierIndex;
-
     std::vector<float> m_prevLineU;
     std::vector<float> m_prevLineV;
 
     // ========== Methods ==========
-    void initFilters();
     void applyStandard();
+    void initFilters();
+    void rebuildColorLUT();
     std::vector<float> designLowPassFIR(float cutoff, float sampleRate, int numTaps);
     std::vector<float> designBandPassFIR(float centerFreq, float bandwidth, float sampleRate, int numTaps);
     std::complex<float> applyVideoFilter(const std::complex<float>& sample);
@@ -177,7 +171,6 @@ private:
     float applyChromaFilterV(float sample);
     float dcBlock(float sample);
     float normalizeAndAGC(float sample);
-
     void processSample(float sample);
     void processEndOfLine();
     void renderLine();

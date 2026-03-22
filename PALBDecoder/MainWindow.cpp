@@ -29,6 +29,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Create PAL decoder
     m_palDecoder = std::make_shared<PALDecoder>(this);
+    m_palDecoder->setSampleRate(m_currentSampleRate);
     m_audioDemodulator = std::make_unique<AudioDemodulator>(this);
     m_audioOutput = std::make_unique<AudioOutput>();
 
@@ -493,15 +494,14 @@ void MainWindow::setupUI()
 
     m_syncThresholdSlider = new QSlider(Qt::Horizontal, this);
     m_syncThresholdSlider->setRange(0, 50);
-    m_syncThresholdSlider->setValue(15);
+    m_syncThresholdSlider->setValue(0);
     m_syncThresholdSlider->setTickPosition(QSlider::TicksBelow);
     m_syncThresholdSlider->setTickInterval(5);
 
     m_syncThresholdSpinBox = new QDoubleSpinBox(this);
     m_syncThresholdSpinBox->setRange(0.0, 0.5);
     m_syncThresholdSpinBox->setSingleStep(0.01);
-    m_syncThresholdSpinBox->setValue(0.15);
-    m_syncThresholdSpinBox->setValue(-0.2);
+    m_syncThresholdSpinBox->setValue(0.0);
     m_syncThresholdSpinBox->setDecimals(2);
     m_syncThresholdSpinBox->setMaximumWidth(100);
 
@@ -634,7 +634,12 @@ void MainWindow::onSampleRateChanged(int index)
 
     m_currentSampleRate = newSampleRate;
 
-    // If HackRF is running, restart with new sample rate
+    // Update PAL decoder with new sample rate
+    if (m_palDecoder) {
+        m_palDecoder->setSampleRate(m_currentSampleRate);
+    }
+
+    // If HackRF is running, update hardware
     if (m_hackTvLib) {
         m_hackTvLib->setSampleRate(m_currentSampleRate);
     }
