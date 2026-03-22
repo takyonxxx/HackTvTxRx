@@ -42,11 +42,11 @@ public:
         }
 
         PaError err = Pa_OpenDefaultStream(&stream,
-                                           1,                  // Mono input
+                                           1,                  // Mono input (most mics are mono)
                                            0,                  // No output
                                            paFloat32,          // Float32 samples
                                            44100,              // Sample rate
-                                           1024,               // Smaller buffer for lower latency
+                                           1024,               // Buffer size
                                            audioCallback,
                                            this);
         if (err != paNoError) {
@@ -61,7 +61,7 @@ public:
         }
 
         isRunning = true;
-        std::cout << "PortAudio initialized and stream started (ring buffer mode)" << std::endl;
+        std::cout << "PortAudio initialized and stream started (stereo ring buffer mode)" << std::endl;
         return true;
     }
 

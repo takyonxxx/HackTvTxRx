@@ -119,7 +119,7 @@ inline bool AudioFileInput::openFile()
     if (!m_swrCtx) { closeFile(); return false; }
 
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(57, 28, 100)
-    AVChannelLayout outLayout = AV_CHANNEL_LAYOUT_MONO;
+    AVChannelLayout outLayout = AV_CHANNEL_LAYOUT_STEREO;
     AVChannelLayout inLayout;
     if (m_codecCtx->ch_layout.nb_channels > 0)
         av_channel_layout_copy(&inLayout, &m_codecCtx->ch_layout);
@@ -131,7 +131,7 @@ inline bool AudioFileInput::openFile()
     int64_t inChLayout = m_codecCtx->channel_layout;
     if (inChLayout == 0) inChLayout = av_get_default_channel_layout(m_codecCtx->channels);
     av_opt_set_int(m_swrCtx, "in_channel_layout", inChLayout, 0);
-    av_opt_set_int(m_swrCtx, "out_channel_layout", AV_CH_LAYOUT_MONO, 0);
+    av_opt_set_int(m_swrCtx, "out_channel_layout", AV_CH_LAYOUT_STEREO, 0);
 #endif
     av_opt_set_int(m_swrCtx, "in_sample_rate", m_codecCtx->sample_rate, 0);
     av_opt_set_int(m_swrCtx, "out_sample_rate", 44100, 0);
@@ -191,23 +191,24 @@ inline void AudioFileInput::decodeLoop()
             int outSamples = swr_get_out_samples(m_swrCtx, frame->nb_samples);
             if (outSamples <= 0) { av_frame_unref(frame); continue; }
 
-            float* outBuf = new float[outSamples];
+            // Stereo output: outSamples is per-channel, total floats = outSamples * 2
+            int totalFloats = outSamples * 2;
+            float* outBuf = new float[totalFloats];
             uint8_t* outPtr = reinterpret_cast<uint8_t*>(outBuf);
             int converted = swr_convert(m_swrCtx, &outPtr, outSamples,
                                          (const uint8_t**)frame->extended_data, frame->nb_samples);
 
             if (converted > 0) {
-                // Back-pressure write to ring buffer.
-                // When full, block until TX callback consumes data.
-                // This naturally paces decode to match hardware TX rate.
+                // converted = frames (L/R pairs), total floats = converted * 2
+                int floatsToWrite = converted * 2;
                 int written = 0;
-                while (written < converted && m_running.load()) {
+                while (written < floatsToWrite && m_running.load()) {
                     size_t free = m_device.ringFree();
                     if (free < 256) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                         continue;
                     }
-                    size_t toWrite = std::min(static_cast<size_t>(converted - written), free);
+                    size_t toWrite = std::min(static_cast<size_t>(floatsToWrite - written), free);
                     m_device.ringWrite(&outBuf[written], toWrite);
                     written += static_cast<int>(toWrite);
                 }

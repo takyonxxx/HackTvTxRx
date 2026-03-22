@@ -51,18 +51,122 @@ inline void generate_fm_samples(int16_t* buffer, size_t num_samples, int sample_
     }
 }
 
+// ============================================================
+// FM Stereo MPX (Multiplex) Generator
+// Generates composite baseband directly at the target TX sample rate.
+// Audio (44100 Hz stereo) is upsampled to txSampleRate internally.
+// This eliminates the need for a separate resampler stage.
+// ============================================================
+class StereoMPXGenerator {
+public:
+    StereoMPXGenerator(float audioSampleRate, float txSampleRate, float preEmphasisTau = 75e-6f)
+        : m_audioSampleRate(audioSampleRate), m_txSampleRate(txSampleRate),
+          m_pilotPhase(0.0f),
+          m_prevL(0.0f), m_prevR(0.0f), m_prevOutL(0.0f), m_prevOutR(0.0f),
+          m_lastL(0.0f), m_lastR(0.0f)
+    {
+        float dt = 1.0f / audioSampleRate;
+        m_preEmphAlpha = dt / (preEmphasisTau + dt);
+
+        // Phase increment at TX sample rate
+        m_pilotPhaseInc = 2.0f * F_PI * 19000.0f / txSampleRate;
+
+        // Upsample ratio: txSampleRate / audioSampleRate
+        m_upsampleRatio = txSampleRate / audioSampleRate;
+    }
+
+    // Input: interleaved stereo at 44100 Hz (L, R, L, R, ...)
+    // Output: MPX composite at txSampleRate (e.g. 2 MHz) — ready for FM modulation
+    std::vector<float> process(const float* stereoData, size_t stereoSampleCount)
+    {
+        size_t audioFrames = stereoSampleCount / 2;
+        if (audioFrames == 0) return {};
+
+        // Pre-emphasis at audio rate
+        std::vector<float> peL(audioFrames), peR(audioFrames);
+        for (size_t i = 0; i < audioFrames; i++) {
+            peL[i] = applyPreEmphasis(stereoData[i * 2], m_prevL, m_prevOutL);
+            peR[i] = applyPreEmphasis(stereoData[i * 2 + 1], m_prevR, m_prevOutR);
+        }
+
+        // Output at TX sample rate
+        size_t outFrames = static_cast<size_t>(audioFrames * m_upsampleRatio) + 1;
+        std::vector<float> mpx;
+        mpx.reserve(outFrames);
+
+        for (size_t i = 0; i < audioFrames; i++) {
+            float curL = peL[i];
+            float curR = peR[i];
+
+            float startPos = i * m_upsampleRatio;
+            float endPos = (i + 1) * m_upsampleRatio;
+            int samplesThisFrame = static_cast<int>(endPos) - static_cast<int>(startPos);
+            if (samplesThisFrame < 1) samplesThisFrame = 1;
+
+            for (int j = 0; j < samplesThisFrame; j++) {
+                float t = static_cast<float>(j) / static_cast<float>(samplesThisFrame);
+                float L = m_lastL + (curL - m_lastL) * t;
+                float R = m_lastR + (curR - m_lastR) * t;
+
+                float sum  = (L + R) * 0.45f;
+                float diff = (L - R) * 0.45f;
+                float pilot = 0.075f * std::sin(m_pilotPhase);
+                float subcarrier = std::sin(2.0f * m_pilotPhase);
+
+                mpx.push_back(sum + pilot + diff * subcarrier);
+
+                m_pilotPhase += m_pilotPhaseInc;
+                if (m_pilotPhase >= 2.0f * F_PI)
+                    m_pilotPhase -= 2.0f * F_PI;
+            }
+
+            m_lastL = curL;
+            m_lastR = curR;
+        }
+
+        return mpx;
+    }
+
+    float getOutputSampleRate() const { return m_txSampleRate; }
+
+    void reset() {
+        m_pilotPhase = 0.0f;
+        m_prevL = m_prevR = m_prevOutL = m_prevOutR = 0.0f;
+        m_lastL = m_lastR = 0.0f;
+    }
+
+private:
+    float applyPreEmphasis(float in, float& prevIn, float& prevOut) {
+        float out = in - (1.0f - m_preEmphAlpha) * prevIn;
+        prevIn = in;
+        prevOut = out;
+        return out;
+    }
+
+    float m_audioSampleRate;
+    float m_txSampleRate;
+    float m_pilotPhase;
+    float m_pilotPhaseInc;
+    float m_preEmphAlpha;
+    float m_upsampleRatio;
+
+    float m_prevL, m_prevR;
+    float m_prevOutL, m_prevOutR;
+    float m_lastL, m_lastR;
+};
+
 class FrequencyModulator {
 public:
-    FrequencyModulator(float sensitivity)
-        : d_sensitivity(sensitivity), d_phase(0.0f), alpha(0.75f), prev(0.0f) {}
+    FrequencyModulator(float sensitivity, bool enablePreEmphasis = true)
+        : d_sensitivity(sensitivity), d_phase(0.0f),
+          alpha(enablePreEmphasis ? 0.75f : 0.0f), prev(0.0f) {}
 
     int work(int noutput_items, const std::vector<float>& input_items, std::vector<std::complex<float>>& output_items) {
         for (int i = 0; i < noutput_items; ++i) {
-            // Apply pre-emphasis filter
             float in = input_items[i];
-            float pre_emphasis = in - alpha * prev;
+            float processed = in - alpha * prev;
             prev = in;
-            d_phase += d_sensitivity * pre_emphasis;
+            d_phase += d_sensitivity * processed;
             // Place phase in [-pi, +pi[
             d_phase = std::fmod(d_phase + F_PI, 2.0f * F_PI) - F_PI;
             float oi, oq;
