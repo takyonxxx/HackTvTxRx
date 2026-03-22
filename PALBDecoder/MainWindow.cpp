@@ -81,12 +81,18 @@ MainWindow::MainWindow(QWidget *parent)
 
     setWindowTitle("PAL-B/G Decoder with HackRF - Qt 6.9.3");
 
-    // Initialize HackRF automatically
+    // Restore saved settings from previous session (BEFORE initHackRF)
+    loadSettings();
+
+    // Initialize HackRF with restored settings
     initHackRF();
 }
 
 MainWindow::~MainWindow()
 {
+    // Save all settings for next session
+    saveSettings();
+
     qDebug() << "MainWindow destructor started";
     m_shuttingDown = true;
 
@@ -94,8 +100,14 @@ MainWindow::~MainWindow()
     if (m_hackTvLib && m_hackRfRunning) {
         qDebug() << "Stopping HackRF...";
         m_hackTvLib->stop();
-        QThread::msleep(100); // Wait for callbacks to finish
+        QThread::msleep(200); // Wait for callbacks to finish
     }
+
+    // Wait for all processing threads to finish
+    if (m_threadPool) {
+        m_threadPool->waitForDone(2000);
+    }
+    QThreadPool::globalInstance()->waitForDone(2000);
 
     if (m_statusTimer) {
         m_statusTimer->stop();
@@ -277,25 +289,25 @@ void MainWindow::setupUI()
     QHBoxLayout* volumeLayout = new QHBoxLayout();
     volumeLayout->addWidget(new QLabel("Volume:", this));
 
-    QSlider* volumeSlider = new QSlider(Qt::Horizontal, this);
-    volumeSlider->setRange(0, 100);
-    volumeSlider->setValue(10);
-    volumeSlider->setTickPosition(QSlider::TicksBelow);
-    volumeSlider->setTickInterval(10);
+    m_volumeSlider = new QSlider(Qt::Horizontal, this);
+    m_volumeSlider->setRange(0, 100);
+    m_volumeSlider->setValue(10);
+    m_volumeSlider->setTickPosition(QSlider::TicksBelow);
+    m_volumeSlider->setTickInterval(10);
     if(m_audioOutput)
         m_audioOutput->setVolume(10);
 
-    QLabel* volumeLabel = new QLabel("10%", this);
-    volumeLabel->setMinimumWidth(50);
-    volumeLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    connect(volumeSlider,  &QSlider::valueChanged,
-            [this, volumeLabel](int value) {
+    m_volumeLabel = new QLabel("10%", this);
+    m_volumeLabel->setMinimumWidth(50);
+    m_volumeLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    connect(m_volumeSlider,  &QSlider::valueChanged,
+            [this](int value) {
                 m_audioOutput->setVolume(value);
-                volumeLabel->setText(QString("%1%").arg(value));
+                m_volumeLabel->setText(QString("%1%").arg(value));
             });
 
-    volumeLayout->addWidget(volumeSlider, 1);
-    volumeLayout->addWidget(volumeLabel);
+    volumeLayout->addWidget(m_volumeSlider, 1);
+    volumeLayout->addWidget(m_volumeLabel);
     audioControlLayout->addLayout(volumeLayout);
 
     leftColumn->addWidget(audioControlGroup);
@@ -904,26 +916,11 @@ void MainWindow::toggleHackRF()
 
         m_hackRfRunning = false;
 
-        // Reset sample rate to 16 MHz
-        m_currentSampleRate = 16000000;
-
-        // Update combobox
-        if (m_sampleRateComboBox) {
-            for (int i = 0; i < m_sampleRateComboBox->count(); i++) {
-                if (m_sampleRateComboBox->itemData(i).toInt() == 16000000) {
-                    m_sampleRateComboBox->blockSignals(true);
-                    m_sampleRateComboBox->setCurrentIndex(i);
-                    m_sampleRateComboBox->blockSignals(false);
-                    break;
-                }
-            }
-        }
-
         m_startStopButton->setText("Start HackRF");
         m_startStopButton->setStyleSheet(
             "QPushButton { background-color: #55ff55; color: black; "
             "padding: 10px; font-weight: bold; }");
-        qDebug() << "✓ HackRF stopped successfully";
+        qDebug() << "HackRF stopped successfully";
 
     } else {
         // ========== START HackRF ==========
@@ -933,27 +930,15 @@ void MainWindow::toggleHackRF()
 
         // 1. Check if library exists
         if (!m_hackTvLib) {
-            qCritical() << "❌ m_hackTvLib is NULL!";
+            qCritical() << "m_hackTvLib is NULL!";
             QMessageBox::critical(this, "Error",
                                   "HackTvLib not initialized!\n\n"
                                   "This is a critical error. Please restart the application.");
             return;
         }
 
-        // Force sample rate to 16 MHz
-        m_currentSampleRate = 16000000;
-
-        // Update combobox to 16 MHz
-        if (m_sampleRateComboBox) {
-            for (int i = 0; i < m_sampleRateComboBox->count(); i++) {
-                if (m_sampleRateComboBox->itemData(i).toInt() == 16000000) {
-                    m_sampleRateComboBox->blockSignals(true);
-                    m_sampleRateComboBox->setCurrentIndex(i);
-                    m_sampleRateComboBox->blockSignals(false);
-                    break;
-                }
-            }
-        }
+        // Use currently selected sample rate (from combobox / loaded settings)
+        m_currentSampleRate = m_sampleRateComboBox->currentData().toInt();
 
         // Configure arguments
         QStringList args;
@@ -1307,4 +1292,109 @@ void MainWindow::toggleIQRecording()
         if (m_iqRecordLabel)
             m_iqRecordLabel->setText(QString("Recording to %1...").arg(filename));
     }
+}
+
+// ============================================================================
+// Settings Persistence
+// ============================================================================
+
+void MainWindow::saveSettings()
+{
+    QSettings settings("MarenRobotics", "PALBDecoder");
+
+    // Frequency
+    settings.setValue("frequency", QVariant::fromValue(m_currentFrequency));
+
+    // Video
+    settings.setValue("videoGain", m_videoGainSlider->value());
+    settings.setValue("videoOffset", m_videoOffsetSlider->value());
+    settings.setValue("invertVideo", m_invertVideoCheckBox->isChecked());
+    settings.setValue("colorMode", m_colorModeCheckBox->isChecked());
+    settings.setValue("chromaGain", m_chromaGainSlider->value());
+
+    // Sync
+    settings.setValue("syncThreshold", m_syncThresholdSlider->value());
+
+    // Audio
+    settings.setValue("audioEnabled", m_audioEnabledCheckBox->isChecked());
+    settings.setValue("audioGain", m_audioGainSlider->value());
+    settings.setValue("volume", m_volumeSlider->value());
+
+    // HackRF gains
+    settings.setValue("lnaGain", m_lnaGainSlider->value());
+    settings.setValue("vgaGain", m_vgaGainSlider->value());
+    settings.setValue("rxAmpGain", m_rxAmpGainSlider->value());
+
+    // Sample rate (save the combo data, not index)
+    settings.setValue("sampleRate", m_sampleRateComboBox->currentData().toInt());
+
+    qDebug() << "Settings saved";
+}
+
+void MainWindow::loadSettings()
+{
+    QSettings settings("MarenRobotics", "PALBDecoder");
+
+    if (!settings.contains("frequency")) {
+        qDebug() << "No saved settings found, using defaults";
+        return;
+    }
+
+    // Frequency
+    uint64_t freq = settings.value("frequency", DEFAULT_FREQ).toULongLong();
+    m_currentFrequency = freq;
+    double freqMHz = freq / 1000000.0;
+    m_frequencySpinBox->blockSignals(true);
+    m_frequencySpinBox->setValue(freqMHz);
+    m_frequencySpinBox->blockSignals(false);
+    m_frequencySlider->blockSignals(true);
+    m_frequencySlider->setValue(static_cast<int>(freqMHz));
+    m_frequencySlider->blockSignals(false);
+    updateChannelLabel(m_currentFrequency);
+
+    // Video gain
+    m_videoGainSlider->setValue(settings.value("videoGain", 15).toInt());
+
+    // Video offset
+    m_videoOffsetSlider->setValue(settings.value("videoOffset", 0).toInt());
+
+    // Invert video
+    m_invertVideoCheckBox->setChecked(settings.value("invertVideo", true).toBool());
+
+    // Color mode
+    m_colorModeCheckBox->setChecked(settings.value("colorMode", false).toBool());
+
+    // Chroma gain
+    m_chromaGainSlider->setValue(settings.value("chromaGain", 75).toInt());
+
+    // Sync threshold
+    m_syncThresholdSlider->setValue(settings.value("syncThreshold", 0).toInt());
+
+    // Audio enabled
+    m_audioEnabledCheckBox->setChecked(settings.value("audioEnabled", true).toBool());
+
+    // Audio gain
+    m_audioGainSlider->setValue(settings.value("audioGain", 10).toInt());
+
+    // Volume
+    int vol = settings.value("volume", 10).toInt();
+    m_volumeSlider->setValue(vol);
+
+    // HackRF gains
+    m_lnaGainSlider->setValue(settings.value("lnaGain", 32).toInt());
+    m_vgaGainSlider->setValue(settings.value("vgaGain", 30).toInt());
+    m_rxAmpGainSlider->setValue(settings.value("rxAmpGain", 14).toInt());
+
+    // Sample rate
+    int savedRate = settings.value("sampleRate", 16000000).toInt();
+    for (int i = 0; i < m_sampleRateComboBox->count(); i++) {
+        if (m_sampleRateComboBox->itemData(i).toInt() == savedRate) {
+            m_sampleRateComboBox->setCurrentIndex(i);
+            break;
+        }
+    }
+
+    qDebug() << "Settings loaded: freq" << freq / 1e6 << "MHz"
+             << "rate" << savedRate / 1e6 << "MHz"
+             << "vol" << vol << "%";
 }

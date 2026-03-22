@@ -356,8 +356,13 @@ float PALDecoder::normalizeAndAGC(float sample)
     m_amSampleIndex++;
 
     if (m_amSampleIndex >= m_samplesPerLine * NB_LINES * 2) {
-        m_ampMin = m_effMin;
         m_ampMax = m_effMax;
+        // Offset minimum below actual min (~10% of range).
+        // PAL sync tips are the lowest point. With 10% offset, sync tips
+        // normalize to about -0.1, blanking to ~0.2, white to ~0.9.
+        // This ensures threshold=0 catches sync falling edges reliably.
+        float range = m_effMax - m_effMin;
+        m_ampMin = m_effMin - range * 0.10f;
         m_ampDelta = m_ampMax - m_ampMin;
         if (m_ampDelta <= 0.0f) m_ampDelta = 1.0f;
         m_effMin = 20.0f;
@@ -366,7 +371,9 @@ float PALDecoder::normalizeAndAGC(float sample)
     }
 
     float normalized = (sample - m_ampMin) / m_ampDelta;
-    return (normalized < 0.0f) ? 0.0f : (normalized > 1.0f) ? 1.0f : normalized;
+    // No lower clamp: sync tips may dip slightly below 0, enabling threshold=0 detection.
+    // Upper clamp only to prevent overflow. Video rendering clips via clipValue().
+    return (normalized > 1.0f) ? 1.0f : normalized;
 }
 
 // ============================================================
@@ -444,7 +451,7 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         float dcBlocked = dcBlock(magnitude);
         float normalized = normalizeAndAGC(dcBlocked);
 
-        // Sync at full rate
+        // Sync at full rate (uses normalized [0,1] signal)
         processSample(normalized);
 
         // Decimate for video

@@ -17,6 +17,7 @@
 #include <QThreadPool>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QSettings>
 #include <atomic>
 #include <memory>
 
@@ -72,6 +73,8 @@ private:
     void applyFrequencyChange();
     void startPalVideoProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr);
     void startPalAudioProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr);
+    void saveSettings();
+    void loadSettings();
 
     QThreadPool* m_threadPool;
 
@@ -98,6 +101,8 @@ private:
     QSlider* m_audioGainSlider;
     QDoubleSpinBox* m_audioGainSpinBox;
     QCheckBox* m_audioEnabledCheckBox;
+    QSlider* m_volumeSlider = nullptr;
+    QLabel* m_volumeLabel = nullptr;
 
     QPushButton* m_startStopButton;
     QCheckBox* m_invertVideoCheckBox;
