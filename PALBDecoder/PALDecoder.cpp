@@ -238,13 +238,16 @@ void PALDecoder::updateNCO()
     double tuneMHz = m_tuneFrequency / 1.0e6;
     double videoCarrierMHz;
     if (tuneMHz >= 470.0 && tuneMHz <= 862.0) {
-        int ch = static_cast<int>(std::floor((tuneMHz - 470.0 - 0.001) / 8.0));
-        if (ch < 0) ch = 0;
-        videoCarrierMHz = 470.0 + ch * 8.0 + 1.25;
+        // UHF: channel edge = 470 + n*8, video carrier = edge + 1.25
+        int n = static_cast<int>(std::floor((tuneMHz - 470.0 + 0.5) / 8.0));
+        if (n < 0) n = 0;
+        double channelStart = 470.0 + n * 8.0;
+        videoCarrierMHz = channelStart + 1.25;
     } else if (tuneMHz >= 174.0 && tuneMHz <= 230.0) {
-        int ch = static_cast<int>(std::floor((tuneMHz - 174.0 - 0.001) / 8.0));
-        if (ch < 0) ch = 0;
-        videoCarrierMHz = 174.0 + ch * 8.0 + 1.25;
+        int n = static_cast<int>(std::floor((tuneMHz - 174.0 + 0.5) / 8.0));
+        if (n < 0) n = 0;
+        double channelStart = 174.0 + n * 8.0;
+        videoCarrierMHz = channelStart + 1.25;
     } else {
         videoCarrierMHz = tuneMHz;
     }
@@ -252,6 +255,8 @@ void PALDecoder::updateNCO()
     m_ncoPhaseIncrement = -2.0 * M_PI * static_cast<double>(m_videoCarrierOffsetHz)
                           / static_cast<double>(m_sampleRate);
     m_ncoPhase = 0.0;
+    qDebug() << "PALDecoder::updateNCO: tune=" << tuneMHz << "MHz, vc=" << videoCarrierMHz
+             << "MHz, offset=" << m_videoCarrierOffsetHz << "Hz";
 }
 
 // ============================================================
