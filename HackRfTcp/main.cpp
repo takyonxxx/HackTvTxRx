@@ -85,7 +85,7 @@ int main(int argc, char *argv[])
     parser.addOption(rxAmpGainOption);
 
     QCommandLineOption sampleRateOption(QStringList() << "sample-rate" << "sr",
-                                        "Initial sample rate in Hz", "rate", "2000000");
+                                        "Initial sample rate in Hz", "rate", "16000000");
     parser.addOption(sampleRateOption);
 
     QCommandLineOption frequencyOption(QStringList() << "f" << "frequency",
