@@ -1,8 +1,6 @@
 #include "sdrdevice.h"
 #include <QDebug>
 #include <QHostAddress>
-#include <QTimer>
-#include <QCoreApplication>
 
 SdrDevice::SdrDevice(QObject *parent)
     : QObject(parent)
@@ -26,10 +24,13 @@ SdrDevice::SdrDevice(QObject *parent)
     });
 
     // Set up data callback - raw IQ from HackRF -> TCP broadcast
-    // DirectConnection: data goes straight to TCP, no Qt event queue buffering
     m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
-        if (m_hackTvLib && data && len > 0 && !m_flushingData.load()) {
-            handleReceivedData(data, len);
+        if (m_hackTvLib && data && len > 0) {
+            QByteArray dataCopy(reinterpret_cast<const char*>(data), static_cast<int>(len));
+            QMetaObject::invokeMethod(this, [this, dataCopy]() {
+                handleReceivedData(reinterpret_cast<const int8_t*>(dataCopy.data()),
+                                   static_cast<size_t>(dataCopy.size()));
+            }, Qt::QueuedConnection);
         }
     });
 }
@@ -464,9 +465,6 @@ void SdrDevice::handleReceivedData(const int8_t *data, size_t len)
 {
     if (!data || len == 0) return;
 
-    // Discard stale data after sample rate change
-    if (m_flushingData.load()) return;
-
     m_totalBytesReceived += len;
 
     if (!m_clients.isEmpty()) {
@@ -523,18 +521,8 @@ void SdrDevice::setFrequency(uint64_t frequency_hz)
 void SdrDevice::setSampleRate(uint32_t sample_rate)
 {
     if (m_hackTvLib) {
-        // Pause data flow
-        m_flushingData.store(true);
-
-        // Apply new rate
         m_hackTvLib->setSampleRate(sample_rate);
         qDebug() << "Sample rate set to:" << sample_rate << "Hz";
-
-        // Resume after brief stabilization
-        QTimer::singleShot(100, this, [this]() {
-            m_flushingData.store(false);
-            qDebug() << "Data streaming resumed";
-        });
     }
 }
 
