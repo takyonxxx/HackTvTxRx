@@ -1,0 +1,286 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10001 /* PALBDecoderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10001; };
+		A10002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10002; };
+		A10003 /* SDRTCPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10003; };
+		A10004 /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10004; };
+		A10005 /* PALDecoderManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10005; };
+		A10006 /* PALDecoder.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B10006; };
+		A10007 /* AudioDemodulator.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B10007; };
+		A10008 /* DSPBridge.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B10008; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		B10001 /* PALBDecoderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PALBDecoderApp.swift; sourceTree = "<group>"; };
+		B10002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		B10003 /* SDRTCPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDRTCPClient.swift; sourceTree = "<group>"; };
+		B10004 /* AudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngine.swift; sourceTree = "<group>"; };
+		B10005 /* PALDecoderManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PALDecoderManager.swift; sourceTree = "<group>"; };
+		B10006 /* PALDecoder.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PALDecoder.cpp; sourceTree = "<group>"; };
+		B10007 /* AudioDemodulator.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AudioDemodulator.cpp; sourceTree = "<group>"; };
+		B10008 /* DSPBridge.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = DSPBridge.cpp; sourceTree = "<group>"; };
+		B10009 /* PALDecoder.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PALDecoder.h; sourceTree = "<group>"; };
+		B10010 /* AudioDemodulator.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AudioDemodulator.h; sourceTree = "<group>"; };
+		B10011 /* DSPBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DSPBridge.h; sourceTree = "<group>"; };
+		B10012 /* PALBDecoder-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "PALBDecoder-Bridging-Header.h"; sourceTree = "<group>"; };
+		B10099 /* PALBDecoder.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PALBDecoder.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		G10000 = {
+			isa = PBXGroup;
+			children = (
+				G10001 /* PALBDecoder */,
+				G10099 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		G10001 /* PALBDecoder */ = {
+			isa = PBXGroup;
+			children = (
+				B10001 /* PALBDecoderApp.swift */,
+				B10002 /* ContentView.swift */,
+				B10003 /* SDRTCPClient.swift */,
+				B10004 /* AudioEngine.swift */,
+				B10005 /* PALDecoderManager.swift */,
+				B10012 /* PALBDecoder-Bridging-Header.h */,
+				G10002 /* DSP */,
+			);
+			path = PALBDecoder;
+			sourceTree = "<group>";
+		};
+		G10002 /* DSP */ = {
+			isa = PBXGroup;
+			children = (
+				B10009 /* PALDecoder.h */,
+				B10006 /* PALDecoder.cpp */,
+				B10010 /* AudioDemodulator.h */,
+				B10007 /* AudioDemodulator.cpp */,
+				B10011 /* DSPBridge.h */,
+				B10008 /* DSPBridge.cpp */,
+			);
+			path = DSP;
+			sourceTree = "<group>";
+		};
+		G10099 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B10099 /* PALBDecoder.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		T10001 /* PALBDecoder */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CL10001;
+			buildPhases = (
+				PH10001 /* Sources */,
+				PH10002 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PALBDecoder;
+			productName = PALBDecoder;
+			productReference = B10099;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		P10001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					T10001 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = CL10002;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base);
+			mainGroup = G10000;
+			productRefGroup = G10099;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				T10001,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		PH10001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10001,
+				A10002,
+				A10003,
+				A10004,
+				A10005,
+				A10006,
+				A10007,
+				A10008,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		PH10002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		BC10001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "PAL-B Decoder";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "PAL-B Decoder needs local network access to connect to HackRF TCP server.";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.marenrobotics.PALBDecoder;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "PALBDecoder/PALBDecoder-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				GCC_INPUT_FILETYPE = sourcecode.cpp.cpp;
+			};
+			name = Debug;
+		};
+		BC10002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "PAL-B Decoder";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "PAL-B Decoder needs local network access to connect to HackRF TCP server.";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.marenrobotics.PALBDecoder;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "PALBDecoder/PALBDecoder-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				GCC_INPUT_FILETYPE = sourcecode.cpp.cpp;
+			};
+			name = Release;
+		};
+		BC10003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "$(inherited)");
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		BC10004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_OPTIMIZATION_LEVEL = s;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		CL10001 /* Build configuration list for PBXNativeTarget */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BC10001,
+				BC10002,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CL10002 /* Build configuration list for PBXProject */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BC10003,
+				BC10004,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = P10001;
+}
