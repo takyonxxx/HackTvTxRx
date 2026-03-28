@@ -32,11 +32,16 @@ public:
     double getSampleRate() const { return m_inputSampleRate; }
     void setAudioCarrierFreq(double freqHz);
 
+    // Radio mode: baseband wideband FM (75 kHz deviation, no carrier shift)
+    void setRadioMode(bool radio);
+    bool isRadioMode() const { return m_radioMode; }
+
 private:
     static constexpr int AUDIO_SAMP_RATE = 48000;
     static constexpr int AUDIO_BUFFER_SIZE = 480;
     static constexpr double AUDIO_CARRIER = 5.5e6;
-    static constexpr double FM_DEVIATION = 50e3;
+    static constexpr double FM_DEVIATION_TV = 50e3;
+    static constexpr double FM_DEVIATION_RADIO = 75e3;
     static constexpr int FILTER_TAPS = 17;
 
     std::mutex m_processMutex;
@@ -51,6 +56,7 @@ private:
     std::vector<DecimStage> m_decimChain;
     double m_inputSampleRate;
     bool m_audioCapable;
+    bool m_radioMode;
 
     void rebuildDecimationChain();
 

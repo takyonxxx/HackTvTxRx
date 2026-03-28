@@ -3,7 +3,6 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var decoder = PALDecoderManager()
     @State private var hostIP = "192.168.1.6"
-    @State private var isConnected = false
 
     @State private var videoGain: Float = 1.5
     @State private var videoOffset: Float = 0.0
@@ -22,9 +21,11 @@ struct ContentView: View {
     @State private var rxAmpGain: Double = 14
 
     @State private var selectedSampleRate: Int = 16000000
-    @State private var showControls = true
+    @State private var radioMode = false
 
-    private let sampleRates: [(label: String, value: Int)] = [
+    private var connected: Bool { decoder.isConnected }
+
+    private let tvSampleRates: [(label: String, value: Int)] = [
         ("12.5 MHz", 12500000),
         ("16 MHz",   16000000),
         ("20 MHz",   20000000),
@@ -32,33 +33,59 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
-                VStack(spacing: 0) {
-                    videoDisplay
-                        .onTapGesture { withAnimation { showControls.toggle() } }
-                    if showControls {
-                        ScrollView {
-                            VStack(spacing: 12) {
-                                connectionSection
-                                statusBar
-                                sampleRateSection
-                                frequencySection
-                                rfGainSection
-                                videoSection
-                                audioSection
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 20)
+            ScrollView {
+                VStack(spacing: 12) {
+                    // Display
+                    if radioMode {
+                        radioDisplay
+                    } else {
+                        videoDisplay
+                    }
+
+                    // Connection - always visible
+                    connectionSection
+
+                    // Everything else - only when connected
+                    if connected {
+                        modeSection
+                        statusBar
+                        frequencySection
+                        rfGainSection
+                        if !radioMode {
+                            sampleRateSection
+                            videoSection
                         }
-                        .background(Color(.systemGroupedBackground))
+                        audioSection
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 20)
             }
-            .navigationTitle("PAL-B Decoder")
+            .background(Color.black)
+            .navigationTitle(radioMode ? "FM Radio" : "PAL-B TV")
             .navigationBarTitleDisplayMode(.inline)
             .preferredColorScheme(.dark)
         }
+    }
+
+    // MARK: - Display
+
+    private var radioDisplay: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "radio")
+                .font(.system(size: 48))
+                .foregroundColor(.orange)
+            Text(String(format: "%.1f MHz", frequencyMHz))
+                .font(.system(size: 28, weight: .bold, design: .monospaced))
+                .foregroundColor(.white)
+            Text(frequencyLabel)
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
+        .background(Color.black)
+        .cornerRadius(12)
     }
 
     private var videoDisplay: some View {
@@ -68,22 +95,26 @@ struct ContentView: View {
                     .resizable()
                     .aspectRatio(720.0 / 576.0, contentMode: .fit)
                     .clipped()
+                    .cornerRadius(8)
             } else {
                 Rectangle()
-                    .fill(Color.black)
+                    .fill(Color(.darkGray).opacity(0.3))
                     .aspectRatio(720.0 / 576.0, contentMode: .fit)
                     .overlay(
                         VStack {
                             Image(systemName: "tv")
                                 .font(.system(size: 48))
                                 .foregroundColor(.gray)
-                            Text("No Signal")
+                            Text(connected ? "No Signal" : "Not Connected")
                                 .foregroundColor(.gray)
                         }
                     )
+                    .cornerRadius(8)
             }
         }
     }
+
+    // MARK: - Connection
 
     private var connectionSection: some View {
         GroupBox("Connection") {
@@ -92,45 +123,155 @@ struct ContentView: View {
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.decimalPad)
                     .autocorrectionDisabled()
-                Button(isConnected ? "Disconnect" : "Connect") {
-                    if isConnected {
+                    .disabled(connected)
+                Button(connected ? "Disconnect" : "Connect") {
+                    if connected {
                         decoder.disconnect()
-                        isConnected = false
+                        radioMode = false
                     } else {
                         decoder.connect(host: hostIP)
-                        isConnected = true
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(isConnected ? .red : .green)
+                .tint(connected ? .red : .green)
             }
         }
     }
 
+    // MARK: - Mode
+
+    private var modeSection: some View {
+        GroupBox("Mode") {
+            HStack(spacing: 12) {
+                Button {
+                    guard radioMode else { return }
+                    radioMode = false
+                    frequencyMHz = 479.3
+                    // Defer the heavy work to next runloop
+                    DispatchQueue.main.async {
+                        decoder.frequency = UInt64(frequencyMHz * 1_000_000)
+                        decoder.setRadioMode(false)
+                    }
+                } label: {
+                    Label("TV", systemImage: "tv").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(!radioMode ? .blue : .gray)
+
+                Button {
+                    guard !radioMode else { return }
+                    radioMode = true
+                    frequencyMHz = 100.0
+                    // Defer the heavy work to next runloop
+                    DispatchQueue.main.async {
+                        decoder.frequency = UInt64(frequencyMHz * 1_000_000)
+                        decoder.setRadioMode(true)
+                    }
+                } label: {
+                    Label("Radio", systemImage: "radio").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(radioMode ? .orange : .gray)
+            }
+        }
+    }
+
+    // MARK: - Status
+
     private var statusBar: some View {
-        HStack(spacing: 16) {
-            Label(String(format: "%.1f FPS", decoder.fps), systemImage: "film")
-                .font(.caption)
+        HStack(spacing: 12) {
+            if !radioMode {
+                Label(String(format: "%.1f FPS", decoder.fps), systemImage: "film")
+                    .font(.caption)
+                Label(String(format: "Sync: %.0f%%", decoder.syncQuality), systemImage: "waveform")
+                    .font(.caption)
+                    .foregroundColor(decoder.syncQuality >= 95 ? .green :
+                                     decoder.syncQuality >= 85 ? .yellow :
+                                     decoder.syncQuality >= 70 ? .orange : .red)
+            }
             Label(String(format: "%.1f MB/s", decoder.tcpClient.dataRate), systemImage: "arrow.down.circle")
                 .font(.caption)
-            Label(String(format: "Sync: %.0f%%", decoder.syncQuality), systemImage: "waveform")
-                .font(.caption)
-                .foregroundColor(decoder.syncQuality >= 95 ? .green :
-                                 decoder.syncQuality >= 85 ? .yellow :
-                                 decoder.syncQuality >= 70 ? .orange : .red)
-            Text("\(decoder.sampleRate / 1000000) MHz")
+            Text(sampleRateLabel)
                 .font(.caption.bold())
                 .foregroundColor(.cyan)
         }
         .padding(.vertical, 4)
     }
 
-    // MARK: - Sample Rate Picker
+    private var sampleRateLabel: String {
+        let sr = decoder.sampleRate
+        if sr >= 1000000 { return "\(sr / 1000000) MHz" }
+        return "\(sr / 1000) kHz"
+    }
+
+    // MARK: - Frequency
+
+    private var frequencySection: some View {
+        GroupBox("Frequency") {
+            VStack(spacing: 6) {
+                HStack {
+                    Text(String(format: "%.3f MHz", frequencyMHz))
+                        .font(.title2.monospacedDigit().bold())
+                    Spacer()
+                    Text(frequencyLabel)
+                        .font(.caption)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(radioMode ? Color.orange.opacity(0.2) : Color.blue.opacity(0.2))
+                        .cornerRadius(4)
+                }
+
+                Slider(value: $frequencyMHz,
+                       in: radioMode ? 1...6000 : 47...862,
+                       step: 0.1) {
+                    Text("Freq")
+                } onEditingChanged: { editing in
+                    if !editing { applyFrequency() }
+                }
+
+                if radioMode {
+                    HStack(spacing: 8) {
+                        quickFreqButton("FM", freq: 100.0)
+                        quickFreqButton("AIR", freq: 120.0)
+                        quickFreqButton("VHF", freq: 145.0)
+                        quickFreqButton("UHF", freq: 433.0)
+                        quickFreqButton("868", freq: 868.0)
+                    }
+                }
+            }
+        }
+    }
+
+    private var frequencyLabel: String {
+        let f = frequencyMHz
+        if radioMode {
+            if f >= 87.5 && f <= 108.0 { return "FM Band" }
+            if f >= 118.0 && f <= 137.0 { return "AIR Band" }
+            if f >= 144.0 && f <= 148.0 { return "2m HAM" }
+            if f >= 430.0 && f <= 440.0 { return "70cm HAM" }
+            if f >= 862.0 && f <= 870.0 { return "868 ISM" }
+            return String(format: "%.1f MHz", f)
+        } else {
+            if f >= 470, f <= 862 { return "UHF E\(Int((f - 306) / 8))" }
+            if f >= 174, f <= 230 { return "VHF-III E\(Int((f - 175) / 8) + 5)" }
+            return "Custom"
+        }
+    }
+
+    private func quickFreqButton(_ label: String, freq: Double) -> some View {
+        Button(label) {
+            frequencyMHz = freq
+            applyFrequency()
+        }
+        .font(.caption2.bold())
+        .buttonStyle(.bordered)
+    }
+
+    // MARK: - Sample Rate (TV only)
 
     private var sampleRateSection: some View {
         GroupBox("Bandwidth / Sample Rate") {
             Picker("Sample Rate", selection: $selectedSampleRate) {
-                ForEach(sampleRates, id: \.value) { rate in
+                ForEach(tvSampleRates, id: \.value) { rate in
                     Text(rate.label).tag(rate.value)
                 }
             }
@@ -141,34 +282,7 @@ struct ContentView: View {
         }
     }
 
-    private var frequencySection: some View {
-        GroupBox("Frequency") {
-            VStack(spacing: 6) {
-                HStack {
-                    Text(String(format: "%.3f MHz", frequencyMHz))
-                        .font(.title2.monospacedDigit().bold())
-                    Spacer()
-                    Text(channelLabel)
-                        .font(.caption)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Color.blue.opacity(0.2))
-                        .cornerRadius(4)
-                }
-                Slider(value: $frequencyMHz, in: 47...862, step: 0.1) {
-                    Text("Freq")
-                } onEditingChanged: { editing in
-                    if !editing { applyFrequency() }
-                }
-            }
-        }
-    }
-
-    private var channelLabel: String {
-        let f = frequencyMHz
-        if f >= 470, f <= 862 { return "UHF E\(Int((f - 306) / 8))" }
-        if f >= 174, f <= 230 { return "VHF-III E\(Int((f - 175) / 8) + 5)" }
-        return "Custom"
-    }
+    // MARK: - RF Gain
 
     private var rfGainSection: some View {
         GroupBox("RF Gain") {
@@ -179,6 +293,8 @@ struct ContentView: View {
             }
         }
     }
+
+    // MARK: - Video (TV only)
 
     private var videoSection: some View {
         GroupBox("Video") {
@@ -200,6 +316,8 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Audio
+
     private var audioSection: some View {
         GroupBox("Audio") {
             VStack(spacing: 6) {
@@ -210,6 +328,8 @@ struct ContentView: View {
             }
         }
     }
+
+    // MARK: - Helpers
 
     private func applyFrequency() {
         decoder.frequency = UInt64(frequencyMHz * 1_000_000)
