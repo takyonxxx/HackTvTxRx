@@ -38,6 +38,9 @@ final class PALDecoderManager: ObservableObject {
         p.initialize(to: os_unfair_lock_s()); return p
     }()
 
+    // TV mode: mute audio until first video frame decoded
+    private var hasFirstFrame = false
+
     private var audioGeneration: Int = 0
     private var frameCount = 0
     private var fpsTimer: DispatchSourceTimer?
@@ -45,7 +48,7 @@ final class PALDecoderManager: ObservableObject {
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
     private let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
 
-    var frequency: UInt64 = 642000000  // NTV UHF42 Ankara
+    var frequency: UInt64 = 640000000  // NTV UHF42 Ankara
 
     init() {
         videoAccumBuffer = .allocate(capacity: videoAccumCapacity)
@@ -71,6 +74,7 @@ final class PALDecoderManager: ObservableObject {
 
     func connect(host: String) {
         lastHost = host
+        hasFirstFrame = false
         updateAudioCarrier()
         audioGeneration += 1
         audioEngine.flush()
@@ -90,7 +94,7 @@ final class PALDecoderManager: ObservableObject {
     }
 
     func disconnect() {
-        tcpClient.disconnect(); audioEngine.stop(); videoAccumCount = 0
+        tcpClient.disconnect(); audioEngine.stop(); videoAccumCount = 0; hasFirstFrame = false
         DispatchQueue.main.async { self.isConnected = false }
     }
 
@@ -98,6 +102,7 @@ final class PALDecoderManager: ObservableObject {
         guard !switchingMode else { return }
         switchingMode = true
         radioMode = enabled
+        hasFirstFrame = false
         let nr = enabled ? 2000000 : 12500000
         print("[MODE] Switching to \(enabled ? "Radio" : "TV")...")
 
@@ -119,7 +124,7 @@ final class PALDecoderManager: ObservableObject {
                 self.sampleRate = nr
                 self.videoAccumCount = 0
                 self.updateFrameSize()
-                if enabled { self.currentFrame = nil }
+                if enabled { self.currentFrame = nil; self.hasFirstFrame = true }
                 self.updateAudioCarrier()
                 self.audioGeneration += 1
                 self.audioEngine.flush()
@@ -148,6 +153,7 @@ final class PALDecoderManager: ObservableObject {
 
     func changeSampleRate(_ nr: Int) {
         switchingMode = true
+        hasFirstFrame = false
         tcpClient.dropData = true
         tcpClient.disconnect()
         audioEngine.stop()
@@ -187,16 +193,17 @@ final class PALDecoderManager: ObservableObject {
     private func handleTCPData(_ ptr: UnsafePointer<Int8>, len: Int) {
         if switchingMode { return }
 
-        // AUDIO: process synchronously in TCP callback thread (no queue, no allocation)
-        // This runs on NWConnection's dataQueue (background) - no main thread dependency
-        // AudioDemodulator has its own mutex, so this is thread-safe
-        if let a = audioDemod {
-            audioDemod_processSamples(a, ptr, len)
+        // AUDIO: process synchronously in TCP callback thread
+        // In TV mode, mute until first video frame is decoded (prevents audio before picture)
+        if radioMode || hasFirstFrame {
+            if let a = audioDemod {
+                audioDemod_processSamples(a, ptr, len)
+            }
         }
 
         if radioMode { return }
 
-        // VIDEO: accumulate, then decode using pre-allocated buffer
+        // VIDEO: accumulate, then decode
         let space = videoAccumCapacity - videoAccumCount
         let n = min(len, space)
         if n > 0 { memcpy(videoAccumBuffer + videoAccumCount, ptr, n); videoAccumCount += n }
@@ -247,6 +254,11 @@ final class PALDecoderManager: ObservableObject {
     private func handleFrame(_ rgba: UnsafePointer<UInt8>, width: Int, height: Int) {
         if radioMode { return }
         frameCount += 1
+        // Enable audio after first frame
+        if !hasFirstFrame {
+            hasFirstFrame = true
+            audioEngine.flush()
+        }
         let bpr = width*4, ds = bpr*height
         guard let d = CFDataCreate(nil, rgba, ds), let p = CGDataProvider(data: d),
               let img = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,

@@ -2,26 +2,52 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var decoder = PALDecoderManager()
-    @State private var hostIP = "192.168.1.6"
 
+    // Persistent settings via @AppStorage
+    @AppStorage("hostIP") private var hostIP = "192.168.1.6"
+    @AppStorage("radioMode") private var radioMode = false
+
+    // TV last settings
+    @AppStorage("tvFreqMHz") private var tvFreqMHz: Double = 640.0
+    @AppStorage("tvSampleRate") private var tvSampleRate: Int = 12500000
+    @AppStorage("tvLnaGain") private var tvLnaGain: Double = 40
+    @AppStorage("tvVgaGain") private var tvVgaGain: Double = 30
+    @AppStorage("tvRxAmpGain") private var tvRxAmpGain: Double = 14
+    @AppStorage("tvVideoGain") private var tvVideoGain: Double = 1.5
+    @AppStorage("tvVideoOffset") private var tvVideoOffset: Double = 0.0
+    @AppStorage("tvInvertVideo") private var tvInvertVideo = true
+    @AppStorage("tvColorMode") private var tvColorMode = false
+    @AppStorage("tvChromaGain") private var tvChromaGain: Double = 0.75
+    @AppStorage("tvSyncThreshold") private var tvSyncThreshold: Double = 0.0
+
+    // Radio last settings
+    @AppStorage("radioFreqMHz") private var radioFreqMHz: Double = 100.0
+    @AppStorage("radioLnaGain") private var radioLnaGain: Double = 40
+    @AppStorage("radioVgaGain") private var radioVgaGain: Double = 30
+    @AppStorage("radioRxAmpGain") private var radioRxAmpGain: Double = 14
+    @AppStorage("radioBandIndex") private var radioBandIndex: Int = 0
+
+    // Audio (shared)
+    @AppStorage("audioEnabled") private var audioEnabled = true
+    @AppStorage("audioGain") private var savedAudioGain: Double = 1.0
+    @AppStorage("volume") private var savedVolume: Double = 0.1
+
+    // Active UI state (driven from persisted values)
+    @State private var frequencyMHz: Double = 640.0
+    @State private var lnaGain: Double = 40
+    @State private var vgaGain: Double = 30
+    @State private var rxAmpGain: Double = 14
     @State private var videoGain: Float = 1.5
     @State private var videoOffset: Float = 0.0
     @State private var invertVideo = true
     @State private var colorMode = false
     @State private var chromaGain: Float = 0.75
     @State private var syncThreshold: Float = 0.0
-
-    @State private var audioEnabled = true
-    @State private var audioGain: Float = 1.0
-    @State private var volume: Float = 0.1
-
-    @State private var frequencyMHz: Double = 642.0
-    @State private var lnaGain: Double = 40
-    @State private var vgaGain: Double = 30
-    @State private var rxAmpGain: Double = 14
-
+    @State private var audioGainUI: Float = 1.0
+    @State private var volumeUI: Float = 0.1
     @State private var selectedSampleRate: Int = 12500000
-    @State private var radioMode = false
+    @State private var selectedBandIndex: Int = 0
+    @State private var didInitialize = false
 
     private var connected: Bool { decoder.isConnected }
 
@@ -38,17 +64,8 @@ struct ContentView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
-                    // Display
-                    if radioMode {
-                        radioDisplay
-                    } else {
-                        videoDisplay
-                    }
-
-                    // Connection - always visible
+                    if radioMode { radioDisplay } else { videoDisplay }
                     connectionSection
-
-                    // Everything else - only when connected
                     if connected {
                         modeSection
                         statusBar
@@ -68,7 +85,71 @@ struct ContentView: View {
             .navigationTitle(radioMode ? "FM Radio" : "PAL-B TV")
             .navigationBarTitleDisplayMode(.inline)
             .preferredColorScheme(.dark)
+            .onAppear { restoreSettings() }
         }
+    }
+
+    // MARK: - Restore persisted settings on launch
+
+    private func restoreSettings() {
+        guard !didInitialize else { return }
+        didInitialize = true
+
+        if radioMode {
+            frequencyMHz = radioFreqMHz
+            lnaGain = radioLnaGain
+            vgaGain = radioVgaGain
+            rxAmpGain = radioRxAmpGain
+            selectedBandIndex = radioBandIndex
+        } else {
+            frequencyMHz = tvFreqMHz
+            lnaGain = tvLnaGain
+            vgaGain = tvVgaGain
+            rxAmpGain = tvRxAmpGain
+            selectedSampleRate = tvSampleRate
+        }
+        videoGain = Float(tvVideoGain)
+        videoOffset = Float(tvVideoOffset)
+        invertVideo = tvInvertVideo
+        colorMode = tvColorMode
+        chromaGain = Float(tvChromaGain)
+        syncThreshold = Float(tvSyncThreshold)
+        audioGainUI = Float(savedAudioGain)
+        volumeUI = Float(savedVolume)
+
+        // Apply to decoder
+        decoder.radioMode = radioMode
+        decoder.sampleRate = radioMode ? 2000000 : selectedSampleRate
+        decoder.frequency = UInt64(frequencyMHz * 1_000_000)
+    }
+
+    // MARK: - Save current mode settings
+
+    private func saveTVSettings() {
+        tvFreqMHz = frequencyMHz
+        tvSampleRate = selectedSampleRate
+        tvLnaGain = lnaGain
+        tvVgaGain = vgaGain
+        tvRxAmpGain = rxAmpGain
+        tvVideoGain = Double(videoGain)
+        tvVideoOffset = Double(videoOffset)
+        tvInvertVideo = invertVideo
+        tvColorMode = colorMode
+        tvChromaGain = Double(chromaGain)
+        tvSyncThreshold = Double(syncThreshold)
+    }
+
+    private func saveRadioSettings() {
+        radioFreqMHz = frequencyMHz
+        radioLnaGain = lnaGain
+        radioVgaGain = vgaGain
+        radioRxAmpGain = rxAmpGain
+        radioBandIndex = selectedBandIndex
+    }
+
+    private func saveAudioSettings() {
+        savedAudioGain = Double(audioGainUI)
+        savedVolume = Double(volumeUI)
     }
 
     // MARK: - Display
@@ -148,9 +229,15 @@ struct ContentView: View {
             HStack(spacing: 12) {
                 Button {
                     guard radioMode else { return }
+                    // Save radio settings before switching
+                    saveRadioSettings()
                     radioMode = false
-                    frequencyMHz = 642.0
-                    // Defer the heavy work to next runloop
+                    // Restore TV settings
+                    frequencyMHz = tvFreqMHz
+                    lnaGain = tvLnaGain
+                    vgaGain = tvVgaGain
+                    rxAmpGain = tvRxAmpGain
+                    selectedSampleRate = tvSampleRate
                     DispatchQueue.main.async {
                         decoder.frequency = UInt64(frequencyMHz * 1_000_000)
                         decoder.setRadioMode(false)
@@ -163,9 +250,15 @@ struct ContentView: View {
 
                 Button {
                     guard !radioMode else { return }
+                    // Save TV settings before switching
+                    saveTVSettings()
                     radioMode = true
-                    frequencyMHz = 100.0
-                    // Defer the heavy work to next runloop
+                    // Restore radio settings
+                    frequencyMHz = radioFreqMHz
+                    lnaGain = radioLnaGain
+                    vgaGain = radioVgaGain
+                    rxAmpGain = radioRxAmpGain
+                    selectedBandIndex = radioBandIndex
                     DispatchQueue.main.async {
                         decoder.frequency = UInt64(frequencyMHz * 1_000_000)
                         decoder.setRadioMode(true)
@@ -233,8 +326,6 @@ struct ContentView: View {
         BandDef(name: "ALL",   min: 1.0,   max: 6000.0, step: 0.1, defaultFreq: 100.0),
     ]
 
-    @State private var selectedBandIndex: Int = 0
-
     private var currentBand: BandDef {
         radioBands[selectedBandIndex]
     }
@@ -255,25 +346,25 @@ struct ContentView: View {
 
                 // Fine-tune buttons
                 HStack(spacing: 8) {
-                    Button { nudgeFreq(-1.0) } label: { Text("-1").font(.caption2.bold()).frame(width: 32, height: 26) }
+                    Button { nudgeFreq(-0.5) } label: { Text("-0.5").font(.caption2.bold()).frame(width: 36, height: 26) }
                         .buttonStyle(.bordered).tint(.red)
-                    Button { nudgeFreq(-0.1) } label: { Text("-0.1").font(.caption2.bold()).frame(width: 36, height: 26) }
+                    Button { nudgeFreq(-0.05) } label: { Text("-0.05").font(.caption2.bold()).frame(width: 40, height: 26) }
                         .buttonStyle(.bordered).tint(.red)
                     Spacer()
-                    Button { nudgeFreq(+0.1) } label: { Text("+0.1").font(.caption2.bold()).frame(width: 36, height: 26) }
+                    Button { nudgeFreq(+0.05) } label: { Text("+0.05").font(.caption2.bold()).frame(width: 40, height: 26) }
                         .buttonStyle(.bordered).tint(.green)
-                    Button { nudgeFreq(+1.0) } label: { Text("+1").font(.caption2.bold()).frame(width: 32, height: 26) }
+                    Button { nudgeFreq(+0.5) } label: { Text("+0.5").font(.caption2.bold()).frame(width: 36, height: 26) }
                         .buttonStyle(.bordered).tint(.green)
                 }
 
                 if radioMode {
-                    // Band selector buttons
                     HStack(spacing: 6) {
                         ForEach(radioBands.indices, id: \.self) { i in
                             Button(radioBands[i].name) {
                                 selectedBandIndex = i
                                 frequencyMHz = radioBands[i].defaultFreq
                                 applyFrequency()
+                                saveRadioSettings()
                             }
                             .font(.caption2.bold())
                             .buttonStyle(.borderedProminent)
@@ -281,13 +372,12 @@ struct ContentView: View {
                         }
                     }
 
-                    // Slider locked to selected band range
                     Slider(value: $frequencyMHz,
                            in: currentBand.min...currentBand.max,
                            step: currentBand.step) {
                         Text("Freq")
                     } onEditingChanged: { editing in
-                        if !editing { applyFrequency() }
+                        if !editing { applyFrequency(); saveRadioSettings() }
                     }
 
                     HStack {
@@ -301,11 +391,10 @@ struct ContentView: View {
                             .font(.caption2).foregroundColor(.gray)
                     }
                 } else {
-                    // TV slider
                     Slider(value: $frequencyMHz, in: 47...862, step: 0.1) {
                         Text("Freq")
                     } onEditingChanged: { editing in
-                        if !editing { applyFrequency() }
+                        if !editing { applyFrequency(); saveTVSettings() }
                     }
                 }
             }
@@ -340,6 +429,7 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             .onChange(of: selectedSampleRate) { _, newRate in
                 decoder.changeSampleRate(newRate)
+                saveTVSettings()
             }
         }
     }
@@ -349,9 +439,18 @@ struct ContentView: View {
     private var rfGainSection: some View {
         GroupBox("RF Gain") {
             VStack(spacing: 6) {
-                sliderRow("LNA", value: $lnaGain, range: 0...40, step: 8) { decoder.setLnaGain(UInt(lnaGain)) }
-                sliderRow("VGA", value: $vgaGain, range: 0...62, step: 2) { decoder.setVgaGain(UInt(vgaGain)) }
-                sliderRow("RX Amp", value: $rxAmpGain, range: 0...14, step: 1) { decoder.setRxAmpGain(UInt(rxAmpGain)) }
+                sliderRow("LNA", value: $lnaGain, range: 0...40, step: 8) {
+                    decoder.setLnaGain(UInt(lnaGain))
+                    if radioMode { saveRadioSettings() } else { saveTVSettings() }
+                }
+                sliderRow("VGA", value: $vgaGain, range: 0...62, step: 2) {
+                    decoder.setVgaGain(UInt(vgaGain))
+                    if radioMode { saveRadioSettings() } else { saveTVSettings() }
+                }
+                sliderRow("RX Amp", value: $rxAmpGain, range: 0...14, step: 1) {
+                    decoder.setRxAmpGain(UInt(rxAmpGain))
+                    if radioMode { saveRadioSettings() } else { saveTVSettings() }
+                }
             }
         }
     }
@@ -361,18 +460,18 @@ struct ContentView: View {
     private var videoSection: some View {
         GroupBox("Video") {
             VStack(spacing: 6) {
-                floatSliderRow("Gain", value: $videoGain, range: 0.1...5.0) { decoder.setVideoGain(videoGain) }
-                floatSliderRow("Offset", value: $videoOffset, range: -1.0...1.0) { decoder.setVideoOffset(videoOffset) }
-                floatSliderRow("Sync Thr", value: $syncThreshold, range: 0...0.5) { decoder.setSyncThreshold(syncThreshold) }
+                floatSliderRow("Gain", value: $videoGain, range: 0.1...5.0) { decoder.setVideoGain(videoGain); saveTVSettings() }
+                floatSliderRow("Offset", value: $videoOffset, range: -1.0...1.0) { decoder.setVideoOffset(videoOffset); saveTVSettings() }
+                floatSliderRow("Sync Thr", value: $syncThreshold, range: 0...0.5) { decoder.setSyncThreshold(syncThreshold); saveTVSettings() }
                 HStack {
                     Toggle("Invert", isOn: $invertVideo)
-                        .onChange(of: invertVideo) { _, v in decoder.setVideoInvert(v) }
+                        .onChange(of: invertVideo) { _, v in decoder.setVideoInvert(v); saveTVSettings() }
                     Toggle("Color", isOn: $colorMode)
-                        .onChange(of: colorMode) { _, v in decoder.setColorMode(v) }
+                        .onChange(of: colorMode) { _, v in decoder.setColorMode(v); saveTVSettings() }
                 }
                 .toggleStyle(.button).font(.caption)
                 if colorMode {
-                    floatSliderRow("Chroma", value: $chromaGain, range: 0...2.0) { decoder.setChromaGain(chromaGain) }
+                    floatSliderRow("Chroma", value: $chromaGain, range: 0...2.0) { decoder.setChromaGain(chromaGain); saveTVSettings() }
                 }
             }
         }
@@ -384,9 +483,9 @@ struct ContentView: View {
         GroupBox("Audio") {
             VStack(spacing: 6) {
                 Toggle("Enable Audio", isOn: $audioEnabled)
-                    .onChange(of: audioEnabled) { _, v in decoder.setAudioEnabled(v) }
-                floatSliderRow("Gain", value: $audioGain, range: 0...5.0) { decoder.setAudioGain(audioGain) }
-                floatSliderRow("Volume", value: $volume, range: 0...1.0) { decoder.setVolume(volume) }
+                    .onChange(of: audioEnabled) { _, v in decoder.setAudioEnabled(v); saveAudioSettings() }
+                floatSliderRow("Gain", value: $audioGainUI, range: 0...5.0) { decoder.setAudioGain(audioGainUI); saveAudioSettings() }
+                floatSliderRow("Volume", value: $volumeUI, range: 0...1.0) { decoder.setVolume(volumeUI); saveAudioSettings() }
             }
         }
     }
@@ -401,6 +500,7 @@ struct ContentView: View {
     private func nudgeFreq(_ deltaMHz: Double) {
         frequencyMHz = max(1.0, min(6000.0, frequencyMHz + deltaMHz))
         applyFrequency()
+        if radioMode { saveRadioSettings() } else { saveTVSettings() }
     }
 
     private func sliderRow(_ label: String, value: Binding<Double>, range: ClosedRange<Double>,
