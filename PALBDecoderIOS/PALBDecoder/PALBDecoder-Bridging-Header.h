@@ -1,6 +1,6 @@
 #ifndef PALBDecoder_Bridging_Header_h
 #define PALBDecoder_Bridging_Header_h
 
-#include "DSPBridge.h"
+#include "DSP/DSPBridge.h"
 
 #endif

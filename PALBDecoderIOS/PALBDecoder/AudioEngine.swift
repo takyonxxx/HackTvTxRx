@@ -6,11 +6,19 @@ final class AudioEngine {
     private let format: AVAudioFormat
     private var isRunning = false
 
-    // Ring buffer for audio samples
-    private let bufferLock = NSLock()
-    private var sampleBuffer: [Float] = []
-    private let maxBufferSize = 480000 // 10s @ 48kHz
-    private let chunkSize = 480 // 10ms @ 48kHz
+    // Pre-allocated ring buffer
+    private let ringCapacity = 96000  // 2 seconds @ 48kHz
+    private var ring: UnsafeMutablePointer<Float>
+    private var ringWritePos = 0
+    private var ringReadPos = 0
+    private var ringCount = 0
+    private let ringLock: UnsafeMutablePointer<os_unfair_lock_s> = {
+        let p = UnsafeMutablePointer<os_unfair_lock_s>.allocate(capacity: 1)
+        p.initialize(to: os_unfair_lock_s())
+        return p
+    }()
+
+    private let chunkSize = 480  // 10ms @ 48kHz
 
     var volume: Float = 0.1 {
         didSet { playerNode.volume = volume }
@@ -18,23 +26,27 @@ final class AudioEngine {
 
     init() {
         format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2)!
+        ring = .allocate(capacity: ringCapacity)
+        ring.initialize(repeating: 0, count: ringCapacity)
         setupAudioSession()
         setupEngine()
     }
 
     deinit {
         stop()
+        ring.deallocate()
+        ringLock.deallocate()
     }
 
     private func setupAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default, options: [])
+            try session.setCategory(.playback, mode: .default)
             try session.setPreferredSampleRate(48000)
             try session.setPreferredIOBufferDuration(0.01)
             try session.setActive(true)
         } catch {
-            print("[Audio] Session setup error: \(error)")
+            print("[Audio] Session error: \(error)")
         }
     }
 
@@ -50,67 +62,65 @@ final class AudioEngine {
             try engine.start()
             playerNode.play()
             isRunning = true
-            scheduleBuffers()
+            scheduleNextBuffer()
             print("[Audio] Engine started")
         } catch {
-            print("[Audio] Engine start error: \(error)")
+            print("[Audio] Start error: \(error)")
         }
     }
 
     func stop() {
-        guard isRunning else { return }
+        isRunning = false
         playerNode.stop()
         engine.stop()
-        isRunning = false
     }
 
     func enqueueAudio(_ samples: UnsafePointer<Float>, count: Int) {
-        bufferLock.lock()
-        defer { bufferLock.unlock() }
+        os_unfair_lock_lock(ringLock)
+        defer { os_unfair_lock_unlock(ringLock) }
 
-        // Append mono samples
-        let newSamples = Array(UnsafeBufferPointer(start: samples, count: count))
-        sampleBuffer.append(contentsOf: newSamples)
-
-        // Overflow protection
-        if sampleBuffer.count > maxBufferSize {
-            sampleBuffer.removeFirst(sampleBuffer.count - maxBufferSize)
+        let toWrite = min(count, ringCapacity - 1)
+        // Drop oldest if full
+        if ringCount + toWrite > ringCapacity {
+            let drop = ringCount + toWrite - ringCapacity
+            ringReadPos = (ringReadPos + drop) % ringCapacity
+            ringCount -= drop
         }
+        for i in 0..<toWrite {
+            ring[ringWritePos] = samples[i]
+            ringWritePos = (ringWritePos + 1) % ringCapacity
+        }
+        ringCount += toWrite
     }
 
-    private func scheduleBuffers() {
+    private func scheduleNextBuffer() {
         guard isRunning else { return }
 
-        // Schedule next buffer
-        let framesToSchedule = AVAudioFrameCount(chunkSize)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: framesToSchedule) else { return }
-        buffer.frameLength = framesToSchedule
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(chunkSize)) else { return }
+        buffer.frameLength = AVAudioFrameCount(chunkSize)
 
-        bufferLock.lock()
-        let available = sampleBuffer.count
-        let samplesToRead = min(available, chunkSize)
-        bufferLock.unlock()
+        guard let left = buffer.floatChannelData?[0],
+              let right = buffer.floatChannelData?[1] else { return }
 
-        guard let leftChannel = buffer.floatChannelData?[0],
-              let rightChannel = buffer.floatChannelData?[1] else { return }
-
-        if samplesToRead >= chunkSize {
-            bufferLock.lock()
+        os_unfair_lock_lock(ringLock)
+        let available = ringCount
+        if available >= chunkSize {
             for i in 0..<chunkSize {
-                let sample = sampleBuffer[i]
-                leftChannel[i] = sample
-                rightChannel[i] = sample
+                let s = ring[ringReadPos]
+                left[i] = s
+                right[i] = s
+                ringReadPos = (ringReadPos + 1) % ringCapacity
             }
-            sampleBuffer.removeFirst(chunkSize)
-            bufferLock.unlock()
+            ringCount -= chunkSize
         } else {
-            // Silence when no data
-            memset(leftChannel, 0, chunkSize * MemoryLayout<Float>.size)
-            memset(rightChannel, 0, chunkSize * MemoryLayout<Float>.size)
+            // Silence
+            memset(left, 0, chunkSize * 4)
+            memset(right, 0, chunkSize * 4)
         }
+        os_unfair_lock_unlock(ringLock)
 
         playerNode.scheduleBuffer(buffer, completionCallbackType: .dataConsumed) { [weak self] _ in
-            self?.scheduleBuffers()
+            self?.scheduleNextBuffer()
         }
     }
 }

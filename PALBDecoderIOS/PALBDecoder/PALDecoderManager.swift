@@ -6,57 +6,88 @@ final class PALDecoderManager: ObservableObject {
     @Published var fps: Double = 0
     @Published var syncQuality: Float = 0
     @Published var isProcessing = false
+    @Published var sampleRate: Int = 16000000
 
     let tcpClient = SDRTCPClient()
     let audioEngine = AudioEngine()
 
     private var palDecoder: PALDecoderRef?
     private var audioDemod: AudioDemodRef?
-    private let processingQueue = DispatchQueue(label: "pal.processing", qos: .userInteractive)
-    private let audioProcessingQueue = DispatchQueue(label: "pal.audio", qos: .userInitiated)
+
+    private let videoQueue = DispatchQueue(label: "pal.video", qos: .userInteractive)
+    private let audioQueue = DispatchQueue(label: "pal.audio", qos: .userInitiated)
+
+    // Video frame accumulation buffer (pre-allocated, fixed size)
+    private var videoAccumBuffer: UnsafeMutablePointer<Int8>
+    private let videoAccumCapacity = 4 * 1024 * 1024  // 4 MB max
+    private var videoAccumCount = 0
+    private var frameSize: Int = 1280000  // 16M * 2 bytes * 0.04s = 1,280,000 bytes per PAL frame
+
+    // Video skip control
+    private var videoProcessing = false
+    private let videoLock: UnsafeMutablePointer<os_unfair_lock_s> = {
+        let p = UnsafeMutablePointer<os_unfair_lock_s>.allocate(capacity: 1)
+        p.initialize(to: os_unfair_lock_s())
+        return p
+    }()
 
     private var frameCount = 0
     private var fpsTimer: DispatchSourceTimer?
-    private var lastFrameTime = CFAbsoluteTimeGetCurrent()
 
-    // Frame buffer accumulation
-    private var iqBuffer = Data()
-    private var frameSize: Int = 0  // bytes per PAL frame (40ms worth)
-    private let bufferLock = NSLock()
+    private let colorSpace = CGColorSpaceCreateDeviceRGB()
+    private let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
 
-    // Settings
-    var sampleRate: Int = 16000000 {
-        didSet { updateSampleRate() }
-    }
-    var frequency: UInt64 = 479300000 {
-        didSet { updateFrequency() }
-    }
+    var frequency: UInt64 = 479300000
 
     init() {
+        videoAccumBuffer = .allocate(capacity: videoAccumCapacity)
+
         palDecoder = palDecoder_create()
         audioDemod = audioDemod_create()
 
-        updateSampleRate()
-        updateFrequency()
+        if let dec = palDecoder {
+            palDecoder_setSampleRate(dec, Int32(sampleRate))
+            palDecoder_setTuneFrequency(dec, frequency)
+            palDecoder_setVideoInvert(dec, 1)
+        }
+        if let aud = audioDemod {
+            audioDemod_setSampleRate(aud, Double(sampleRate))
+        }
+        updateAudioCarrier()
         setupCallbacks()
 
-        tcpClient.onDataReceived = { [weak self] data in
-            self?.handleData(data)
+        tcpClient.onDataReceived = { [weak self] ptr, len in
+            self?.handleTCPData(ptr, len: len)
         }
 
         startFPSTimer()
+        updateFrameSize()
     }
 
     deinit {
         fpsTimer?.cancel()
         if let dec = palDecoder { palDecoder_destroy(dec) }
         if let aud = audioDemod { audioDemod_destroy(aud) }
+        videoAccumBuffer.deallocate()
+        videoLock.deallocate()
+    }
+
+    private func updateFrameSize() {
+        // 1 PAL frame = 40ms = sampleRate * 2 * 0.04
+        frameSize = sampleRate * 2 * 40 / 1000
     }
 
     // MARK: - Connection
 
     func connect(host: String) {
-        tcpClient.connect(host: host)
+        let initialCommands = [
+            "SET_SAMPLE_RATE:\(sampleRate)",
+            "SET_FREQ:\(frequency)",
+            "SET_LNA_GAIN:40",
+            "SET_VGA_GAIN:30",
+            "SET_RX_AMP_GAIN:14"
+        ]
+        tcpClient.connect(host: host, initialCommands: initialCommands)
         audioEngine.start()
         DispatchQueue.main.async { self.isProcessing = true }
     }
@@ -64,10 +95,21 @@ final class PALDecoderManager: ObservableObject {
     func disconnect() {
         tcpClient.disconnect()
         audioEngine.stop()
+        videoAccumCount = 0
         DispatchQueue.main.async { self.isProcessing = false }
     }
 
-    // MARK: - Control
+    // MARK: - Sample Rate Change
+
+    func changeSampleRate(_ newRate: Int) {
+        sampleRate = newRate
+        updateFrameSize()
+        videoAccumCount = 0  // reset accumulator
+        if let dec = palDecoder { palDecoder_setSampleRate(dec, Int32(newRate)) }
+        if let aud = audioDemod { audioDemod_setSampleRate(aud, Double(newRate)) }
+        tcpClient.setSampleRate(UInt32(newRate))
+        updateAudioCarrier()
+    }
 
     func updateFrequency() {
         if let dec = palDecoder { palDecoder_setTuneFrequency(dec, frequency) }
@@ -75,129 +117,105 @@ final class PALDecoderManager: ObservableObject {
         updateAudioCarrier()
     }
 
-    func updateSampleRate() {
-        // Frame size = samples_per_second * 2 bytes * 0.04s (40ms = 1 PAL frame)
-        frameSize = sampleRate * 2 * 40 / 1000  // e.g. 16M * 2 * 0.04 = 1,280,000
-        if let dec = palDecoder { palDecoder_setSampleRate(dec, Int32(sampleRate)) }
-        if let aud = audioDemod { audioDemod_setSampleRate(aud, Double(sampleRate)) }
-        tcpClient.setSampleRate(UInt32(sampleRate))
-        updateAudioCarrier()
-    }
+    // MARK: - Data Handling
 
-    private func updateAudioCarrier() {
-        guard let aud = audioDemod else { return }
-        let tuneMHz = Double(frequency) / 1.0e6
-        var videoCarrierMHz: Double
-        if tuneMHz >= 470.0 && tuneMHz <= 862.0 {
-            let ch = Int(floor((tuneMHz - 470.0 - 0.001) / 8.0))
-            videoCarrierMHz = 470.0 + Double(max(ch, 0)) * 8.0 + 1.25
-        } else if tuneMHz >= 174.0 && tuneMHz <= 230.0 {
-            let ch = Int(floor((tuneMHz - 174.0 - 0.001) / 8.0))
-            videoCarrierMHz = 174.0 + Double(max(ch, 0)) * 8.0 + 1.25
-        } else {
-            videoCarrierMHz = tuneMHz
+    private func handleTCPData(_ ptr: UnsafePointer<Int8>, len: Int) {
+        // AUDIO: feed every TCP packet directly (continuity)
+        let aCopy = UnsafeMutablePointer<Int8>.allocate(capacity: len)
+        memcpy(aCopy, ptr, len)
+        audioQueue.async { [weak self] in
+            defer { aCopy.deallocate() }
+            guard let self = self, let aud = self.audioDemod else { return }
+            audioDemod_processSamples(aud, aCopy, len)
         }
-        let audioCarrierHz = (videoCarrierMHz + 5.5 - tuneMHz) * 1.0e6
-        audioDemod_setAudioCarrierFreq(aud, audioCarrierHz)
+
+        // VIDEO: accumulate into frame buffer, process when full frame ready
+        let spaceLeft = videoAccumCapacity - videoAccumCount
+        let toCopy = min(len, spaceLeft)
+        if toCopy > 0 {
+            memcpy(videoAccumBuffer + videoAccumCount, ptr, toCopy)
+            videoAccumCount += toCopy
+        }
+
+        // Check if we have a full frame
+        while videoAccumCount >= frameSize {
+            // Check if video queue is free
+            os_unfair_lock_lock(videoLock)
+            let canVideo = !videoProcessing
+            if canVideo { videoProcessing = true }
+            os_unfair_lock_unlock(videoLock)
+
+            if canVideo {
+                // Copy frame data and send to video queue
+                let vCopy = UnsafeMutablePointer<Int8>.allocate(capacity: frameSize)
+                memcpy(vCopy, videoAccumBuffer, frameSize)
+                let fSize = frameSize
+                videoQueue.async { [weak self] in
+                    defer { vCopy.deallocate() }
+                    guard let self = self, let dec = self.palDecoder else { return }
+                    palDecoder_processSamples(dec, vCopy, fSize)
+                    os_unfair_lock_lock(self.videoLock)
+                    self.videoProcessing = false
+                    os_unfair_lock_unlock(self.videoLock)
+                }
+            }
+            // else: skip this frame (video still busy)
+
+            // Shift remaining data to front
+            let remaining = videoAccumCount - frameSize
+            if remaining > 0 {
+                memmove(videoAccumBuffer, videoAccumBuffer + frameSize, remaining)
+            }
+            videoAccumCount = remaining
+        }
     }
 
     // MARK: - Callbacks
 
     private func setupCallbacks() {
         guard let dec = palDecoder, let aud = audioDemod else { return }
-
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
-        palDecoder_setFrameCallback(dec, { rgba, width, height, context in
-            guard let context = context else { return }
-            let manager = Unmanaged<PALDecoderManager>.fromOpaque(context).takeUnretainedValue()
-            manager.handleFrame(rgba!, width: Int(width), height: Int(height))
+        palDecoder_setFrameCallback(dec, { rgba, width, height, ctx in
+            guard let ctx = ctx, let rgba = rgba else { return }
+            let mgr = Unmanaged<PALDecoderManager>.fromOpaque(ctx).takeUnretainedValue()
+            mgr.handleFrame(rgba, width: Int(width), height: Int(height))
         }, selfPtr)
 
-        palDecoder_setSyncStatsCallback(dec, { syncRate, _, _, context in
-            guard let context = context else { return }
-            let manager = Unmanaged<PALDecoderManager>.fromOpaque(context).takeUnretainedValue()
-            DispatchQueue.main.async { manager.syncQuality = syncRate }
+        palDecoder_setSyncStatsCallback(dec, { syncRate, _, _, ctx in
+            guard let ctx = ctx else { return }
+            let mgr = Unmanaged<PALDecoderManager>.fromOpaque(ctx).takeUnretainedValue()
+            DispatchQueue.main.async { mgr.syncQuality = syncRate }
         }, selfPtr)
 
-        audioDemod_setAudioCallback(aud, { samples, count, context in
-            guard let context = context, let samples = samples else { return }
-            let manager = Unmanaged<PALDecoderManager>.fromOpaque(context).takeUnretainedValue()
-            manager.audioEngine.enqueueAudio(samples, count: Int(count))
+        audioDemod_setAudioCallback(aud, { samples, count, ctx in
+            guard let ctx = ctx, let samples = samples else { return }
+            let mgr = Unmanaged<PALDecoderManager>.fromOpaque(ctx).takeUnretainedValue()
+            mgr.audioEngine.enqueueAudio(samples, count: Int(count))
         }, selfPtr)
-    }
-
-    // MARK: - Data Processing
-
-    private func handleData(_ data: Data) {
-        bufferLock.lock()
-        iqBuffer.append(data)
-        bufferLock.unlock()
-
-        // Process accumulated frames
-        processBufferedData()
-    }
-
-    private func processBufferedData() {
-        guard frameSize > 0 else { return }
-
-        bufferLock.lock()
-        guard iqBuffer.count >= frameSize else {
-            bufferLock.unlock()
-            return
-        }
-        // Take one frame worth of data
-        let frameData = iqBuffer.prefix(frameSize)
-        iqBuffer.removeFirst(frameSize)
-        bufferLock.unlock()
-
-        // Video processing
-        processingQueue.async { [weak self] in
-            guard let self = self, let dec = self.palDecoder else { return }
-            frameData.withUnsafeBytes { rawBuffer in
-                guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: Int8.self) else { return }
-                palDecoder_processSamples(dec, ptr, frameData.count)
-            }
-        }
-
-        // Audio processing (parallel)
-        audioProcessingQueue.async { [weak self] in
-            guard let self = self, let aud = self.audioDemod else { return }
-            frameData.withUnsafeBytes { rawBuffer in
-                guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: Int8.self) else { return }
-                audioDemod_processSamples(aud, ptr, frameData.count)
-            }
-        }
-
-        // Process remaining frames if any
-        bufferLock.lock()
-        let hasMore = iqBuffer.count >= frameSize
-        bufferLock.unlock()
-        if hasMore { processBufferedData() }
     }
 
     // MARK: - Frame Rendering
 
     private func handleFrame(_ rgba: UnsafePointer<UInt8>, width: Int, height: Int) {
         frameCount += 1
-        let dataSize = width * height * 4
-        let data = Data(bytes: rgba, count: dataSize)
+        let bytesPerRow = width * 4
+        let dataSize = bytesPerRow * height
 
-        guard let provider = CGDataProvider(data: data as CFData),
+        guard let cfData = CFDataCreate(nil, rgba, dataSize),
+              let provider = CGDataProvider(data: cfData),
               let cgImage = CGImage(
                   width: width, height: height,
                   bitsPerComponent: 8, bitsPerPixel: 32,
-                  bytesPerRow: width * 4,
-                  space: CGColorSpaceCreateDeviceRGB(),
-                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                  bytesPerRow: bytesPerRow,
+                  space: colorSpace,
+                  bitmapInfo: bitmapInfo,
                   provider: provider,
                   decode: nil, shouldInterpolate: false,
                   intent: .defaultIntent
               ) else { return }
 
-        DispatchQueue.main.async {
-            self.currentFrame = cgImage
-        }
+        DispatchQueue.main.async { self.currentFrame = cgImage }
     }
 
     // MARK: - FPS Timer
@@ -213,36 +231,36 @@ final class PALDecoderManager: ObservableObject {
         fpsTimer?.resume()
     }
 
-    // MARK: - Settings Accessors
+    // MARK: - Audio Carrier
 
-    func setVideoGain(_ gain: Float) {
-        if let dec = palDecoder { palDecoder_setVideoGain(dec, gain) }
+    private func updateAudioCarrier() {
+        guard let aud = audioDemod else { return }
+        let tuneMHz = Double(frequency) / 1.0e6
+        var videoCarrierMHz: Double
+        if tuneMHz >= 470.0 && tuneMHz <= 862.0 {
+            let ch = Int(floor((tuneMHz - 470.0 - 0.001) / 8.0))
+            videoCarrierMHz = 470.0 + Double(max(ch, 0)) * 8.0 + 1.25
+        } else if tuneMHz >= 174.0 && tuneMHz <= 230.0 {
+            let ch = Int(floor((tuneMHz - 174.0 - 0.001) / 8.0))
+            videoCarrierMHz = 174.0 + Double(max(ch, 0)) * 8.0 + 1.25
+        } else {
+            videoCarrierMHz = tuneMHz
+        }
+        audioDemod_setAudioCarrierFreq(aud, (videoCarrierMHz + 5.5 - tuneMHz) * 1.0e6)
     }
-    func setVideoOffset(_ offset: Float) {
-        if let dec = palDecoder { palDecoder_setVideoOffset(dec, offset) }
-    }
-    func setVideoInvert(_ invert: Bool) {
-        if let dec = palDecoder { palDecoder_setVideoInvert(dec, invert ? 1 : 0) }
-    }
-    func setColorMode(_ color: Bool) {
-        if let dec = palDecoder { palDecoder_setColorMode(dec, color ? 1 : 0) }
-    }
-    func setChromaGain(_ gain: Float) {
-        if let dec = palDecoder { palDecoder_setChromaGain(dec, gain) }
-    }
-    func setSyncThreshold(_ threshold: Float) {
-        if let dec = palDecoder { palDecoder_setSyncThreshold(dec, threshold) }
-    }
-    func setAudioGain(_ gain: Float) {
-        if let aud = audioDemod { audioDemod_setAudioGain(aud, gain) }
-    }
-    func setAudioEnabled(_ enabled: Bool) {
-        if let aud = audioDemod { audioDemod_setAudioEnabled(aud, enabled ? 1 : 0) }
-    }
-    func setVolume(_ volume: Float) {
-        audioEngine.volume = volume
-    }
-    func setLnaGain(_ gain: UInt) { tcpClient.setLnaGain(gain) }
-    func setVgaGain(_ gain: UInt) { tcpClient.setVgaGain(gain) }
-    func setRxAmpGain(_ gain: UInt) { tcpClient.setRxAmpGain(gain) }
+
+    // MARK: - Settings
+
+    func setVideoGain(_ gain: Float) { if let d = palDecoder { palDecoder_setVideoGain(d, gain) } }
+    func setVideoOffset(_ offset: Float) { if let d = palDecoder { palDecoder_setVideoOffset(d, offset) } }
+    func setVideoInvert(_ invert: Bool) { if let d = palDecoder { palDecoder_setVideoInvert(d, invert ? 1 : 0) } }
+    func setColorMode(_ color: Bool) { if let d = palDecoder { palDecoder_setColorMode(d, color ? 1 : 0) } }
+    func setChromaGain(_ gain: Float) { if let d = palDecoder { palDecoder_setChromaGain(d, gain) } }
+    func setSyncThreshold(_ t: Float) { if let d = palDecoder { palDecoder_setSyncThreshold(d, t) } }
+    func setAudioGain(_ gain: Float) { if let a = audioDemod { audioDemod_setAudioGain(a, gain) } }
+    func setAudioEnabled(_ e: Bool) { if let a = audioDemod { audioDemod_setAudioEnabled(a, e ? 1 : 0) } }
+    func setVolume(_ v: Float) { audioEngine.volume = v }
+    func setLnaGain(_ g: UInt) { tcpClient.setLnaGain(g) }
+    func setVgaGain(_ g: UInt) { tcpClient.setVgaGain(g) }
+    func setRxAmpGain(_ g: UInt) { tcpClient.setRxAmpGain(g) }
 }

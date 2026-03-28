@@ -89,6 +89,10 @@ void PALDecoder::setSampleRate(int sampleRate)
     applyStandard();
     initFilters();
     rebuildColorLUT();
+    // NCO phase increment depends on sample rate - must recalculate
+    m_ncoPhaseIncrement = -2.0 * M_PI * static_cast<double>(m_videoCarrierOffsetHz)
+                          / static_cast<double>(m_sampleRate);
+    m_ncoPhase = 0.0;
     m_resampleCounter = 0;
     m_sampleOffset = 0;
     m_sampleOffsetFrac = 0.0f;
