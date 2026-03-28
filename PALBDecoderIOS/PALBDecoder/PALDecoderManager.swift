@@ -83,24 +83,26 @@ final class PALDecoderManager: ObservableObject {
         guard !switchingMode else { return }
         switchingMode = true
         radioMode = enabled
+        let nr = enabled ? 2000000 : 12500000
         print("[MODE] Switching to \(enabled ? "Radio" : "TV")...")
 
-        // 1. Send FLUSH to server - clears Qt event queue and kills data clients
+        // 1. Send FLUSH then SET_SAMPLE_RATE on control port (same connection!)
+        //    Server: FLUSH pauses data, drains queue. SET_SAMPLE_RATE changes rate and resumes.
         tcpClient.flush()
+        tcpClient.setSampleRate(UInt32(nr))
+        tcpClient.setFrequency(frequency)
         audioEngine.stop()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
-            // 2. Wait for server to process FLUSH (it aborts data connections)
-            Thread.sleep(forTimeInterval: 0.5)
+            // 2. Wait for server to process FLUSH + SET_SAMPLE_RATE
+            Thread.sleep(forTimeInterval: 1.0)
 
-            // 3. Disconnect our side too
+            // 3. Disconnect and configure decoders
             self.tcpClient.disconnect()
             Thread.sleep(forTimeInterval: 0.3)
 
-            // 4. Configure decoders
-            let nr = enabled ? 2000000 : 12500000
             if let a = self.audioDemod {
                 audioDemod_setRadioMode(a, enabled ? 1 : 0)
                 audioDemod_setSampleRate(a, Double(nr))
@@ -117,13 +119,12 @@ final class PALDecoderManager: ObservableObject {
                 self.audioEngine.flush()
                 self.audioEngine.start()
 
-                // 5. Reconnect with new rate - server pipeline is clean now
+                // 4. Reconnect - server is already at new rate, no stale data
                 self.tcpClient.connect(host: self.lastHost, initialCommands: [
                     "SET_SAMPLE_RATE:\(nr)", "SET_FREQ:\(self.frequency)",
                     "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
                 ])
 
-                // 6. Small safety drop then enable
                 DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5) { [weak self] in
                     guard let self = self else { return }
                     self.audioEngine.flush()
