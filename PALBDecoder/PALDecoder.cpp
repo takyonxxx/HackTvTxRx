@@ -47,6 +47,7 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_notchX1(0.0f), m_notchX2(0.0f), m_notchY1(0.0f), m_notchY2(0.0f)
     , m_chromaNotchB0(1.0f), m_chromaNotchB1(0.0f), m_chromaNotchB2(0.0f), m_chromaNotchA1(0.0f), m_chromaNotchA2(0.0f)
     , m_chromaNotchX1(0.0f), m_chromaNotchX2(0.0f), m_chromaNotchY1(0.0f), m_chromaNotchY2(0.0f)
+    , m_chromaNotch2X1(0.0f), m_chromaNotch2X2(0.0f), m_chromaNotch2Y1(0.0f), m_chromaNotch2Y2(0.0f)
     , m_chromaUAccum(0.0f)
     , m_chromaVAccum(0.0f)
     , m_ampMin(-1.0f)
@@ -73,6 +74,21 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_lastSyncQuality(0.0f)
     , m_vPhaseAlternate(false)
     , m_colorCarrierIndex(0)
+    , m_burstStartSample(0)
+    , m_burstEndSample(0)
+    , m_burstCorrI(0.0f)
+    , m_burstCorrQ(0.0f)
+    , m_burstDCAccum(0.0f)
+    , m_burstCosAccum(0.0f)
+    , m_burstSinAccum(0.0f)
+    , m_burstSampleCount(0)
+    , m_burstAmplitude(0.0f)
+    , m_burstValid(false)
+    , m_chromaRefPhase(0.0f)
+    , m_burstPhaseSmoothed(0.0f)
+    , m_chromaCosRef(1.0f)
+    , m_chromaSinRef(0.0f)
+    , m_burstAmpSmoothed(0.04f)
 {
     m_frameBuffer.resize(VIDEO_WIDTH * VIDEO_HEIGHT * 4, 0);
     m_lineBuffer.reserve(2048);
@@ -120,6 +136,7 @@ void PALDecoder::setSampleRate(int sampleRate)
     applyStandard();
     initFilters();
     initNotchFilter();
+    initBurstPLL();
     rebuildColorLUT();
 
     // Reset state
@@ -132,6 +149,21 @@ void PALDecoder::setSampleRate(int sampleRate)
     m_fieldIndex = 0;
     m_colorCarrierIndex = 0;
 
+    // Reset burst PLL
+    m_burstCorrI = 0.0f;
+    m_burstCorrQ = 0.0f;
+    m_burstDCAccum = 0.0f;
+    m_burstCosAccum = 0.0f;
+    m_burstSinAccum = 0.0f;
+    m_burstSampleCount = 0;
+    m_burstAmplitude = 0.0f;
+    m_burstValid = false;
+    m_chromaRefPhase = 0.0f;
+    m_burstPhaseSmoothed = 0.0f;
+    m_chromaCosRef = 1.0f;
+    m_chromaSinRef = 0.0f;
+    m_burstAmpSmoothed = 0.04f;
+
     // Reset AGC
     m_ampMin = -1.0f;
     m_ampMax = 1.0f;
@@ -143,6 +175,7 @@ void PALDecoder::setSampleRate(int sampleRate)
     // Reset notch filter state
     m_notchX1 = m_notchX2 = m_notchY1 = m_notchY2 = 0.0f;
     m_chromaNotchX1 = m_chromaNotchX2 = m_chromaNotchY1 = m_chromaNotchY2 = 0.0f;
+    m_chromaNotch2X1 = m_chromaNotch2X2 = m_chromaNotch2Y1 = m_chromaNotch2Y2 = 0.0f;
 
     // Clear filter delays
     m_videoFilterDelay.clear();
@@ -186,10 +219,14 @@ void PALDecoder::initFilters()
     float rate = static_cast<float>(m_sampleRate);
 
     // Video IQ LPF: applied to complex IQ after NCO shift, before AM demod.
-    // Cutoff should pass full video content (luma 5 MHz + chroma subcarrier 4.43 MHz)
-    // but reject audio carrier at 5.5 MHz offset.
-    // Use 5.0 MHz cutoff to keep video but attenuate audio carrier.
-    float videoCutoff = std::min(5.0e6f, rate * 0.40f);
+    // Must pass chroma subcarrier at 4.43 MHz with minimal attenuation.
+    // At 12.5 MHz: Nyquist=6.25 MHz, use 5 MHz (tight but necessary)
+    // At 16+ MHz: Nyquist=8+ MHz, use 6 MHz (preserves chroma fully)
+    float videoCutoff;
+    if (m_sampleRate >= 16000000)
+        videoCutoff = std::min(6.0e6f, rate * 0.40f);
+    else
+        videoCutoff = std::min(5.0e6f, rate * 0.40f);
     int videoTaps = std::max(17, static_cast<int>(rate / videoCutoff) * 4 + 1);
     if (videoTaps > 65) videoTaps = 65;
     if (videoTaps % 2 == 0) videoTaps++;
@@ -204,9 +241,17 @@ void PALDecoder::initFilters()
     m_lumaFilterTaps = designLowPassFIR(lumaCutoff, m_decimatedRate, lumaTaps);
 
     // Chroma BPF at FULL sample rate (chroma demod runs before decimation)
-    // Reduced from 65 to 31 taps for performance (65 taps halved FPS)
+    // More taps at higher sample rates for sharper filter.
+    // PAL chroma bandwidth is ~1.3 MHz (U: 1.3 MHz, V: 1.3 MHz).
     if (COLOR_CARRIER_FREQ < rate / 2.0f) {
-        m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, rate, 31);
+        int chromaTaps;
+        if (m_sampleRate >= 20000000)
+            chromaTaps = 45;      // 20 MHz: more headroom, sharper BPF
+        else if (m_sampleRate >= 16000000)
+            chromaTaps = 35;      // 16 MHz: good balance
+        else
+            chromaTaps = 31;      // 12.5 MHz: minimal
+        m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, rate, chromaTaps);
     } else {
         m_chromaFilterTaps.clear();
     }
@@ -215,7 +260,9 @@ void PALDecoder::initFilters()
              << "(" << m_videoFilterTaps.size() << "taps),"
              << "luma" << lumaCutoff / 1e6f << "MHz @" << m_decimatedRate / 1e6f
              << "(" << lumaTaps << "taps),"
-             << "chroma" << (m_chromaFilterTaps.empty() ? "OFF" : "ON")
+             << "chroma BPF" << (m_chromaFilterTaps.empty() ? "OFF" : "ON")
+             << m_chromaBandwidth / 1e6f << "MHz BW"
+             << "(" << m_chromaFilterTaps.size() << "taps)"
              << "@" << rate / 1e6f << "MHz";
 }
 
@@ -265,16 +312,15 @@ void PALDecoder::initNotchFilter()
     qDebug() << "  Audio notch filter:" << beatFreq / 1e6f << "MHz, BW:" << notchBW / 1e3f << "kHz, R:" << R;
 
     // === Chroma subcarrier notch at 4.43 MHz ===
-    // This removes the colour subcarrier from the luma path, preventing
-    // the vertical coloured stripes (dot crawl) that appear when chroma
-    // energy leaks into luma.
+    // Cascaded 2-stage biquad for ~40 dB suppression of colour subcarrier from luma.
+    // Wider BW (800 kHz) to catch subcarrier + sidebands.
     float chromaFreq = COLOR_CARRIER_FREQ;
     if (chromaFreq >= rate / 2.0f) {
         chromaFreq = rate - chromaFreq;
         if (chromaFreq < 0) chromaFreq = -chromaFreq;
     }
     float cw0 = 2.0f * static_cast<float>(M_PI) * chromaFreq / rate;
-    float cBW = 600e3f;  // 600 kHz notch bandwidth - wide enough to catch subcarrier
+    float cBW = 800e3f;  // 800 kHz notch bandwidth
     float cbw = 2.0f * static_cast<float>(M_PI) * cBW / rate;
     float cR = 1.0f - cbw / 2.0f;
     if (cR < 0.8f) cR = 0.8f;
@@ -296,8 +342,9 @@ void PALDecoder::initNotchFilter()
     }
 
     m_chromaNotchX1 = m_chromaNotchX2 = m_chromaNotchY1 = m_chromaNotchY2 = 0.0f;
+    m_chromaNotch2X1 = m_chromaNotch2X2 = m_chromaNotch2Y1 = m_chromaNotch2Y2 = 0.0f;
 
-    qDebug() << "  Chroma notch filter:" << chromaFreq / 1e6f << "MHz, BW:" << cBW / 1e3f << "kHz, R:" << cR;
+    qDebug() << "  Chroma notch filter (2-stage):" << chromaFreq / 1e6f << "MHz, BW:" << cBW / 1e3f << "kHz, R:" << cR;
 }
 
 void PALDecoder::rebuildColorLUT()
@@ -320,6 +367,181 @@ void PALDecoder::rebuildColorLUT()
         m_colorCarrierSin[i] = static_cast<float>(std::sin(phase));
         m_colorCarrierCos[i] = static_cast<float>(std::cos(phase));
     }
+}
+
+void PALDecoder::initBurstPLL()
+{
+    float rate = static_cast<float>(m_sampleRate);
+
+    // PAL-B colour burst: 10 +/- 1 cycles of 4.43 MHz subcarrier
+    // Located in the back porch, starting ~5.6 us after the leading edge of H-sync
+    // and ending ~7.85 us (burst duration ~2.25 us)
+    // We use sample positions at FULL sample rate since chroma runs at full rate.
+    float exactSPL = rate / (NB_LINES * FPS);
+    m_burstStartSample = static_cast<int>(5.6f / 64.0f * exactSPL);
+    m_burstEndSample   = static_cast<int>(7.85f / 64.0f * exactSPL);
+
+    qDebug() << "  Burst PLL: window" << m_burstStartSample << "-" << m_burstEndSample
+             << "samples (" << (m_burstEndSample - m_burstStartSample) << "samples,"
+             << (m_burstEndSample - m_burstStartSample) / (rate / COLOR_CARRIER_FREQ)
+             << "cycles at" << rate / 1e6f << "MHz)";
+}
+
+void PALDecoder::accumulateBurst(float sample)
+{
+    if (m_colorCarrierSin.empty()) return;
+
+    int idx = m_colorCarrierIndex - 1;
+    if (idx < 0) idx += static_cast<int>(m_colorCarrierSin.size());
+
+    float cosVal = m_colorCarrierCos[idx];
+    float sinVal = m_colorCarrierSin[idx];
+
+    m_burstCorrI += sample * cosVal;
+    m_burstCorrQ += sample * sinVal;
+    m_burstDCAccum += sample;
+    m_burstCosAccum += cosVal;
+    m_burstSinAccum += sinVal;
+    m_burstSampleCount++;
+}
+
+void PALDecoder::extractBurstPhase()
+{
+    if (m_burstSampleCount < 5) {
+        m_burstValid = false;
+        return;
+    }
+
+    float N = static_cast<float>(m_burstSampleCount);
+
+    // Remove DC bias from correlation:
+    // Raw correlation: sum(sample * cos) = sum((DC + AC) * cos)
+    //                                    = DC * sum(cos) + sum(AC * cos)
+    // We want just sum(AC * cos), so subtract DC * sum(cos):
+    float dcMean = m_burstDCAccum / N;
+    float corrI = (m_burstCorrI - dcMean * m_burstCosAccum) / N;
+    float corrQ = (m_burstCorrQ - dcMean * m_burstSinAccum) / N;
+
+    float amplitude = std::sqrt(corrI * corrI + corrQ * corrQ);
+
+    if (amplitude < 0.0005f) {
+        m_burstValid = false;
+        return;
+    }
+
+    m_burstValid = true;
+    m_burstAmplitude = amplitude;
+
+    // The burst signal is: A * sin(2*pi*fsc*t + burst_phase)
+    // Our LUT is: sin(2*pi*fsc*n/fs), cos(2*pi*fsc*n/fs)
+    // Correlation gives: I = A*cos(burst_phase - LUT_phase), Q = A*sin(burst_phase - LUT_phase)
+    // So: measured_angle = atan2(Q, I) = burst_phase - LUT_initial_phase
+    //
+    // PAL burst nominal phase (relative to U subcarrier):
+    //   burst = sin(wt + 180 + 45) on V-normal lines  = sin(wt + 225 deg)
+    //   burst = sin(wt + 180 - 45) on V-inverted lines = sin(wt + 135 deg)
+    // This means burst_phase is 225 or 135 deg from the U=0 reference.
+    //
+    // For U demod we need: cos(wt + LUT_offset) aligned to U axis (0 deg)
+    // For V demod we need: sin(wt + LUT_offset) aligned to V axis (90 deg)
+    // where LUT_offset = measured_angle - burst_nominal
+    //
+    // Actually simpler: the measured angle tells us where our LUT's 0-phase is
+    // relative to the burst. The U reference is the burst phase minus the
+    // nominal burst angle.
+
+    float measuredAngle = std::atan2(corrQ, corrI);
+
+    // PAL burst nominal angle (the angle of the burst relative to U axis):
+    // Burst = U*sin(wt + 180+45) or U*sin(wt + 180-45)
+    // In terms of cos/sin decomposition of burst:
+    //   Line type A: burst at 225 deg = -cos(45)*cos(wt) - sin(45)*sin(wt) ... but
+    // Let's use a cleaner model:
+    //   The burst vector in (I,Q) space points at the burst phase angle.
+    //   On PAL-normal lines (V not inverted): burst phase = 225 deg (= -135 deg)
+    //   On PAL-inverted lines (V inverted):   burst phase = 135 deg
+    // Our LUT starts at phase=0 at sample 0 of the line. The measured angle
+    // is the LUT's accumulated phase at the burst position MINUS the burst's
+    // actual phase. So:
+    //   LUT_at_burst = measuredAngle + burst_actual_phase
+    // And we want the U-axis reference (0 deg). The phase correction to apply
+    // to our LUT for U demod = -(measuredAngle - burst_nominal)
+    //
+    // Even simpler approach: just use the raw measured phase directly.
+    // The measured phase IS the offset between our LUT and the burst.
+    // The burst's known angle tells us where U-axis is relative to the burst.
+    // refPhase = measuredAngle - burst_nominal_angle
+
+    float burstNominalRad;
+    if (m_vPhaseAlternate) {
+        // V-inverted line: burst at +135 deg
+        burstNominalRad = 135.0f * static_cast<float>(M_PI) / 180.0f;
+    } else {
+        // V-normal line: burst at +225 deg = -135 deg
+        burstNominalRad = -135.0f * static_cast<float>(M_PI) / 180.0f;
+    }
+
+    float refPhase = measuredAngle - burstNominalRad;
+
+    // Normalize to [-pi, pi]
+    while (refPhase > static_cast<float>(M_PI))  refPhase -= 2.0f * static_cast<float>(M_PI);
+    while (refPhase < -static_cast<float>(M_PI)) refPhase += 2.0f * static_cast<float>(M_PI);
+
+    // Smooth the phase with circular averaging
+    float alpha = 0.4f;
+    float dPhase = refPhase - m_burstPhaseSmoothed;
+    if (dPhase > static_cast<float>(M_PI))  dPhase -= 2.0f * static_cast<float>(M_PI);
+    if (dPhase < -static_cast<float>(M_PI)) dPhase += 2.0f * static_cast<float>(M_PI);
+    m_burstPhaseSmoothed += alpha * dPhase;
+    while (m_burstPhaseSmoothed > static_cast<float>(M_PI))  m_burstPhaseSmoothed -= 2.0f * static_cast<float>(M_PI);
+    while (m_burstPhaseSmoothed < -static_cast<float>(M_PI)) m_burstPhaseSmoothed += 2.0f * static_cast<float>(M_PI);
+
+    m_chromaRefPhase = m_burstPhaseSmoothed;
+
+    // Cache cos/sin for this line (avoids per-sample trig calls)
+    m_chromaCosRef = std::cos(m_chromaRefPhase);
+    m_chromaSinRef = std::sin(m_chromaRefPhase);
+
+    // Smooth burst amplitude for chroma AGC
+    m_burstAmpSmoothed = m_burstAmpSmoothed * 0.9f + amplitude * 0.1f;
+
+    // Reset accumulators for next line
+    m_burstCorrI = 0.0f;
+    m_burstCorrQ = 0.0f;
+    m_burstSampleCount = 0;
+}
+
+float PALDecoder::chromaDemodU(float sample)
+{
+    if (m_colorCarrierSin.empty()) return 0.0f;
+
+    int idx = m_colorCarrierIndex - 1;
+    if (idx < 0) idx += static_cast<int>(m_colorCarrierSin.size());
+
+    // U demod: multiply by cos(wt + refPhase)
+    // cos(wt + phi) = cos(wt)*cos(phi) - sin(wt)*sin(phi)
+    float carrier = m_colorCarrierCos[idx] * m_chromaCosRef
+                  - m_colorCarrierSin[idx] * m_chromaSinRef;
+
+    return sample * carrier;
+}
+
+float PALDecoder::chromaDemodV(float sample)
+{
+    if (m_colorCarrierSin.empty()) return 0.0f;
+
+    int idx = m_colorCarrierIndex - 1;
+    if (idx < 0) idx += static_cast<int>(m_colorCarrierSin.size());
+
+    // V demod: multiply by sin(wt + refPhase)
+    // sin(wt + phi) = sin(wt)*cos(phi) + cos(wt)*sin(phi)
+    float carrier = m_colorCarrierSin[idx] * m_chromaCosRef
+                  + m_colorCarrierCos[idx] * m_chromaSinRef;
+
+    // PAL V-switch: V phase alternates every line
+    float vSign = m_vPhaseAlternate ? -1.0f : 1.0f;
+
+    return sample * carrier * vSign;
 }
 
 void PALDecoder::setTuneFrequency(uint64_t freqHz)
@@ -566,42 +788,43 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         processSample(normalized);
 
         // === CHROMA at FULL sample rate (before decimation) ===
-        // CRITICAL: Chroma demod must use the composite baseband signal WITH phase info.
-        // The AM envelope (magnitude) loses phase, making chroma demod impossible.
-        // After NCO shift + IQ LPF, filtered.real() IS the composite baseband
-        // (video carrier shifted to DC, so real part = AM envelope * cos(0) = baseband).
-        // Actually for proper AM demod composite: use magnitude for luma, but for chroma
-        // we need the original composite. The magnitude IS the composite for AM signals.
-        // The issue is that our chroma LUT phase drifts because we have no burst PLL.
-        // For now, use the magnitude-based normalized signal but ensure proper filtering.
+        // Demod on raw magnitude — the chroma BPF (bandpass at 4.43 MHz)
+        // inherently rejects DC and low-frequency luma content.
+        // Using magnitude instead of normalized because:
+        // 1. BPF already handles DC rejection (no need for dcBlock)
+        // 2. Raw magnitude preserves subcarrier amplitude for proper scaling
+        // 3. No AGC artifacts from normalizeAndAGC distorting chroma
         if (m_colorMode && !m_colorCarrierSin.empty()) {
-            float carrierSin = m_colorCarrierSin[m_colorCarrierIndex];
             float carrierCos = m_colorCarrierCos[m_colorCarrierIndex];
+            float carrierSin = m_colorCarrierSin[m_colorCarrierIndex];
             m_colorCarrierIndex++;
             if (m_colorCarrierIndex >= static_cast<int>(m_colorCarrierSin.size()))
                 m_colorCarrierIndex = 0;
 
-            // Use magnitude (before notch/AGC) for chroma demod - preserves subcarrier
-            // The audio notch removes energy near 5.5 MHz which could affect chroma
-            float chromaSample = magnitude;
-            float chromaU = chromaSample * carrierCos;
-            float chromaV = chromaSample * carrierSin * (m_vPhaseAlternate ? -1.0f : 1.0f);
+            // Multiply magnitude by carrier, then bandpass filter extracts chroma
+            float chromaU = magnitude * carrierCos;
+            float chromaV = magnitude * carrierSin * (m_vPhaseAlternate ? -1.0f : 1.0f);
 
             m_chromaUAccum += applyChromaFilterU(chromaU);
             m_chromaVAccum += applyChromaFilterV(chromaV);
         }
 
         // === Chroma subcarrier notch at FULL rate (before decimation) ===
-        // ALWAYS apply to luma path: the 4.43 MHz subcarrier creates
-        // visible vertical stripe artifacts if left in luma.
-        // Applied at full rate (not after decimation) to avoid aliasing.
+        // Cascaded 2-stage biquad notch at 4.43 MHz — removes subcarrier
+        // from luma path to prevent colour stripe artifacts (dot crawl).
         float lumaSignal;
         {
-            float cn = m_chromaNotchB0 * normalized + m_chromaNotchB1 * m_chromaNotchX1 + m_chromaNotchB2 * m_chromaNotchX2
-                      - m_chromaNotchA1 * m_chromaNotchY1 - m_chromaNotchA2 * m_chromaNotchY2;
+            // Stage 1
+            float cn1 = m_chromaNotchB0 * normalized + m_chromaNotchB1 * m_chromaNotchX1 + m_chromaNotchB2 * m_chromaNotchX2
+                       - m_chromaNotchA1 * m_chromaNotchY1 - m_chromaNotchA2 * m_chromaNotchY2;
             m_chromaNotchX2 = m_chromaNotchX1; m_chromaNotchX1 = normalized;
-            m_chromaNotchY2 = m_chromaNotchY1; m_chromaNotchY1 = cn;
-            lumaSignal = cn;
+            m_chromaNotchY2 = m_chromaNotchY1; m_chromaNotchY1 = cn1;
+            // Stage 2
+            float cn2 = m_chromaNotchB0 * cn1 + m_chromaNotchB1 * m_chromaNotch2X1 + m_chromaNotchB2 * m_chromaNotch2X2
+                       - m_chromaNotchA1 * m_chromaNotch2Y1 - m_chromaNotchA2 * m_chromaNotch2Y2;
+            m_chromaNotch2X2 = m_chromaNotch2X1; m_chromaNotch2X1 = cn1;
+            m_chromaNotch2Y2 = m_chromaNotch2Y1; m_chromaNotch2Y1 = cn2;
+            lumaSignal = cn2;
         }
 
         // === Decimate for luma + output chroma ===
@@ -616,8 +839,10 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         float u = 0.0f, v = 0.0f;
         if (m_colorMode && !m_colorCarrierSin.empty()) {
             float invDecim = 1.0f / static_cast<float>(m_decimFactor);
-            // Scale chroma by AGC since we use raw magnitude (not normalized)
-            float chromaScale = (m_ampDelta > 0.001f) ? (invDecim * 4.0f / m_ampDelta) : invDecim;
+            // Scale chroma: normalize by AGC range (since we use raw magnitude),
+            // then apply a gain factor. The chroma BPF output is small relative
+            // to the full magnitude range, so we need significant gain.
+            float chromaScale = (m_ampDelta > 0.001f) ? (invDecim * 8.0f / m_ampDelta) : invDecim;
             u = m_chromaUAccum * chromaScale;
             v = m_chromaVAccum * chromaScale;
             m_chromaUAccum = 0.0f;
@@ -731,7 +956,19 @@ void PALDecoder::processEndOfLine()
     m_lineBufferU.clear();
     m_lineBufferV.clear();
     m_vPhaseAlternate = !m_vPhaseAlternate;
-    m_colorCarrierIndex = 0;
+    // NOTE: Do NOT reset m_colorCarrierIndex here!
+    // PAL subcarrier = 283.75 * fline, so there are 283.75 cycles per line.
+    // Resetting to 0 each line causes a 0.75-cycle phase jump, making burst
+    // phase measurement random. Let the LUT free-run; the burst PLL measures
+    // and corrects the phase offset each line.
+
+    // Reset burst PLL per-line state
+    m_burstCorrI = 0.0f;
+    m_burstCorrQ = 0.0f;
+    m_burstDCAccum = 0.0f;
+    m_burstCosAccum = 0.0f;
+    m_burstSinAccum = 0.0f;
+    m_burstSampleCount = 0;
 }
 
 void PALDecoder::renderLine()

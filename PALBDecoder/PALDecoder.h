@@ -126,8 +126,11 @@ private:
     float m_notchX1, m_notchX2, m_notchY1, m_notchY2;
 
     // Chroma subcarrier notch (4.43 MHz) - removes subcarrier from luma to prevent color stripes
+    // Cascaded 2-stage biquad for deeper notch (~40 dB instead of ~20 dB)
     float m_chromaNotchB0, m_chromaNotchB1, m_chromaNotchB2, m_chromaNotchA1, m_chromaNotchA2;
     float m_chromaNotchX1, m_chromaNotchX2, m_chromaNotchY1, m_chromaNotchY2;
+    // Second stage (same coefficients, independent state)
+    float m_chromaNotch2X1, m_chromaNotch2X2, m_chromaNotch2Y1, m_chromaNotch2Y2;
 
     // Chroma accumulators (full-rate chroma demod, averaged over decimation period)
     float m_chromaUAccum;
@@ -180,10 +183,39 @@ private:
     std::vector<float> m_prevLineU;
     std::vector<float> m_prevLineV;
 
+    // ========== Colour Burst PLL ==========
+    // Back porch burst window (samples at full rate)
+    int m_burstStartSample;       // start of burst window (~5.6 us from line start)
+    int m_burstEndSample;         // end of burst window (~7.85 us)
+
+    // Burst correlation accumulators (per line)
+    float m_burstCorrI;           // sum(sample * cos(2pi*fsc*t))
+    float m_burstCorrQ;           // sum(sample * sin(2pi*fsc*t))
+    float m_burstDCAccum;         // sum(sample) for DC removal
+    float m_burstCosAccum;        // sum(cos(2pi*fsc*t)) for DC removal
+    float m_burstSinAccum;        // sum(sin(2pi*fsc*t)) for DC removal
+    int   m_burstSampleCount;     // samples accumulated in burst window
+
+    // Extracted burst phase & amplitude
+    float m_burstAmplitude;       // measured burst amplitude (for chroma AGC)
+    bool  m_burstValid;           // true if burst was detected this line
+
+    // Phase-locked reference (derived from burst)
+    float m_chromaRefPhase;       // reference phase for chroma demod this line
+    float m_burstPhaseSmoothed;   // low-pass filtered burst phase (reduces jitter)
+
+    // Cached sin/cos of reference phase (computed once per line after burst extraction)
+    float m_chromaCosRef;         // cos(m_chromaRefPhase)
+    float m_chromaSinRef;         // sin(m_chromaRefPhase)
+
+    // Burst amplitude AGC
+    float m_burstAmpSmoothed;     // smoothed burst amplitude for chroma scaling
+
     // ========== Methods ==========
     void applyStandard();
     void initFilters();
     void initNotchFilter();
+    void initBurstPLL();
     void rebuildColorLUT();
     std::vector<float> designLowPassFIR(float cutoff, float sampleRate, int numTaps);
     std::vector<float> designBandPassFIR(float centerFreq, float bandwidth, float sampleRate, int numTaps);
@@ -199,6 +231,10 @@ private:
     void buildFrame();
     float clipValue(float value, float min, float max);
     void yuv2rgb(float y, float u, float v, uint8_t& r, uint8_t& g, uint8_t& b);
+    void accumulateBurst(float sample);
+    void extractBurstPhase();
+    float chromaDemodU(float sample);
+    float chromaDemodV(float sample);
 };
 
 #endif
