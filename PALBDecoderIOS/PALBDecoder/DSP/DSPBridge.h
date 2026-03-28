@@ -41,6 +41,9 @@ void audioDemod_setAudioGain(AudioDemodRef ref, float gain);
 void audioDemod_setAudioEnabled(AudioDemodRef ref, int enabled);
 int audioDemod_isAudioCapable(AudioDemodRef ref);
 void audioDemod_setRadioMode(AudioDemodRef ref, int radio);
+// Demod mode: 0=FM, 1=AM
+void audioDemod_setDemodMode(AudioDemodRef ref, int mode);
+int audioDemod_getDemodMode(AudioDemodRef ref);
 
 #ifdef __cplusplus
 }

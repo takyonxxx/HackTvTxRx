@@ -13,6 +13,11 @@
 class AudioDemodulator
 {
 public:
+    enum class DemodMode {
+        FM = 0,     // Frequency Modulation (default for PAL-B/G audio)
+        AM = 1      // Amplitude Modulation (envelope detection)
+    };
+
     AudioDemodulator();
     ~AudioDemodulator() = default;
 
@@ -36,6 +41,10 @@ public:
     void setRadioMode(bool radio);
     bool isRadioMode() const { return m_radioMode; }
 
+    // Demodulation mode: FM or AM
+    void setDemodMode(DemodMode mode);
+    DemodMode getDemodMode() const { return m_demodMode; }
+
 private:
     static constexpr int AUDIO_SAMP_RATE = 48000;
     static constexpr int AUDIO_BUFFER_SIZE = 480;
@@ -57,6 +66,7 @@ private:
     double m_inputSampleRate;
     bool m_audioCapable;
     bool m_radioMode;
+    DemodMode m_demodMode;
 
     void rebuildDecimationChain();
 
@@ -69,6 +79,10 @@ private:
     float m_audioGain;
     bool m_audioEnabled;
     double fmDeviation;
+
+    // AM demod state
+    float m_amDcState;      // DC removal filter state
+    float m_amAgcLevel;     // AGC peak level for AM normalization
 
     void initFinalFilter();
     std::vector<float> designLowPassFIR(int numTaps, float cutoffFreq, float sampleRate);

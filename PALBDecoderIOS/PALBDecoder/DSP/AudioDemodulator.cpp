@@ -8,11 +8,14 @@ AudioDemodulator::AudioDemodulator()
     : m_inputSampleRate(16000000.0)
     , m_audioCapable(true)
     , m_radioMode(false)
+    , m_demodMode(DemodMode::FM)
     , m_lastPhase(0.0f)
     , m_audioPhase(0.0)
     , m_audioGain(1.0f)
     , m_audioEnabled(true)
     , fmDeviation(FM_DEVIATION_TV)
+    , m_amDcState(0.0f)
+    , m_amAgcLevel(0.01f)
 {
     m_audioBuffer.reserve(AUDIO_BUFFER_SIZE * 2);
     m_workReal.reserve(262144);
@@ -38,9 +41,23 @@ void AudioDemodulator::setRadioMode(bool radio)
     }
     m_audioPhase = 0.0;
     m_lastPhase = 0.0f;
+    m_amDcState = 0.0f;
+    m_amAgcLevel = 0.01f;
     m_audioBuffer.clear();
     initFinalFilter();
     rebuildDecimationChain();
+}
+
+void AudioDemodulator::setDemodMode(DemodMode mode)
+{
+    std::lock_guard<std::mutex> lock(m_processMutex);
+    m_demodMode = mode;
+    // Reset demod state on mode change
+    m_lastPhase = 0.0f;
+    m_audioPhase = 0.0;
+    m_amDcState = 0.0f;
+    m_amAgcLevel = 0.01f;
+    m_audioBuffer.clear();
 }
 
 void AudioDemodulator::setAudioCarrierFreq(double freqHz)
@@ -137,8 +154,6 @@ void AudioDemodulator::applyFIRFilterInPlace(std::vector<float>& signal, const s
 }
 
 // Combined filter + decimate for complex IQ: only compute every decimFactor'th output
-// This is the KEY optimization: instead of filtering ALL samples then picking every Nth,
-// we only compute the FIR output at positions 0, D, 2D, 3D... saving D× work.
 static void filterDecimateComplex(
     const float* inReal, const float* inImag, size_t inSize,
     const std::vector<float>& taps, int decimFactor,
@@ -149,7 +164,6 @@ static void filterDecimateComplex(
     const float* cData = taps.data();
     size_t outCount = 0;
 
-    // Pre-size outputs
     size_t maxOut = inSize / decimFactor + 1;
     outReal.resize(maxOut);
     outImag.resize(maxOut);
@@ -342,7 +356,7 @@ void AudioDemodulator::processSamples(const int8_t* data, size_t len)
     double currentRate = m_inputSampleRate;
     size_t stageIdx = 0;
 
-    // Combined filter+decimate for complex IQ stages (D× less FIR work!)
+    // Combined filter+decimate for complex IQ stages
     while (stageIdx < m_decimChain.size() && currentRate > 200000.0) {
         const auto& stage = m_decimChain[stageIdx];
         std::vector<float> outR, outI;
@@ -355,8 +369,49 @@ void AudioDemodulator::processSamples(const int8_t* data, size_t len)
         stageIdx++;
     }
 
-    // FM demod from I/Q floats (no complex<float> needed)
-    {
+    // ---- Demodulation: FM or AM ----
+    if (m_demodMode == DemodMode::AM) {
+        // AM envelope detection: magnitude = sqrt(I^2 + Q^2)
+        // with DC removal and simple AGC
+        const size_t n = m_workReal.size();
+        m_workAudio.resize(n);
+
+        // Fast magnitude approximation (same as PALDecoder fastMag)
+        // followed by DC block and AGC normalization
+        float dcState = m_amDcState;
+        float agcLevel = m_amAgcLevel;
+        static constexpr float DC_ALPHA = 0.999f;    // DC block: very slow tracking
+        static constexpr float AGC_ATTACK = 0.002f;   // AGC attack (fast)
+        static constexpr float AGC_RELEASE = 0.0001f;  // AGC release (slow)
+        float outputScale = m_radioMode ? 1.5f : 0.8f;
+
+        for (size_t i = 0; i < n; i++) {
+            float ai = fabsf(m_workReal[i]);
+            float aq = fabsf(m_workImag[i]);
+            float mag = (ai > aq) ? ai + 0.4f * aq : aq + 0.4f * ai;
+
+            // Track peak for AGC
+            if (mag > agcLevel) {
+                agcLevel += (mag - agcLevel) * AGC_ATTACK;
+            } else {
+                agcLevel += (mag - agcLevel) * AGC_RELEASE;
+            }
+            if (agcLevel < 0.001f) agcLevel = 0.001f;
+
+            // Normalize by AGC level
+            float norm = mag / agcLevel;
+
+            // DC block: remove the DC component (carrier envelope bias)
+            float out = norm - dcState;
+            dcState = norm - out * DC_ALPHA;
+
+            m_workAudio[i] = out * outputScale;
+        }
+        m_amDcState = dcState;
+        m_amAgcLevel = agcLevel;
+
+    } else {
+        // FM demod from I/Q floats (no complex<float> needed)
         const size_t n = m_workReal.size();
         m_workAudio.resize(n);
         std::lock_guard<std::mutex> lock2(m_phaseMutex);
@@ -394,7 +449,6 @@ void AudioDemodulator::processSamples(const int8_t* data, size_t len)
 void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& samples)
 {
     if (!m_audioEnabled || samples.empty() || !m_audioCapable) return;
-    // Convert to int8 and use optimized path (rare - only called from complex overload)
     std::vector<int8_t> buf(samples.size() * 2);
     for (size_t i = 0; i < samples.size(); i++) {
         buf[i*2] = (int8_t)std::clamp(samples[i].real() * 128.0f, -127.0f, 127.0f);
@@ -412,6 +466,8 @@ void AudioDemodulator::setSampleRate(double newSampleRate)
         m_audioPhaseIncrement = -2.0 * M_PI * m_currentCarrierFreq / m_inputSampleRate;
     m_audioPhase = 0.0;
     m_lastPhase = 0.0f;
+    m_amDcState = 0.0f;
+    m_amAgcLevel = 0.01f;
     m_audioBuffer.clear();
     rebuildDecimationChain();
 }

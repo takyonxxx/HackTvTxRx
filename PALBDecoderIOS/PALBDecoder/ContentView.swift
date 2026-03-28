@@ -8,7 +8,7 @@ struct ContentView: View {
     @AppStorage("radioMode") private var radioMode = false
 
     // TV last settings
-    @AppStorage("tvFreqMHz") private var tvFreqMHz: Double = 640.0
+    @AppStorage("tvFreqMHz") private var tvFreqMHz: Double = 638.0
     @AppStorage("tvSampleRate") private var tvSampleRate: Int = 12500000
     @AppStorage("tvLnaGain") private var tvLnaGain: Double = 40
     @AppStorage("tvVgaGain") private var tvVgaGain: Double = 30
@@ -29,11 +29,12 @@ struct ContentView: View {
 
     // Audio (shared)
     @AppStorage("audioEnabled") private var audioEnabled = true
-    @AppStorage("audioGain") private var savedAudioGain: Double = 1.0
+    @AppStorage("savedAudioGain") private var savedAudioGain: Double = 1.0
     @AppStorage("volume") private var savedVolume: Double = 0.1
+    @AppStorage("audioDemodMode") private var audioDemodMode: Int = 0  // 0=FM, 1=AM
 
     // Active UI state (driven from persisted values)
-    @State private var frequencyMHz: Double = 640.0
+    @State private var frequencyMHz: Double = 638.0
     @State private var lnaGain: Double = 40
     @State private var vgaGain: Double = 30
     @State private var rxAmpGain: Double = 14
@@ -48,6 +49,7 @@ struct ContentView: View {
     @State private var selectedSampleRate: Int = 12500000
     @State private var selectedBandIndex: Int = 0
     @State private var didInitialize = false
+    @State private var showChannelList = false
 
     private var connected: Bool { decoder.isConnected }
 
@@ -60,6 +62,58 @@ struct ContentView: View {
         ("20 MHz",   20000000),
     ]
 
+    // =========================================================
+    // Ankara Analog TV Channel List
+    // Frequencies: standard channel freq + 2 MHz offset
+    // (measured with HackRF, transmitters are offset from channel edge)
+    // =========================================================
+    struct TVChannel: Identifiable {
+        let id = UUID()
+        let name: String
+        let band: String       // "VHF" or "UHF"
+        let channelNo: Int
+        let freqMHz: Double
+    }
+
+    // Ankara Analog TV Channel List - standard PAL-B/G channel edge frequencies
+    // UHF formula: freq = 470 + (ch - 21) * 8 MHz
+    // VHF formula: freq = 174 + (ch - 5) * 8 MHz
+    // NCO auto-calculates video carrier at +1.25 MHz from channel edge
+    private let ankaraChannels: [TVChannel] = [
+        // VHF
+        TVChannel(name: "TRT 1",                 band: "VHF", channelNo: 7,  freqMHz: 190),
+        TVChannel(name: "tvnet",                  band: "VHF", channelNo: 9,  freqMHz: 206),
+        // UHF
+        TVChannel(name: "TRT HABER",              band: "UHF", channelNo: 21, freqMHz: 470),
+        TVChannel(name: "STAR TV",                band: "UHF", channelNo: 22, freqMHz: 478),
+        TVChannel(name: "BASKENT TV",             band: "UHF", channelNo: 23, freqMHz: 486),
+        TVChannel(name: "TRT 1",                  band: "UHF", channelNo: 24, freqMHz: 494),
+        TVChannel(name: "TRT 1",                  band: "UHF", channelNo: 25, freqMHz: 502),
+        TVChannel(name: "ATV",                    band: "UHF", channelNo: 26, freqMHz: 510),
+        TVChannel(name: "TRT COCUK",              band: "UHF", channelNo: 27, freqMHz: 518),
+        TVChannel(name: "SHOW TV",                band: "UHF", channelNo: 28, freqMHz: 526),
+        TVChannel(name: "tv2",                    band: "UHF", channelNo: 29, freqMHz: 534),
+        TVChannel(name: "NOW",                    band: "UHF", channelNo: 30, freqMHz: 542),
+        TVChannel(name: "TRT 3 SPOR",             band: "UHF", channelNo: 31, freqMHz: 550),
+        TVChannel(name: "ATV",                    band: "UHF", channelNo: 32, freqMHz: 558),
+        TVChannel(name: "SHOW TV",                band: "UHF", channelNo: 33, freqMHz: 566),
+        TVChannel(name: "HABER TURK",             band: "UHF", channelNo: 34, freqMHz: 574),
+        TVChannel(name: "SHOW TV",                band: "UHF", channelNo: 35, freqMHz: 582),
+        TVChannel(name: "STAR TV",                band: "UHF", channelNo: 36, freqMHz: 590),
+        TVChannel(name: "TRT COCUK",              band: "UHF", channelNo: 37, freqMHz: 598),
+        TVChannel(name: "KANAL D",                band: "UHF", channelNo: 38, freqMHz: 606),
+        TVChannel(name: "NTV",                    band: "UHF", channelNo: 39, freqMHz: 614),
+        TVChannel(name: "TRT 3 SPOR",             band: "UHF", channelNo: 40, freqMHz: 622),
+        TVChannel(name: "tv2",                    band: "UHF", channelNo: 41, freqMHz: 630),
+        TVChannel(name: "NTV",                    band: "UHF", channelNo: 42, freqMHz: 638),
+        TVChannel(name: "NOW",                    band: "UHF", channelNo: 43, freqMHz: 646),
+        TVChannel(name: "TRT 1",                  band: "UHF", channelNo: 44, freqMHz: 654),
+        TVChannel(name: "HABER TURK",             band: "UHF", channelNo: 45, freqMHz: 662),
+        TVChannel(name: "KANAL A",                band: "UHF", channelNo: 46, freqMHz: 670),
+        TVChannel(name: "HABER TURK",             band: "UHF", channelNo: 47, freqMHz: 678),
+        TVChannel(name: "KANAL D",                band: "UHF", channelNo: 48, freqMHz: 686),
+    ]
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -70,6 +124,7 @@ struct ContentView: View {
                         modeSection
                         statusBar
                         frequencySection
+                        if !radioMode { ankaraChannelButton }
                         rfGainSection
                         if !radioMode {
                             sampleRateSection
@@ -86,6 +141,9 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .preferredColorScheme(.dark)
             .onAppear { restoreSettings() }
+            .sheet(isPresented: $showChannelList) {
+                channelListSheet
+            }
         }
     }
 
@@ -121,6 +179,7 @@ struct ContentView: View {
         decoder.radioMode = radioMode
         decoder.sampleRate = radioMode ? 2000000 : selectedSampleRate
         decoder.frequency = UInt64(frequencyMHz * 1_000_000)
+        decoder.setAudioDemodMode(audioDemodMode)
     }
 
     // MARK: - Save current mode settings
@@ -185,11 +244,13 @@ struct ContentView: View {
                     .fill(Color(.darkGray).opacity(0.3))
                     .aspectRatio(720.0 / 576.0, contentMode: .fit)
                     .overlay(
-                        VStack {
-                            Image(systemName: "tv")
-                                .font(.system(size: 48))
-                                .foregroundColor(.gray)
+                        VStack(spacing: 12) {
+                            Image("SDRLogo")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 120, height: 120)
                             Text(connected ? "No Signal" : "Not Connected")
+                                .font(.subheadline)
                                 .foregroundColor(.gray)
                         }
                     )
@@ -229,10 +290,8 @@ struct ContentView: View {
             HStack(spacing: 12) {
                 Button {
                     guard radioMode else { return }
-                    // Save radio settings before switching
                     saveRadioSettings()
                     radioMode = false
-                    // Restore TV settings
                     frequencyMHz = tvFreqMHz
                     lnaGain = tvLnaGain
                     vgaGain = tvVgaGain
@@ -250,10 +309,8 @@ struct ContentView: View {
 
                 Button {
                     guard !radioMode else { return }
-                    // Save TV settings before switching
                     saveTVSettings()
                     radioMode = true
-                    // Restore radio settings
                     frequencyMHz = radioFreqMHz
                     lnaGain = radioLnaGain
                     vgaGain = radioVgaGain
@@ -308,27 +365,6 @@ struct ContentView: View {
     }
 
     // MARK: - Frequency
-
-    private struct BandDef {
-        let name: String
-        let min: Double
-        let max: Double
-        let step: Double
-        let defaultFreq: Double
-    }
-
-    private let radioBands: [BandDef] = [
-        BandDef(name: "FM",    min: 87.5,  max: 108.0, step: 0.1,  defaultFreq: 100.0),
-        BandDef(name: "AIR",   min: 118.0, max: 137.0, step: 0.025, defaultFreq: 121.5),
-        BandDef(name: "2m",    min: 144.0, max: 148.0, step: 0.0125, defaultFreq: 145.0),
-        BandDef(name: "70cm",  min: 430.0, max: 440.0, step: 0.0125, defaultFreq: 433.0),
-        BandDef(name: "868",   min: 862.0, max: 870.0, step: 0.1,  defaultFreq: 868.0),
-        BandDef(name: "ALL",   min: 1.0,   max: 6000.0, step: 0.1, defaultFreq: 100.0),
-    ]
-
-    private var currentBand: BandDef {
-        radioBands[selectedBandIndex]
-    }
 
     private var frequencySection: some View {
         GroupBox("Frequency") {
@@ -397,6 +433,19 @@ struct ContentView: View {
                         if !editing { applyFrequency(); saveTVSettings() }
                     }
                 }
+
+                // Audio demod mode selector: FM / AM
+                HStack {
+                    Text("Demod").font(.caption).frame(width: 55, alignment: .leading)
+                    Picker("Demod", selection: $audioDemodMode) {
+                        Text("FM").tag(0)
+                        Text("AM").tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: audioDemodMode) { _, newMode in
+                        decoder.setAudioDemodMode(newMode)
+                    }
+                }
             }
         }
     }
@@ -414,6 +463,82 @@ struct ContentView: View {
             if f >= 470, f <= 862 { return "UHF E\(Int((f - 306) / 8))" }
             if f >= 174, f <= 230 { return "VHF-III E\(Int((f - 175) / 8) + 5)" }
             return "Custom"
+        }
+    }
+
+    // MARK: - Ankara Channels (single button -> sheet)
+
+    private var ankaraChannelButton: some View {
+        Button {
+            showChannelList = true
+        } label: {
+            Label("Ankara Channels", systemImage: "antenna.radiowaves.left.and.right")
+                .font(.body.bold())
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.indigo)
+    }
+
+    private func isCurrentChannel(_ ch: TVChannel) -> Bool {
+        abs(frequencyMHz - ch.freqMHz) < 0.5
+    }
+
+    private func selectChannel(_ ch: TVChannel) {
+        frequencyMHz = ch.freqMHz
+        applyFrequency()
+        saveTVSettings()
+    }
+
+    private var channelListSheet: some View {
+        NavigationStack {
+            List {
+                Section("VHF Channels") {
+                    ForEach(ankaraChannels.filter { $0.band == "VHF" }) { ch in
+                        channelRow(ch)
+                    }
+                }
+                Section("UHF Channels") {
+                    ForEach(ankaraChannels.filter { $0.band == "UHF" }) { ch in
+                        channelRow(ch)
+                    }
+                }
+            }
+            .navigationTitle("Ankara TV Channels")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Close") { showChannelList = false }
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+
+    private func channelRow(_ ch: TVChannel) -> some View {
+        Button {
+            selectChannel(ch)
+            showChannelList = false
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ch.name)
+                        .font(.body.bold())
+                        .foregroundColor(isCurrentChannel(ch) ? .green : .primary)
+                    Text("\(ch.band) Ch \(ch.channelNo)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Text(String(format: "%.0f MHz", ch.freqMHz))
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundColor(.cyan)
+                if isCurrentChannel(ch) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                }
+            }
         }
     }
 
@@ -484,6 +609,7 @@ struct ContentView: View {
             VStack(spacing: 6) {
                 Toggle("Enable Audio", isOn: $audioEnabled)
                     .onChange(of: audioEnabled) { _, v in decoder.setAudioEnabled(v); saveAudioSettings() }
+
                 floatSliderRow("Gain", value: $audioGainUI, range: 0...5.0) { decoder.setAudioGain(audioGainUI); saveAudioSettings() }
                 floatSliderRow("Volume", value: $volumeUI, range: 0...1.0) { decoder.setVolume(volumeUI); saveAudioSettings() }
             }
@@ -523,6 +649,29 @@ struct ContentView: View {
             }
             Text(String(format: "%.2f", value.wrappedValue)).frame(width: 40).font(.caption.monospacedDigit())
         }
+    }
+
+    // MARK: - Radio Bands
+
+    private struct BandDef {
+        let name: String
+        let min: Double
+        let max: Double
+        let step: Double
+        let defaultFreq: Double
+    }
+
+    private let radioBands: [BandDef] = [
+        BandDef(name: "FM",    min: 87.5,  max: 108.0, step: 0.1,  defaultFreq: 100.0),
+        BandDef(name: "AIR",   min: 118.0, max: 137.0, step: 0.025, defaultFreq: 121.5),
+        BandDef(name: "2m",    min: 144.0, max: 148.0, step: 0.0125, defaultFreq: 145.0),
+        BandDef(name: "70cm",  min: 430.0, max: 440.0, step: 0.0125, defaultFreq: 433.0),
+        BandDef(name: "868",   min: 862.0, max: 870.0, step: 0.1,  defaultFreq: 868.0),
+        BandDef(name: "ALL",   min: 1.0,   max: 6000.0, step: 0.1, defaultFreq: 100.0),
+    ]
+
+    private var currentBand: BandDef {
+        radioBands[selectedBandIndex]
     }
 }
 

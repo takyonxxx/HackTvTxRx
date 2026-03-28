@@ -48,7 +48,7 @@ final class PALDecoderManager: ObservableObject {
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
     private let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
 
-    var frequency: UInt64 = 640000000  // NTV UHF42 Ankara
+    var frequency: UInt64 = 638000000  // NTV UHF42 Ankara
 
     init() {
         videoAccumBuffer = .allocate(capacity: videoAccumCapacity)
@@ -194,7 +194,6 @@ final class PALDecoderManager: ObservableObject {
         if switchingMode { return }
 
         // AUDIO: process synchronously in TCP callback thread
-        // In TV mode, mute until first video frame is decoded (prevents audio before picture)
         if radioMode || hasFirstFrame {
             if let a = audioDemod {
                 audioDemod_processSamples(a, ptr, len)
@@ -254,7 +253,6 @@ final class PALDecoderManager: ObservableObject {
     private func handleFrame(_ rgba: UnsafePointer<UInt8>, width: Int, height: Int) {
         if radioMode { return }
         frameCount += 1
-        // Enable audio after first frame
         if !hasFirstFrame {
             hasFirstFrame = true
             audioEngine.flush()
@@ -296,4 +294,9 @@ final class PALDecoderManager: ObservableObject {
     func setLnaGain(_ g: UInt){tcpClient.setLnaGain(g)}
     func setVgaGain(_ g: UInt){tcpClient.setVgaGain(g)}
     func setRxAmpGain(_ g: UInt){tcpClient.setRxAmpGain(g)}
+
+    // Audio demod mode: 0=FM, 1=AM
+    func setAudioDemodMode(_ mode: Int) {
+        if let a = audioDemod { audioDemod_setDemodMode(a, Int32(mode)) }
+    }
 }

@@ -15,6 +15,7 @@
 		A10006 /* PALDecoder.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B10006 /* PALDecoder.cpp */; };
 		A10007 /* AudioDemodulator.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B10007 /* AudioDemodulator.cpp */; };
 		A10008 /* DSPBridge.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B10008 /* DSPBridge.cpp */; };
+		A10009 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10013 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,10 +31,19 @@
 		B10010 /* AudioDemodulator.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AudioDemodulator.h; sourceTree = "<group>"; };
 		B10011 /* DSPBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DSPBridge.h; sourceTree = "<group>"; };
 		B10012 /* PALBDecoder-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "PALBDecoder-Bridging-Header.h"; sourceTree = "<group>"; };
+		B10013 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B10099 /* PALBDecoder.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PALBDecoder.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		PH10003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10009 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		PH10002 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -61,6 +71,7 @@
 				B10004 /* AudioEngine.swift */,
 				B10005 /* PALDecoderManager.swift */,
 				B10012 /* PALBDecoder-Bridging-Header.h */,
+				B10013 /* Assets.xcassets */,
 				G10002 /* DSP */,
 			);
 			path = PALBDecoder;
@@ -96,6 +107,7 @@
 			buildPhases = (
 				PH10001 /* Sources */,
 				PH10002 /* Frameworks */,
+				PH10003 /* Resources */,
 			);
 			buildRules = (
 			);

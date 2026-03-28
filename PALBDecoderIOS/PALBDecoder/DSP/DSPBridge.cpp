@@ -133,3 +133,12 @@ int audioDemod_isAudioCapable(AudioDemodRef ref) {
 void audioDemod_setRadioMode(AudioDemodRef ref, int radio) {
     static_cast<AudioDemodWrapper*>(ref)->demod.setRadioMode(radio != 0);
 }
+
+void audioDemod_setDemodMode(AudioDemodRef ref, int mode) {
+    auto m = (mode == 1) ? AudioDemodulator::DemodMode::AM : AudioDemodulator::DemodMode::FM;
+    static_cast<AudioDemodWrapper*>(ref)->demod.setDemodMode(m);
+}
+
+int audioDemod_getDemodMode(AudioDemodRef ref) {
+    return static_cast<int>(static_cast<AudioDemodWrapper*>(ref)->demod.getDemodMode());
+}

@@ -1,0 +1,23 @@
+{
+  "images": [
+    {
+      "filename": "sdr_logo_1x.png",
+      "idiom": "universal",
+      "scale": "1x"
+    },
+    {
+      "filename": "sdr_logo_2x.png",
+      "idiom": "universal",
+      "scale": "2x"
+    },
+    {
+      "filename": "sdr_logo_3x.png",
+      "idiom": "universal",
+      "scale": "3x"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}
