@@ -34,7 +34,6 @@ PALDecoder::~PALDecoder() {}
 void PALDecoder::setSampleRate(int sr) {
     std::lock_guard<std::mutex> lock(m_processMutex);
     m_sampleRate = sr;
-    // Pre-decimation: 2x for rates >= 8 MHz, reduces FIR workload
     if (sr >= 16000000) m_decimFactor = 4;
     else if (sr >= 8000000) m_decimFactor = 2;
     else m_decimFactor = 1;
@@ -48,7 +47,6 @@ void PALDecoder::setSampleRate(int sr) {
 }
 
 void PALDecoder::applyStandard() {
-    // Timing based on FULL sample rate (sync runs at full rate)
     float r = (float)m_sampleRate, spl = r / (NB_LINES * FPS);
     m_samplesPerLine = (int)spl; m_samplesPerLineFrac = spl - m_samplesPerLine;
     m_numberSamplesPerHTop = (int)(SYNC_PULSE_FRAC * spl);
@@ -66,11 +64,12 @@ void PALDecoder::applyStandard() {
 
 void PALDecoder::initFilters() {
     float r = (float)m_sampleRate;
-    // Video IQ LPF: 15 taps at full rate (lightweight anti-alias before magnitude)
+    // Video IQ FIR removed from per-sample loop - not needed for sync
+    // Keep taps for potential future use but don't use in hot path
     float vc = std::min(5.5e6f, r * 0.4f);
     m_videoFilterTaps = designLowPassFIR(vc, r, 15);
     m_vidFirI.setLen(15); m_vidFirQ.setLen(15);
-    // Luma LPF at decimated rate
+    // Luma LPF at decimated rate - this is the main video quality filter now
     float lc = std::min(3.0e6f, m_decimatedRate * 0.35f);
     m_lumaFilterTaps = designLowPassFIR(lc, m_decimatedRate, 17);
     m_lumaFir.setLen(17);
@@ -140,8 +139,6 @@ float PALDecoder::normalizeAndAGC(float s) {
     return n>1?1:n;
 }
 
-// Fast magnitude approximation: max(|I|,|Q|) + 0.4*min(|I|,|Q|)
-// ~3% error, no sqrtf. For sync detection and AGC this is plenty accurate.
 static inline float fastMag(float i, float q) {
     float ai = fabsf(i), aq = fabsf(q);
     return (ai > aq) ? ai + 0.4f * aq : aq + 0.4f * ai;
@@ -153,9 +150,11 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
     const bool doColor = m_colorMode && !m_colorCarrierSin.empty();
     const int cSize = doColor ? (int)m_colorCarrierSin.size() : 1;
     const float invD = 1.0f / m_decimFactor;
-    const float* vTaps = m_videoFilterTaps.data();
     const float* lTaps = m_lumaFilterTaps.data();
     const size_t half = len / 2;
+
+    // Accumulators for I/Q averaging over decimation window
+    float accumI = 0, accumQ = 0;
 
     for (size_t i = 0; i < half; i++) {
         m_totalSamples++;
@@ -178,19 +177,18 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
         float shI = sI*nI - sQ*nQ;
         float shQ = sI*nQ + sQ*nI;
 
-        // Video IQ LPF (15 taps - lightweight)
-        m_vidFirI.push(shI); m_vidFirQ.push(shQ);
-        float fI = m_vidFirI.apply(vTaps);
-        float fQ = m_vidFirQ.apply(vTaps);
-
-        // Fast magnitude (no sqrtf)
-        float mag = fastMag(fI, fQ);
+        // Raw magnitude for sync (no FIR needed - sync pulses are strong)
+        float mag = fastMag(shI, shQ);
         float norm = normalizeAndAGC(dcBlock(mag));
 
-        // Sync detection runs at FULL sample rate (accurate timing)
+        // Sync detection at FULL sample rate
         processSample(norm);
 
-        // Chroma at full rate (only if color mode)
+        // Accumulate shifted I/Q for decimated filtering
+        accumI += shI;
+        accumQ += shQ;
+
+        // Chroma at full rate (only if color mode active)
         if(doColor) {
             float cs = m_colorCarrierSin[m_colorCarrierIndex];
             float cc = m_colorCarrierCos[m_colorCarrierIndex];
@@ -200,11 +198,19 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
             if(++m_colorCarrierIndex >= cSize) m_colorCarrierIndex = 0;
         }
 
-        // Decimate: only push to line buffer every decimFactor samples
+        // Decimate
         if(++m_resampleCounter < m_decimFactor) continue;
         m_resampleCounter = 0;
 
-        m_lumaFir.push(norm);
+        // Averaged I/Q at decimated rate -> magnitude -> luma FIR
+        float avgI = accumI * invD;
+        float avgQ = accumQ * invD;
+        accumI = 0; accumQ = 0;
+        float decimMag = fastMag(avgI, avgQ);
+        float decimNorm = (decimMag - m_ampMin) / m_ampDelta;
+        if (decimNorm > 1) decimNorm = 1; else if (decimNorm < 0) decimNorm = 0;
+
+        m_lumaFir.push(decimNorm);
         float luma = m_lumaFir.apply(lTaps);
         float u=0,v=0;
         if(doColor) {
