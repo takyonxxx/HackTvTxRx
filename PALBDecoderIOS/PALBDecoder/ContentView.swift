@@ -15,7 +15,7 @@ struct ContentView: View {
     @State private var audioGain: Float = 1.0
     @State private var volume: Float = 0.1
 
-    @State private var frequencyMHz: Double = 479.3
+    @State private var frequencyMHz: Double = 642.0
     @State private var lnaGain: Double = 40
     @State private var vgaGain: Double = 30
     @State private var rxAmpGain: Double = 14
@@ -149,7 +149,7 @@ struct ContentView: View {
                 Button {
                     guard radioMode else { return }
                     radioMode = false
-                    frequencyMHz = 479.3
+                    frequencyMHz = 642.0
                     // Defer the heavy work to next runloop
                     DispatchQueue.main.async {
                         decoder.frequency = UInt64(frequencyMHz * 1_000_000)
@@ -251,6 +251,19 @@ struct ContentView: View {
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(radioMode ? Color.orange.opacity(0.2) : Color.blue.opacity(0.2))
                         .cornerRadius(4)
+                }
+
+                // Fine-tune buttons
+                HStack(spacing: 8) {
+                    Button { nudgeFreq(-1.0) } label: { Text("-1").font(.caption2.bold()).frame(width: 32, height: 26) }
+                        .buttonStyle(.bordered).tint(.red)
+                    Button { nudgeFreq(-0.1) } label: { Text("-0.1").font(.caption2.bold()).frame(width: 36, height: 26) }
+                        .buttonStyle(.bordered).tint(.red)
+                    Spacer()
+                    Button { nudgeFreq(+0.1) } label: { Text("+0.1").font(.caption2.bold()).frame(width: 36, height: 26) }
+                        .buttonStyle(.bordered).tint(.green)
+                    Button { nudgeFreq(+1.0) } label: { Text("+1").font(.caption2.bold()).frame(width: 32, height: 26) }
+                        .buttonStyle(.bordered).tint(.green)
                 }
 
                 if radioMode {
@@ -383,6 +396,11 @@ struct ContentView: View {
     private func applyFrequency() {
         decoder.frequency = UInt64(frequencyMHz * 1_000_000)
         decoder.updateFrequency()
+    }
+
+    private func nudgeFreq(_ deltaMHz: Double) {
+        frequencyMHz = max(1.0, min(6000.0, frequencyMHz + deltaMHz))
+        applyFrequency()
     }
 
     private func sliderRow(_ label: String, value: Binding<Double>, range: ClosedRange<Double>,
