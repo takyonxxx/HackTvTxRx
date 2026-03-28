@@ -40,6 +40,7 @@ void audioDemod_setAudioCarrierFreq(AudioDemodRef ref, double freqHz);
 void audioDemod_setAudioGain(AudioDemodRef ref, float gain);
 void audioDemod_setAudioEnabled(AudioDemodRef ref, int enabled);
 int audioDemod_isAudioCapable(AudioDemodRef ref);
+void audioDemod_setRadioMode(AudioDemodRef ref, int radio);
 
 #ifdef __cplusplus
 }

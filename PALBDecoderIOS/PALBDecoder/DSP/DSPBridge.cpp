@@ -15,8 +15,7 @@ struct PALDecoderWrapper {
 };
 
 PALDecoderRef palDecoder_create(void) {
-    auto* w = new PALDecoderWrapper();
-    return static_cast<PALDecoderRef>(w);
+    return static_cast<PALDecoderRef>(new PALDecoderWrapper());
 }
 
 void palDecoder_destroy(PALDecoderRef ref) {
@@ -90,8 +89,7 @@ struct AudioDemodWrapper {
 };
 
 AudioDemodRef audioDemod_create(void) {
-    auto* w = new AudioDemodWrapper();
-    return static_cast<AudioDemodRef>(w);
+    return static_cast<AudioDemodRef>(new AudioDemodWrapper());
 }
 
 void audioDemod_destroy(AudioDemodRef ref) {
@@ -130,4 +128,8 @@ void audioDemod_setAudioEnabled(AudioDemodRef ref, int enabled) {
 
 int audioDemod_isAudioCapable(AudioDemodRef ref) {
     return static_cast<AudioDemodWrapper*>(ref)->demod.isAudioCapable() ? 1 : 0;
+}
+
+void audioDemod_setRadioMode(AudioDemodRef ref, int radio) {
+    static_cast<AudioDemodWrapper*>(ref)->demod.setRadioMode(radio != 0);
 }
