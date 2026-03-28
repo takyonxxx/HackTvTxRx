@@ -8,6 +8,9 @@ final class SDRTCPClient: ObservableObject {
 
     var onDataReceived: ((_ ptr: UnsafePointer<Int8>, _ len: Int) -> Void)?
 
+    // When true, received data is silently dropped (mode switch flush)
+    var dropData = false
+
     private var dataConnection: NWConnection?
     private var controlConnection: NWConnection?
     private let dataQueue = DispatchQueue(label: "sdr.tcp.data", qos: .userInteractive)
@@ -116,11 +119,11 @@ final class SDRTCPClient: ObservableObject {
     private func startReceiving() {
         guard let conn = dataConnection else { return }
         conn.receive(minimumIncompleteLength: 1, maximumLength: 262144) { [weak self] content, _, isComplete, error in
-            if let data = content, !data.isEmpty {
-                self?.bytesThisSecond += UInt64(data.count)
+            if let data = content, !data.isEmpty, let self = self, !self.dropData {
+                self.bytesThisSecond += UInt64(data.count)
                 data.withUnsafeBytes { rawBuf in
                     if let baseAddr = rawBuf.baseAddress {
-                        self?.onDataReceived?(baseAddr.assumingMemoryBound(to: Int8.self), data.count)
+                        self.onDataReceived?(baseAddr.assumingMemoryBound(to: Int8.self), data.count)
                     }
                 }
             }

@@ -15,13 +15,13 @@ struct ContentView: View {
     @State private var audioGain: Float = 1.0
     @State private var volume: Float = 0.1
 
-    @State private var frequencyMHz: Double = 479.3
+    @State private var frequencyMHz: Double = 100.0
     @State private var lnaGain: Double = 40
     @State private var vgaGain: Double = 30
     @State private var rxAmpGain: Double = 14
 
-    @State private var selectedSampleRate: Int = 16000000
-    @State private var radioMode = false
+    @State private var selectedSampleRate: Int = 12500000
+    @State private var radioMode = true
 
     private var connected: Bool { decoder.isConnected }
 

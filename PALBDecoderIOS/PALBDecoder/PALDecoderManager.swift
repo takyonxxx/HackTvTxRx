@@ -6,10 +6,10 @@ final class PALDecoderManager: ObservableObject {
     @Published var fps: Double = 0
     @Published var syncQuality: Float = 0
     @Published var isConnected: Bool = false
-    @Published var sampleRate: Int = 12500000
+    @Published var sampleRate: Int = 2000000
     @Published var bufferStatus: String = ""
 
-    var radioMode: Bool = false
+    var radioMode: Bool = true
 
     let tcpClient = SDRTCPClient()
     let audioEngine = AudioEngine()
@@ -22,8 +22,6 @@ final class PALDecoderManager: ObservableObject {
 
     private var switchingMode = false
     private var lastHost: String = ""
-    // Bytes to discard after mode/rate switch (flush stale server buffer)
-    private var bytesToDiscard = 0
 
     // Video frame accumulation
     private var videoAccumBuffer: UnsafeMutablePointer<Int8>
@@ -43,7 +41,7 @@ final class PALDecoderManager: ObservableObject {
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
     private let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
 
-    var frequency: UInt64 = 479300000
+    var frequency: UInt64 = 100000000  // 100 MHz FM default
 
     init() {
         videoAccumBuffer = .allocate(capacity: videoAccumCapacity)
@@ -51,8 +49,8 @@ final class PALDecoderManager: ObservableObject {
         audioDemod = audioDemod_create()
 
         if let d = palDecoder { palDecoder_setSampleRate(d, Int32(sampleRate)); palDecoder_setTuneFrequency(d, frequency); palDecoder_setVideoInvert(d, 1) }
-        if let a = audioDemod { audioDemod_setSampleRate(a, Double(sampleRate)) }
-        updateAudioCarrier(); setupCallbacks()
+        if let a = audioDemod { audioDemod_setSampleRate(a, Double(sampleRate)); audioDemod_setRadioMode(a, 1) }
+        setupCallbacks()
         tcpClient.onDataReceived = { [weak self] ptr, len in self?.handleTCPData(ptr, len: len) }
         startFPSTimer(); updateFrameSize()
     }
@@ -83,54 +81,70 @@ final class PALDecoderManager: ObservableObject {
 
     func setRadioMode(_ enabled: Bool) {
         guard !switchingMode else { return }
-        switchingMode = true; radioMode = enabled; tcpClient.disconnect()
+        switchingMode = true
+        radioMode = enabled
+
+        // 1. Drop all incoming data immediately
+        tcpClient.dropData = true
         audioEngine.stop()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
+
+            // 2. Wait for in-flight processing to finish
             Thread.sleep(forTimeInterval: 0.3)
 
+            // 3. Configure decoders
             let nr = enabled ? 2000000 : 12500000
-            if let a = self.audioDemod { audioDemod_setRadioMode(a, enabled ? 1 : 0); audioDemod_setSampleRate(a, Double(nr)) }
+            if let a = self.audioDemod {
+                audioDemod_setRadioMode(a, enabled ? 1 : 0)
+                audioDemod_setSampleRate(a, Double(nr))
+            }
             if let d = self.palDecoder { palDecoder_setSampleRate(d, Int32(nr)) }
 
+            // 4. Send new sample rate to server (same connection, no reconnect)
+            self.tcpClient.setSampleRate(UInt32(nr))
+            if enabled {
+                self.tcpClient.setFrequency(self.frequency)
+            } else {
+                self.tcpClient.setFrequency(self.frequency)
+            }
+
+            // 5. Wait for server to apply and old data to drain
+            Thread.sleep(forTimeInterval: 1.0)
+
+            // 6. Resume with clean state
             DispatchQueue.main.async {
-                self.sampleRate = nr; self.videoAccumCount = 0; self.updateFrameSize()
+                self.sampleRate = nr
+                self.videoAccumCount = 0
+                self.updateFrameSize()
                 if enabled { self.currentFrame = nil }
                 self.updateAudioCarrier()
                 self.audioEngine.flush()
                 self.audioEngine.start()
-
-                // Server uses DirectConnection now - no Qt queue buffering
-                // Only discard ~500KB for HackRF USB transition
-                self.bytesToDiscard = 512 * 1024
+                self.tcpClient.dropData = false
                 self.switchingMode = false
-
-                self.tcpClient.connect(host: self.lastHost, initialCommands: [
-                    "SET_SAMPLE_RATE:\(nr)", "SET_FREQ:\(self.frequency)",
-                    "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
-                ])
-                if !enabled { self.bufferStatus = "" }
-                else { self.bufferStatus = "Radio - tuning..." }
+                self.bufferStatus = enabled ? "Radio" : ""
+                print("[MODE] Switch to \(enabled ? "Radio" : "TV") complete")
             }
         }
     }
 
     func changeSampleRate(_ nr: Int) {
-        switchingMode = true; tcpClient.disconnect()
+        switchingMode = true
+        tcpClient.dropData = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
+            Thread.sleep(forTimeInterval: 0.2)
             if let d = self.palDecoder { palDecoder_setSampleRate(d, Int32(nr)) }
             if let a = self.audioDemod { audioDemod_setSampleRate(a, Double(nr)) }
+            self.tcpClient.setSampleRate(UInt32(nr))
+            Thread.sleep(forTimeInterval: 0.5)
             DispatchQueue.main.async {
                 self.sampleRate = nr; self.videoAccumCount = 0; self.updateFrameSize()
                 self.updateAudioCarrier()
-                self.bytesToDiscard = 512 * 1024
+                self.tcpClient.dropData = false
                 self.switchingMode = false
-                self.tcpClient.connect(host: self.lastHost, initialCommands: [
-                    "SET_SAMPLE_RATE:\(nr)", "SET_FREQ:\(self.frequency)",
-                    "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
-                ])
             }
         }
     }
@@ -142,18 +156,6 @@ final class PALDecoderManager: ObservableObject {
 
     private func handleTCPData(_ ptr: UnsafePointer<Int8>, len: Int) {
         if switchingMode { return }
-
-        // Discard stale server data after mode/rate switch
-        if bytesToDiscard > 0 {
-            bytesToDiscard -= len
-            if bytesToDiscard <= 0 {
-                bytesToDiscard = 0
-                audioEngine.flush()
-                DispatchQueue.main.async { self.bufferStatus = self.radioMode ? "Radio" : "" }
-                print("[MODE] Stale data flushed, processing enabled")
-            }
-            return
-        }
 
         if radioMode {
             let c = UnsafeMutablePointer<Int8>.allocate(capacity: len)
