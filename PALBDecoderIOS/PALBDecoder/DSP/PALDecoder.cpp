@@ -66,7 +66,7 @@ void PALDecoder::initFilters() {
     // Video LPF - 25 taps (reduced for speed)
     float vc = std::min(5.5e6f, r * 0.4f);
     m_videoFilterTaps = designLowPassFIR(vc, r, 25);
-    m_vidFirI.setLen(25); m_vidFirQ.setLen(25);
+    m_vidFir.setLen(25);
     // Luma LPF - 17 taps
     float lc = std::min(3.0e6f, m_decimatedRate * 0.35f);
     m_lumaFilterTaps = designLowPassFIR(lc, m_decimatedRate, 17);
@@ -172,13 +172,12 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
         float shI = sI*nI - sQ*nQ;
         float shQ = sI*nQ + sQ*nI;
 
-        // Video IQ LPF - separate I/Q (no complex multiply overhead)
-        m_vidFirI.push(shI); m_vidFirQ.push(shQ);
-        float fI = m_vidFirI.apply(vTaps);
-        float fQ = m_vidFirQ.apply(vTaps);
+        // Video IQ LPF - complex FIR
+        m_vidFir.push(std::complex<float>(shI, shQ));
+        auto flt = m_vidFir.apply(vTaps);
 
-        // Magnitude (sqrtf kept for AGC accuracy)
-        float mag = sqrtf(fI*fI + fQ*fQ);
+        // Magnitude
+        float mag = sqrtf(flt.real()*flt.real() + flt.imag()*flt.imag());
         float norm = normalizeAndAGC(dcBlock(mag));
 
         processSample(norm);

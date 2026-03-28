@@ -101,8 +101,9 @@ final class PALDecoderManager: ObservableObject {
                 self.audioEngine.flush()
                 self.audioEngine.start()
 
-                // Server stops/restarts HackRF on rate change - minimal stale data
-                self.bytesToDiscard = 2 * 1024 * 1024  // 2 MB safety margin
+                // Server uses DirectConnection now - no Qt queue buffering
+                // Only discard ~500KB for HackRF USB transition
+                self.bytesToDiscard = 512 * 1024
                 self.switchingMode = false
 
                 self.tcpClient.connect(host: self.lastHost, initialCommands: [
@@ -124,7 +125,7 @@ final class PALDecoderManager: ObservableObject {
             DispatchQueue.main.async {
                 self.sampleRate = nr; self.videoAccumCount = 0; self.updateFrameSize()
                 self.updateAudioCarrier()
-                self.bytesToDiscard = 2 * 1024 * 1024
+                self.bytesToDiscard = 512 * 1024
                 self.switchingMode = false
                 self.tcpClient.connect(host: self.lastHost, initialCommands: [
                     "SET_SAMPLE_RATE:\(nr)", "SET_FREQ:\(self.frequency)",
