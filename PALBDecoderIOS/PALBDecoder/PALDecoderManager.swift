@@ -23,12 +23,7 @@ final class PALDecoderManager: ObservableObject {
     private var switchingMode = false
     private var lastHost: String = ""
 
-    // Video frame accumulation
-    private var videoAccumBuffer: UnsafeMutablePointer<Int8>
-    private let videoAccumCapacity = 4 * 1024 * 1024
-    private var videoAccumCount = 0
-    private var frameSize: Int = 1000000
-
+    // Simple video skip: if video queue is busy, skip the packet
     private var videoProcessing = false
     private let videoLock: UnsafeMutablePointer<os_unfair_lock_s> = {
         let p = UnsafeMutablePointer<os_unfair_lock_s>.allocate(capacity: 1)
@@ -44,7 +39,6 @@ final class PALDecoderManager: ObservableObject {
     var frequency: UInt64 = 100000000  // 100 MHz FM default
 
     init() {
-        videoAccumBuffer = .allocate(capacity: videoAccumCapacity)
         palDecoder = palDecoder_create()
         audioDemod = audioDemod_create()
 
@@ -52,17 +46,15 @@ final class PALDecoderManager: ObservableObject {
         if let a = audioDemod { audioDemod_setSampleRate(a, Double(sampleRate)); audioDemod_setRadioMode(a, 1) }
         setupCallbacks()
         tcpClient.onDataReceived = { [weak self] ptr, len in self?.handleTCPData(ptr, len: len) }
-        startFPSTimer(); updateFrameSize()
+        startFPSTimer()
     }
 
     deinit {
         fpsTimer?.cancel()
         if let d = palDecoder { palDecoder_destroy(d) }
         if let a = audioDemod { audioDemod_destroy(a) }
-        videoAccumBuffer.deallocate(); videoLock.deallocate()
+        videoLock.deallocate()
     }
-
-    private func updateFrameSize() { frameSize = sampleRate * 2 * 40 / 1000 }
 
     func connect(host: String) {
         lastHost = host
@@ -75,7 +67,7 @@ final class PALDecoderManager: ObservableObject {
     }
 
     func disconnect() {
-        tcpClient.disconnect(); audioEngine.stop(); videoAccumCount = 0
+        tcpClient.disconnect(); audioEngine.stop()
         DispatchQueue.main.async { self.isConnected = false }
     }
 
@@ -104,8 +96,6 @@ final class PALDecoderManager: ObservableObject {
 
             DispatchQueue.main.async {
                 self.sampleRate = nr
-                self.videoAccumCount = 0
-                self.updateFrameSize()
                 if enabled { self.currentFrame = nil }
                 self.updateAudioCarrier()
                 self.audioEngine.flush()
@@ -118,9 +108,7 @@ final class PALDecoderManager: ObservableObject {
                     "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
                 ])
 
-                // 4. Short wait for HackRF to stabilize at new rate
-                //    Server no longer queues stale data (direct buffer, no Qt event queue)
-                //    Only need to wait for HackRF USB buffer flush (~200ms) + margin
+                // 4. Short wait - server clears buffer on SET_SAMPLE_RATE now
                 DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.0) { [weak self] in
                     guard let self = self else { return }
                     self.audioEngine.flush()
@@ -145,13 +133,13 @@ final class PALDecoderManager: ObservableObject {
             if let d = self.palDecoder { palDecoder_setSampleRate(d, Int32(nr)) }
             if let a = self.audioDemod { audioDemod_setSampleRate(a, Double(nr)) }
             DispatchQueue.main.async {
-                self.sampleRate = nr; self.videoAccumCount = 0; self.updateFrameSize()
+                self.sampleRate = nr
                 self.updateAudioCarrier()
                 self.tcpClient.connect(host: self.lastHost, initialCommands: [
                     "SET_SAMPLE_RATE:\(nr)", "SET_FREQ:\(self.frequency)",
                     "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
                 ])
-                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.0) { [weak self] in
                     self?.tcpClient.dropData = false
                     self?.switchingMode = false
                 }
@@ -168,6 +156,7 @@ final class PALDecoderManager: ObservableObject {
         if switchingMode { return }
 
         if radioMode {
+            // Radio: only audio, no video
             let c = UnsafeMutablePointer<Int8>.allocate(capacity: len)
             memcpy(c, ptr, len)
             audioQueue.async { [weak self] in
@@ -178,38 +167,29 @@ final class PALDecoderManager: ObservableObject {
             return
         }
 
-        // VIDEO: accumulate full PAL frame, then decode
-        let space = videoAccumCapacity - videoAccumCount
-        let n = min(len, space)
-        if n > 0 { memcpy(videoAccumBuffer + videoAccumCount, ptr, n); videoAccumCount += n }
+        // TV mode: direct decode - feed every packet to video decoder
+        // Skip if video queue still busy (prevents backlog)
+        os_unfair_lock_lock(videoLock)
+        let canProcess = !videoProcessing
+        if canProcess { videoProcessing = true }
+        os_unfair_lock_unlock(videoLock)
 
-        while videoAccumCount >= frameSize {
-            os_unfair_lock_lock(videoLock)
-            let canV = !videoProcessing
-            if canV { videoProcessing = true }
-            os_unfair_lock_unlock(videoLock)
-
-            if canV {
-                let vc = UnsafeMutablePointer<Int8>.allocate(capacity: frameSize)
-                memcpy(vc, videoAccumBuffer, frameSize)
-                let fs = frameSize
-                videoQueue.async { [weak self] in
-                    defer { vc.deallocate() }
-                    guard let self = self, let d = self.palDecoder else {
-                        if let self = self { os_unfair_lock_lock(self.videoLock); self.videoProcessing = false; os_unfair_lock_unlock(self.videoLock) }
-                        return
-                    }
-                    palDecoder_processSamples(d, vc, fs)
-                    os_unfair_lock_lock(self.videoLock); self.videoProcessing = false; os_unfair_lock_unlock(self.videoLock)
+        if canProcess {
+            let vc = UnsafeMutablePointer<Int8>.allocate(capacity: len)
+            memcpy(vc, ptr, len)
+            let vlen = len
+            videoQueue.async { [weak self] in
+                defer { vc.deallocate() }
+                guard let self = self, let d = self.palDecoder else {
+                    if let self = self { os_unfair_lock_lock(self.videoLock); self.videoProcessing = false; os_unfair_lock_unlock(self.videoLock) }
+                    return
                 }
+                palDecoder_processSamples(d, vc, vlen)
+                os_unfair_lock_lock(self.videoLock); self.videoProcessing = false; os_unfair_lock_unlock(self.videoLock)
             }
-
-            let rem = videoAccumCount - frameSize
-            if rem > 0 { memmove(videoAccumBuffer, videoAccumBuffer + frameSize, rem) }
-            videoAccumCount = rem
         }
 
-        // AUDIO: feed every packet (separate from video)
+        // Audio: feed every packet (separate from video)
         let ac = UnsafeMutablePointer<Int8>.allocate(capacity: len)
         memcpy(ac, ptr, len)
         audioQueue.async { [weak self] in

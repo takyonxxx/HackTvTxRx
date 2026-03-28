@@ -63,18 +63,18 @@ void PALDecoder::applyStandard() {
 
 void PALDecoder::initFilters() {
     float r = (float)m_sampleRate;
-    // Video LPF - 33 taps (proven working for 6 FPS on iPhone)
+    // Video LPF - 25 taps (reduced for speed, proven 6 FPS on iPhone)
     float vc = std::min(5.5e6f, r * 0.4f);
-    m_videoFilterTaps = designLowPassFIR(vc, r, 33);
-    m_vidFir.setLen(33);
-    // Luma LPF - 21 taps
+    m_videoFilterTaps = designLowPassFIR(vc, r, 25);
+    m_vidFirI.setLen(25); m_vidFirQ.setLen(25);
+    // Luma LPF - 17 taps
     float lc = std::min(3.0e6f, m_decimatedRate * 0.35f);
-    m_lumaFilterTaps = designLowPassFIR(lc, m_decimatedRate, 21);
-    m_lumaFir.setLen(21);
-    // Chroma BPF - 33 taps
+    m_lumaFilterTaps = designLowPassFIR(lc, m_decimatedRate, 17);
+    m_lumaFir.setLen(17);
+    // Chroma BPF - 25 taps
     if (COLOR_CARRIER_FREQ < r / 2.0f) {
-        m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, r, 33);
-        m_chromaFirU.setLen(33); m_chromaFirV.setLen(33);
+        m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, r, 25);
+        m_chromaFirU.setLen(25); m_chromaFirV.setLen(25);
     } else { m_chromaFilterTaps.clear(); m_chromaFirU.setLen(1); m_chromaFirV.setLen(1); }
 }
 
@@ -172,12 +172,13 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
         float shI = sI*nI - sQ*nQ;
         float shQ = sI*nQ + sQ*nI;
 
-        // Video IQ LPF - complex FIR
-        m_vidFir.push(std::complex<float>(shI, shQ));
-        auto flt = m_vidFir.apply(vTaps);
+        // Video IQ LPF - separate I/Q (no complex multiply overhead)
+        m_vidFirI.push(shI); m_vidFirQ.push(shQ);
+        float fI = m_vidFirI.apply(vTaps);
+        float fQ = m_vidFirQ.apply(vTaps);
 
-        // Magnitude
-        float mag = sqrtf(flt.real()*flt.real() + flt.imag()*flt.imag());
+        // Magnitude (sqrtf kept for AGC accuracy)
+        float mag = sqrtf(fI*fI + fQ*fQ);
         float norm = normalizeAndAGC(dcBlock(mag));
 
         processSample(norm);

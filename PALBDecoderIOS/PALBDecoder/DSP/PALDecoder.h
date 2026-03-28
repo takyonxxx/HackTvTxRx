@@ -73,7 +73,7 @@ private:
 
     // NCO LUT
     static constexpr int NCO_LUT_BITS = 12;
-    static constexpr int NCO_LUT_SIZE = 1 << NCO_LUT_BITS;  // 4096
+    static constexpr int NCO_LUT_SIZE = 1 << NCO_LUT_BITS;
     float m_ncoSin[NCO_LUT_SIZE];
     float m_ncoCos[NCO_LUT_SIZE];
     uint32_t m_ncoAccum = 0, m_ncoStep = 0;
@@ -98,9 +98,9 @@ private:
     int m_fieldDetectSampleCount, m_vSyncDetectSampleCount;
     int m_vSyncDetectThreshold, m_fieldDetectThreshold1, m_fieldDetectThreshold2;
 
-    // Video IQ FIR - complex delay line (proven correct for image quality)
+    // Video IQ FIR - separate I and Q delay lines (avoid complex overhead)
     std::vector<float> m_videoFilterTaps;
-    FIRDelay<std::complex<float>, MAX_FIR> m_vidFir;
+    FIRDelay<float, MAX_FIR> m_vidFirI, m_vidFirQ;
 
     std::vector<float> m_lumaFilterTaps;
     FIRDelay<float, 48> m_lumaFir;
