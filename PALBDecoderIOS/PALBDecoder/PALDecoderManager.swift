@@ -22,6 +22,8 @@ final class PALDecoderManager: ObservableObject {
 
     private var switchingMode = false
     private var lastHost: String = ""
+    // Bytes to discard after mode/rate switch (flush stale server buffer)
+    private var bytesToDiscard = 0
 
     // Video frame accumulation
     private var videoAccumBuffer: UnsafeMutablePointer<Int8>
@@ -99,20 +101,16 @@ final class PALDecoderManager: ObservableObject {
                 self.audioEngine.flush()
                 self.audioEngine.start()
 
+                // Server stops/restarts HackRF on rate change - minimal stale data
+                self.bytesToDiscard = 2 * 1024 * 1024  // 2 MB safety margin
+                self.switchingMode = false
+
                 self.tcpClient.connect(host: self.lastHost, initialCommands: [
                     "SET_SAMPLE_RATE:\(nr)", "SET_FREQ:\(self.frequency)",
                     "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
                 ])
                 if !enabled { self.bufferStatus = "" }
                 else { self.bufferStatus = "Radio - tuning..." }
-
-                // Drop first 1 second of data (server flushes, just in case)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    self.audioEngine.flush()
-                    self.switchingMode = false
-                    if enabled { self.bufferStatus = "Radio" }
-                    print("[MODE] Data processing enabled")
-                }
             }
         }
     }
@@ -126,11 +124,12 @@ final class PALDecoderManager: ObservableObject {
             DispatchQueue.main.async {
                 self.sampleRate = nr; self.videoAccumCount = 0; self.updateFrameSize()
                 self.updateAudioCarrier()
+                self.bytesToDiscard = 2 * 1024 * 1024
+                self.switchingMode = false
                 self.tcpClient.connect(host: self.lastHost, initialCommands: [
                     "SET_SAMPLE_RATE:\(nr)", "SET_FREQ:\(self.frequency)",
                     "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
                 ])
-                self.switchingMode = false
             }
         }
     }
@@ -142,6 +141,18 @@ final class PALDecoderManager: ObservableObject {
 
     private func handleTCPData(_ ptr: UnsafePointer<Int8>, len: Int) {
         if switchingMode { return }
+
+        // Discard stale server data after mode/rate switch
+        if bytesToDiscard > 0 {
+            bytesToDiscard -= len
+            if bytesToDiscard <= 0 {
+                bytesToDiscard = 0
+                audioEngine.flush()
+                DispatchQueue.main.async { self.bufferStatus = self.radioMode ? "Radio" : "" }
+                print("[MODE] Stale data flushed, processing enabled")
+            }
+            return
+        }
 
         if radioMode {
             let c = UnsafeMutablePointer<Int8>.allocate(capacity: len)
