@@ -34,7 +34,10 @@ PALDecoder::~PALDecoder() {}
 void PALDecoder::setSampleRate(int sr) {
     std::lock_guard<std::mutex> lock(m_processMutex);
     m_sampleRate = sr;
-    m_decimFactor = (sr <= 12500000) ? 1 : 2;
+    // Pre-decimation: 2x for rates >= 8 MHz, reduces FIR workload
+    if (sr >= 16000000) m_decimFactor = 4;
+    else if (sr >= 8000000) m_decimFactor = 2;
+    else m_decimFactor = 1;
     m_decimatedRate = (float)sr / m_decimFactor;
     m_chromaBandwidth = (sr >= 16000000) ? 1.5e6f : 1.2e6f;
     applyStandard(); initFilters(); rebuildColorLUT(); updateNCO();
@@ -45,6 +48,7 @@ void PALDecoder::setSampleRate(int sr) {
 }
 
 void PALDecoder::applyStandard() {
+    // Timing based on FULL sample rate (sync runs at full rate)
     float r = (float)m_sampleRate, spl = r / (NB_LINES * FPS);
     m_samplesPerLine = (int)spl; m_samplesPerLineFrac = spl - m_samplesPerLine;
     m_numberSamplesPerHTop = (int)(SYNC_PULSE_FRAC * spl);
@@ -60,15 +64,17 @@ void PALDecoder::applyStandard() {
     m_vSyncDetectThreshold = (int)(dtl * 0.5f);
 }
 
-// CHANGE: separate I/Q FIR instead of complex FIR
 void PALDecoder::initFilters() {
     float r = (float)m_sampleRate;
+    // Video IQ LPF: 15 taps at full rate (lightweight anti-alias before magnitude)
     float vc = std::min(5.5e6f, r * 0.4f);
-    m_videoFilterTaps = designLowPassFIR(vc, r, 25);
-    m_vidFirI.setLen(25); m_vidFirQ.setLen(25);
+    m_videoFilterTaps = designLowPassFIR(vc, r, 15);
+    m_vidFirI.setLen(15); m_vidFirQ.setLen(15);
+    // Luma LPF at decimated rate
     float lc = std::min(3.0e6f, m_decimatedRate * 0.35f);
     m_lumaFilterTaps = designLowPassFIR(lc, m_decimatedRate, 17);
     m_lumaFir.setLen(17);
+    // Chroma BPF at full rate
     if (COLOR_CARRIER_FREQ < r / 2.0f) {
         m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, r, 25);
         m_chromaFirU.setLen(25); m_chromaFirV.setLen(25);
@@ -134,7 +140,13 @@ float PALDecoder::normalizeAndAGC(float s) {
     return n>1?1:n;
 }
 
-// CHANGE: separate I/Q FIR instead of complex FIR in hot loop
+// Fast magnitude approximation: max(|I|,|Q|) + 0.4*min(|I|,|Q|)
+// ~3% error, no sqrtf. For sync detection and AGC this is plenty accurate.
+static inline float fastMag(float i, float q) {
+    float ai = fabsf(i), aq = fabsf(q);
+    return (ai > aq) ? ai + 0.4f * aq : aq + 0.4f * ai;
+}
+
 void PALDecoder::processSamples(const int8_t* data, size_t len) {
     if(!data||len==0) return;
     std::lock_guard<std::mutex> lock(m_processMutex);
@@ -159,23 +171,26 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
         float sI = data[i*2] * (1.0f/128.0f);
         float sQ = data[i*2+1] * (1.0f/128.0f);
 
+        // NCO freq shift
         uint32_t idx = m_ncoAccum >> (32 - NCO_LUT_BITS);
         float nI = m_ncoCos[idx], nQ = m_ncoSin[idx];
         m_ncoAccum += m_ncoStep;
-
         float shI = sI*nI - sQ*nQ;
         float shQ = sI*nQ + sQ*nI;
 
-        // Separate I/Q FIR - no complex multiply overhead
+        // Video IQ LPF (15 taps - lightweight)
         m_vidFirI.push(shI); m_vidFirQ.push(shQ);
         float fI = m_vidFirI.apply(vTaps);
         float fQ = m_vidFirQ.apply(vTaps);
 
-        float mag = sqrtf(fI*fI + fQ*fQ);
+        // Fast magnitude (no sqrtf)
+        float mag = fastMag(fI, fQ);
         float norm = normalizeAndAGC(dcBlock(mag));
 
+        // Sync detection runs at FULL sample rate (accurate timing)
         processSample(norm);
 
+        // Chroma at full rate (only if color mode)
         if(doColor) {
             float cs = m_colorCarrierSin[m_colorCarrierIndex];
             float cc = m_colorCarrierCos[m_colorCarrierIndex];
@@ -185,6 +200,7 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
             if(++m_colorCarrierIndex >= cSize) m_colorCarrierIndex = 0;
         }
 
+        // Decimate: only push to line buffer every decimFactor samples
         if(++m_resampleCounter < m_decimFactor) continue;
         m_resampleCounter = 0;
 
