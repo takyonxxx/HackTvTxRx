@@ -10,11 +10,10 @@ SdrDevice::SdrDevice(QObject *parent)
     , m_totalBytesSent(0)
     , m_totalBytesReceived(0)
     , m_currentFrequency(100000000)
-    , m_currentSampleRate(16000000)
+    , m_currentSampleRate(2000000)
     , m_currentVgaGain(40)
     , m_currentLnaGain(40)
     , m_currentRxAmpGain(14)
-    , m_currentTxAmpGain(20)
 {
     m_hackTvLib = std::make_unique<HackTvLib>(this);
 
@@ -24,7 +23,7 @@ SdrDevice::SdrDevice(QObject *parent)
         qDebug() << "HackTV:" << QString::fromStdString(msg);
     });
 
-    // Set up data callback
+    // Set up data callback - raw IQ from HackRF -> TCP broadcast
     m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
         if (m_hackTvLib && data && len > 0) {
             QByteArray dataCopy(reinterpret_cast<const char*>(data), static_cast<int>(len));
@@ -87,6 +86,10 @@ bool SdrDevice::stop()
     emit statusMessage("Stopped successfully");
     return true;
 }
+
+// ============================================================
+// TCP Data Server
+// ============================================================
 
 bool SdrDevice::startTcpServer(quint16 dataPort, quint16 controlPort)
 {
@@ -184,7 +187,10 @@ int SdrDevice::getConnectedControlClientsCount() const
     return m_controlClients.size();
 }
 
+// ============================================================
 // Data Server Slots
+// ============================================================
+
 void SdrDevice::onNewConnection()
 {
     while (m_tcpServer->hasPendingConnections()) {
@@ -245,7 +251,10 @@ void SdrDevice::onSocketError(QAbstractSocket::SocketError error)
     client->deleteLater();
 }
 
+// ============================================================
 // Control Server Slots
+// ============================================================
+
 void SdrDevice::onNewControlConnection()
 {
     while (m_controlServer->hasPendingConnections()) {
@@ -260,7 +269,7 @@ void SdrDevice::onNewControlConnection()
         connect(clientSocket, &QTcpSocket::disconnected,
                 this, &SdrDevice::onControlClientDisconnected);
         connect(clientSocket, &QTcpSocket::errorOccurred,
-                this, &SdrDevice::onSocketError);
+                this, &SdrDevice::onControlSocketError);
 
         m_controlClients.append(clientSocket);
 
@@ -273,14 +282,14 @@ void SdrDevice::onNewControlConnection()
 
         // Send welcome message with available commands
         QString welcome =
-            "HackRF TCP Control Server v1.0\n"
+            "HackRF TCP IQ Server v2.0\n"
+            "Raw IQ streaming (int8 I/Q interleaved)\n"
             "Available commands:\n"
-            "  SET_FREQ:<value>         - Set frequency in Hz (e.g., SET_FREQ:100000000)\n"
-            "  SET_SAMPLE_RATE:<value>  - Set sample rate in Hz (e.g., SET_SAMPLE_RATE:16000000)\n"
-            "  SET_VGA_GAIN:<value>     - Set VGA gain 0-62 (e.g., SET_VGA_GAIN:40)\n"
-            "  SET_LNA_GAIN:<value>     - Set LNA gain 0-40 (e.g., SET_LNA_GAIN:40)\n"
-            "  SET_RX_AMP_GAIN:<value>  - Set RX amp gain 0-14 (e.g., SET_RX_AMP_GAIN:14)\n"
-            "  SET_TX_AMP_GAIN:<value>  - Set TX amp gain 0-47 (e.g., SET_TX_AMP_GAIN:20)\n"
+            "  SET_FREQ:<value>         - Set frequency in Hz (1 MHz - 6 GHz)\n"
+            "  SET_SAMPLE_RATE:<value>  - Set sample rate in Hz (2-20 MHz)\n"
+            "  SET_VGA_GAIN:<value>     - Set VGA gain 0-62\n"
+            "  SET_LNA_GAIN:<value>     - Set LNA gain 0-40\n"
+            "  SET_RX_AMP_GAIN:<value>  - Set RX amp gain 0-14\n"
             "  GET_STATUS               - Get current settings\n"
             "  HELP                     - Show this help\n"
             "Ready.\n";
@@ -331,6 +340,10 @@ void SdrDevice::onControlSocketError(QAbstractSocket::SocketError error)
     m_controlClients.removeOne(client);
     client->deleteLater();
 }
+
+// ============================================================
+// Control Command Processing (RX only)
+// ============================================================
 
 void SdrDevice::processControlCommand(QTcpSocket* client, const QString& command)
 {
@@ -398,30 +411,17 @@ void SdrDevice::processControlCommand(QTcpSocket* client, const QString& command
             response = "ERROR: Invalid RX amp gain (0-14)\n";
         }
     }
-    else if (cmd == "SET_TX_AMP_GAIN" && parts.size() == 2) {
-        bool ok;
-        unsigned int gain = parts[1].toUInt(&ok);
-        if (ok && gain <= 47) {
-            setTxAmpGain(gain);
-            m_currentTxAmpGain = gain;
-            response = QString("OK: TX amp gain set to %1\n").arg(gain);
-            emit parameterChanged("TxAmpGain", QString::number(gain));
-        } else {
-            response = "ERROR: Invalid TX amp gain (0-47)\n";
-        }
-    }
     else if (cmd == "GET_STATUS") {
         response = getCurrentStatus();
     }
     else if (cmd == "HELP") {
         response =
             "Available commands:\n"
-            "  SET_FREQ:<value>         - Set frequency in Hz\n"
-            "  SET_SAMPLE_RATE:<value>  - Set sample rate in Hz\n"
+            "  SET_FREQ:<value>         - Set frequency in Hz (1 MHz - 6 GHz)\n"
+            "  SET_SAMPLE_RATE:<value>  - Set sample rate / bandwidth in Hz (2-20 MHz)\n"
             "  SET_VGA_GAIN:<value>     - Set VGA gain 0-62\n"
             "  SET_LNA_GAIN:<value>     - Set LNA gain 0-40\n"
             "  SET_RX_AMP_GAIN:<value>  - Set RX amp gain 0-14\n"
-            "  SET_TX_AMP_GAIN:<value>  - Set TX amp gain 0-47\n"
             "  GET_STATUS               - Get current settings\n"
             "  HELP                     - Show this help\n";
     }
@@ -442,10 +442,9 @@ QString SdrDevice::getCurrentStatus()
                "  VGA Gain:       %5\n"
                "  LNA Gain:       %6\n"
                "  RX Amp Gain:    %7\n"
-               "  TX Amp Gain:    %8\n"
-               "  Data Clients:   %9\n"
-               "  Control Clients: %10\n"
-               "  Data Sent:      %11 MB\n"
+               "  Data Clients:   %8\n"
+               "  Control Clients: %9\n"
+               "  Data Sent:      %10 MB\n"
                ).arg(m_currentFrequency)
         .arg(m_currentFrequency / 1000000.0, 0, 'f', 3)
         .arg(m_currentSampleRate)
@@ -453,11 +452,14 @@ QString SdrDevice::getCurrentStatus()
         .arg(m_currentVgaGain)
         .arg(m_currentLnaGain)
         .arg(m_currentRxAmpGain)
-        .arg(m_currentTxAmpGain)
         .arg(m_clients.size())
         .arg(m_controlClients.size())
         .arg(m_totalBytesSent.load() / (1024.0 * 1024.0), 0, 'f', 2);
 }
+
+// ============================================================
+// Data Handling
+// ============================================================
 
 void SdrDevice::handleReceivedData(const int8_t *data, size_t len)
 {
@@ -504,6 +506,10 @@ void SdrDevice::removeDisconnectedClients()
     }
 }
 
+// ============================================================
+// RX Parameter Setters
+// ============================================================
+
 void SdrDevice::setFrequency(uint64_t frequency_hz)
 {
     if (m_hackTvLib) {
@@ -520,20 +526,6 @@ void SdrDevice::setSampleRate(uint32_t sample_rate)
     }
 }
 
-void SdrDevice::setAmplitude(float amplitude)
-{
-    if (m_hackTvLib) {
-        m_hackTvLib->setAmplitude(amplitude);
-    }
-}
-
-void SdrDevice::setMicEnabled(bool enabled)
-{
-    if (m_hackTvLib) {
-        m_hackTvLib->setMicEnabled(enabled);
-    }
-}
-
 void SdrDevice::setLnaGain(unsigned int gain)
 {
     if (m_hackTvLib) {
@@ -547,14 +539,6 @@ void SdrDevice::setVgaGain(unsigned int gain)
     if (m_hackTvLib) {
         m_hackTvLib->setVgaGain(gain);
         qDebug() << "VGA gain set to:" << gain;
-    }
-}
-
-void SdrDevice::setTxAmpGain(unsigned int gain)
-{
-    if (m_hackTvLib) {
-        m_hackTvLib->setTxAmpGain(gain);
-        qDebug() << "TX amp gain set to:" << gain;
     }
 }
 

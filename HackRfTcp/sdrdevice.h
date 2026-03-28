@@ -27,20 +27,17 @@ public:
     bool stop();
 
     // TCP Server operations
-    bool startTcpServer(quint16 dataPort = 7355, quint16 controlPort = 7356);
+    bool startTcpServer(quint16 dataPort = 5000, quint16 controlPort = 5001);
     void stopTcpServer();
     bool isTcpServerRunning() const;
     int getConnectedClientsCount() const;
     int getConnectedControlClientsCount() const;
 
-    // Configuration methods
+    // RX Configuration
     void setFrequency(uint64_t frequency_hz);
     void setSampleRate(uint32_t sample_rate);
-    void setAmplitude(float amplitude);
-    void setMicEnabled(bool enabled);
     void setLnaGain(unsigned int gain);
     void setVgaGain(unsigned int gain);
-    void setTxAmpGain(unsigned int gain);
     void setRxAmpGain(unsigned int gain);
 
 signals:
@@ -83,13 +80,12 @@ private:
     std::atomic<quint64> m_totalBytesSent;
     std::atomic<quint64> m_totalBytesReceived;
 
-    // Current settings
+    // Current RX settings
     uint64_t m_currentFrequency;
     uint32_t m_currentSampleRate;
     unsigned int m_currentVgaGain;
     unsigned int m_currentLnaGain;
     unsigned int m_currentRxAmpGain;
-    unsigned int m_currentTxAmpGain;
 };
 
 #endif // SDRDEVICE_H

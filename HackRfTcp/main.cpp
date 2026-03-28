@@ -22,8 +22,8 @@ QString getLocalIPAddress()
 int main(int argc, char *argv[])
 {
     QCoreApplication a(argc, argv);
-    a.setApplicationName("HackRF TCP Server");
-    a.setApplicationVersion("1.0");
+    a.setApplicationName("HackRF TCP IQ Server");
+    a.setApplicationVersion("2.0");
 
     SdrDevice hackrf;
 
@@ -60,7 +60,7 @@ int main(int argc, char *argv[])
     });
 
     QCommandLineParser parser;
-    parser.setApplicationDescription("HackRF TCP Server - Stream IQ samples and control via TCP");
+    parser.setApplicationDescription("HackRF TCP IQ Server - Stream raw IQ samples via TCP");
     parser.addHelpOption();
     parser.addVersionOption();
 
@@ -84,10 +84,6 @@ int main(int argc, char *argv[])
                                        "Initial RX amp gain (0-14)", "gain", "14");
     parser.addOption(rxAmpGainOption);
 
-    QCommandLineOption txAmpGainOption(QStringList() << "tx-amp-gain",
-                                       "Initial TX amp gain (0-47)", "gain", "47");
-    parser.addOption(txAmpGainOption);
-
     QCommandLineOption sampleRateOption(QStringList() << "sample-rate" << "sr",
                                         "Initial sample rate in Hz", "rate", "2000000");
     parser.addOption(sampleRateOption);
@@ -103,17 +99,17 @@ int main(int argc, char *argv[])
     unsigned int vgaGain = parser.value(vgaGainOption).toUInt();
     unsigned int lnaGain = parser.value(lnaGainOption).toUInt();
     unsigned int rxAmpGain = parser.value(rxAmpGainOption).toUInt();
-    unsigned int txAmpGain = parser.value(txAmpGainOption).toUInt();
     uint32_t sampleRate = parser.value(sampleRateOption).toUInt();
     uint64_t frequency = parser.value(frequencyOption).toULongLong();
 
+    // HackRF RX mode only
     std::vector<std::string> hacktvArgs = {
         "-o", "hackrf",
         "--rx-tx-mode", "rx"
     };
 
     qDebug() << "\n========================================";
-    qDebug() << "   HackRF TCP Server v1.0";
+    qDebug() << "   HackRF TCP IQ Server v2.0";
     qDebug() << "========================================\n";
 
     qDebug() << "Configuration:";
@@ -124,7 +120,6 @@ int main(int argc, char *argv[])
     qDebug() << "  VGA Gain:       " << vgaGain;
     qDebug() << "  LNA Gain:       " << lnaGain;
     qDebug() << "  RX Amp Gain:    " << rxAmpGain;
-    qDebug() << "  TX Amp Gain:    " << txAmpGain;
 
     if (!hackrf.startTcpServer(dataPort, controlPort)) {
         qDebug() << "\nFailed to start TCP servers";
@@ -140,13 +135,12 @@ int main(int argc, char *argv[])
     hackrf.setVgaGain(vgaGain);
     hackrf.setLnaGain(lnaGain);
     hackrf.setRxAmpGain(rxAmpGain);
-    hackrf.setTxAmpGain(txAmpGain);
     hackrf.setFrequency(frequency);
 
     QThread::msleep(100);
 
     if (!hackrf.start()) {
-        qDebug() << "\nFailed to start HackRF";        
+        qDebug() << "\nFailed to start HackRF";
         return 1;
     }
 
@@ -154,11 +148,14 @@ int main(int argc, char *argv[])
 
     qDebug() << "\n========================================";
     qDebug() << "   HackRF Started Successfully!";
-    qDebug() << "========================================\n";
-
+    qDebug() << "========================================";
+    qDebug() << "";
     qDebug() << "Server is running on IP:" << localIP;
     qDebug() << "  Data Stream:    " << localIP << ":" << dataPort;
     qDebug() << "  Control:        " << localIP << ":" << controlPort;
+    qDebug() << "";
+    qDebug() << "Data format: int8 I/Q interleaved (I0,Q0,I1,Q1,...)";
+    qDebug() << "Bandwidth = Sample Rate =" << sampleRate/1000000.0 << "MHz";
     qDebug() << "\n========================================";
     qDebug() << "  Server Ready - Press Ctrl+C to stop";
     qDebug() << "========================================\n";
