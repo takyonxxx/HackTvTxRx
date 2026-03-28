@@ -8,7 +8,6 @@ final class PALDecoderManager: ObservableObject {
     @Published var isConnected: Bool = false
     @Published var sampleRate: Int = 16000000
 
-    // NOT @Published - avoid SwiftUI recompute storms
     var radioMode: Bool = false
 
     let tcpClient = SDRTCPClient()
@@ -21,6 +20,7 @@ final class PALDecoderManager: ObservableObject {
     private let audioQueue = DispatchQueue(label: "pal.audio", qos: .userInitiated)
 
     private var switchingMode = false
+    private var lastHost: String = ""
 
     // Video frame accumulation
     private var videoAccumBuffer: UnsafeMutablePointer<Int8>
@@ -30,13 +30,6 @@ final class PALDecoderManager: ObservableObject {
 
     private var videoProcessing = false
     private let videoLock: UnsafeMutablePointer<os_unfair_lock_s> = {
-        let p = UnsafeMutablePointer<os_unfair_lock_s>.allocate(capacity: 1)
-        p.initialize(to: os_unfair_lock_s())
-        return p
-    }()
-
-    private var audioProcessing = false
-    private let audioLock: UnsafeMutablePointer<os_unfair_lock_s> = {
         let p = UnsafeMutablePointer<os_unfair_lock_s>.allocate(capacity: 1)
         p.initialize(to: os_unfair_lock_s())
         return p
@@ -80,7 +73,6 @@ final class PALDecoderManager: ObservableObject {
         if let aud = audioDemod { audioDemod_destroy(aud) }
         videoAccumBuffer.deallocate()
         videoLock.deallocate()
-        audioLock.deallocate()
     }
 
     private func updateFrameSize() {
@@ -90,6 +82,7 @@ final class PALDecoderManager: ObservableObject {
     // MARK: - Connection
 
     func connect(host: String) {
+        lastHost = host
         let initialCommands = [
             "SET_SAMPLE_RATE:\(sampleRate)",
             "SET_FREQ:\(frequency)",
@@ -99,51 +92,63 @@ final class PALDecoderManager: ObservableObject {
         ]
         tcpClient.connect(host: host, initialCommands: initialCommands)
         audioEngine.start()
-        DispatchQueue.main.async {
-            self.isConnected = true
-        }
+        DispatchQueue.main.async { self.isConnected = true }
     }
 
     func disconnect() {
         tcpClient.disconnect()
         audioEngine.stop()
         videoAccumCount = 0
-        DispatchQueue.main.async {
-            self.isConnected = false
-        }
+        DispatchQueue.main.async { self.isConnected = false }
     }
 
-    // MARK: - Radio Mode Toggle
+    // MARK: - Radio Mode Toggle (disconnect + reconnect)
 
     func setRadioMode(_ enabled: Bool) {
         print("[MODE] Switching to \(enabled ? "RADIO" : "TV")...")
         switchingMode = true
         radioMode = enabled
 
+        // 1. Disconnect current TCP
+        tcpClient.disconnect()
+
+        // 2. Configure decoders on background (no data flowing now)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            Thread.sleep(forTimeInterval: 0.3)
+
+            let newRate = enabled ? 2000000 : 16000000
 
             if let aud = self.audioDemod {
                 audioDemod_setRadioMode(aud, enabled ? 1 : 0)
+                audioDemod_setSampleRate(aud, Double(newRate))
             }
-
-            let newRate = enabled ? 2000000 : 16000000
-            if let dec = self.palDecoder { palDecoder_setSampleRate(dec, Int32(newRate)) }
-            if let aud = self.audioDemod { audioDemod_setSampleRate(aud, Double(newRate)) }
-            self.tcpClient.setSampleRate(UInt32(newRate))
+            if let dec = self.palDecoder {
+                palDecoder_setSampleRate(dec, Int32(newRate))
+            }
 
             DispatchQueue.main.async {
                 self.sampleRate = newRate
                 self.videoAccumCount = 0
                 self.updateFrameSize()
-                self.updateAudioCarrier()
                 if enabled { self.currentFrame = nil }
-            }
 
-            Thread.sleep(forTimeInterval: 0.5)
-            self.switchingMode = false
-            print("[MODE] Switch complete")
+                // 3. Reconnect with new sample rate
+                let cmds = [
+                    "SET_SAMPLE_RATE:\(newRate)",
+                    "SET_FREQ:\(self.frequency)",
+                    "SET_LNA_GAIN:40",
+                    "SET_VGA_GAIN:30",
+                    "SET_RX_AMP_GAIN:14"
+                ]
+                self.tcpClient.connect(host: self.lastHost, initialCommands: cmds)
+
+                if !enabled {
+                    self.updateAudioCarrier()
+                }
+
+                self.switchingMode = false
+                print("[MODE] Switch complete, reconnected at \(newRate/1000000) MHz")
+            }
         }
     }
 
@@ -151,20 +156,31 @@ final class PALDecoderManager: ObservableObject {
 
     func changeSampleRate(_ newRate: Int) {
         switchingMode = true
+        tcpClient.disconnect()
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            Thread.sleep(forTimeInterval: 0.2)
+
             if let dec = self.palDecoder { palDecoder_setSampleRate(dec, Int32(newRate)) }
             if let aud = self.audioDemod { audioDemod_setSampleRate(aud, Double(newRate)) }
-            self.tcpClient.setSampleRate(UInt32(newRate))
+
             DispatchQueue.main.async {
                 self.sampleRate = newRate
                 self.videoAccumCount = 0
                 self.updateFrameSize()
                 self.updateAudioCarrier()
+
+                let cmds = [
+                    "SET_SAMPLE_RATE:\(newRate)",
+                    "SET_FREQ:\(self.frequency)",
+                    "SET_LNA_GAIN:40",
+                    "SET_VGA_GAIN:30",
+                    "SET_RX_AMP_GAIN:14"
+                ]
+                self.tcpClient.connect(host: self.lastHost, initialCommands: cmds)
+                self.switchingMode = false
+                print("[RATE] Changed to \(newRate/1000000) MHz, reconnected")
             }
-            Thread.sleep(forTimeInterval: 0.4)
-            self.switchingMode = false
         }
     }
 
@@ -179,27 +195,13 @@ final class PALDecoderManager: ObservableObject {
     private func handleTCPData(_ ptr: UnsafePointer<Int8>, len: Int) {
         if switchingMode { return }
 
-        // AUDIO: skip if still processing previous
-        os_unfair_lock_lock(audioLock)
-        let canAudio = !audioProcessing
-        if canAudio { audioProcessing = true }
-        os_unfair_lock_unlock(audioLock)
-
-        if canAudio {
-            let aCopy = UnsafeMutablePointer<Int8>.allocate(capacity: len)
-            memcpy(aCopy, ptr, len)
-            audioQueue.async { [weak self] in
-                defer {
-                    aCopy.deallocate()
-                    if let self = self {
-                        os_unfair_lock_lock(self.audioLock)
-                        self.audioProcessing = false
-                        os_unfair_lock_unlock(self.audioLock)
-                    }
-                }
-                guard let self = self, !self.switchingMode, let aud = self.audioDemod else { return }
-                audioDemod_processSamples(aud, aCopy, len)
-            }
+        // AUDIO: always process (no skip - radio needs continuous audio)
+        let aCopy = UnsafeMutablePointer<Int8>.allocate(capacity: len)
+        memcpy(aCopy, ptr, len)
+        audioQueue.async { [weak self] in
+            defer { aCopy.deallocate() }
+            guard let self = self, !self.switchingMode, let aud = self.audioDemod else { return }
+            audioDemod_processSamples(aud, aCopy, len)
         }
 
         // VIDEO: only in TV mode
@@ -273,7 +275,7 @@ final class PALDecoderManager: ObservableObject {
     }
 
     private func handleFrame(_ rgba: UnsafePointer<UInt8>, width: Int, height: Int) {
-        if radioMode { return }  // Don't update UI frame in radio mode
+        if radioMode { return }
         frameCount += 1
         let bytesPerRow = width * 4
         let dataSize = bytesPerRow * height

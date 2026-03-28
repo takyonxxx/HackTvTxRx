@@ -206,6 +206,29 @@ struct ContentView: View {
 
     // MARK: - Frequency
 
+    private struct BandDef {
+        let name: String
+        let min: Double
+        let max: Double
+        let step: Double
+        let defaultFreq: Double
+    }
+
+    private let radioBands: [BandDef] = [
+        BandDef(name: "FM",    min: 87.5,  max: 108.0, step: 0.1,  defaultFreq: 100.0),
+        BandDef(name: "AIR",   min: 118.0, max: 137.0, step: 0.025, defaultFreq: 121.5),
+        BandDef(name: "2m",    min: 144.0, max: 148.0, step: 0.0125, defaultFreq: 145.0),
+        BandDef(name: "70cm",  min: 430.0, max: 440.0, step: 0.0125, defaultFreq: 433.0),
+        BandDef(name: "868",   min: 862.0, max: 870.0, step: 0.1,  defaultFreq: 868.0),
+        BandDef(name: "ALL",   min: 1.0,   max: 6000.0, step: 0.1, defaultFreq: 100.0),
+    ]
+
+    @State private var selectedBandIndex: Int = 0
+
+    private var currentBand: BandDef {
+        radioBands[selectedBandIndex]
+    }
+
     private var frequencySection: some View {
         GroupBox("Frequency") {
             VStack(spacing: 6) {
@@ -220,21 +243,46 @@ struct ContentView: View {
                         .cornerRadius(4)
                 }
 
-                Slider(value: $frequencyMHz,
-                       in: radioMode ? 1...6000 : 47...862,
-                       step: 0.1) {
-                    Text("Freq")
-                } onEditingChanged: { editing in
-                    if !editing { applyFrequency() }
-                }
-
                 if radioMode {
-                    HStack(spacing: 8) {
-                        quickFreqButton("FM", freq: 100.0)
-                        quickFreqButton("AIR", freq: 120.0)
-                        quickFreqButton("VHF", freq: 145.0)
-                        quickFreqButton("UHF", freq: 433.0)
-                        quickFreqButton("868", freq: 868.0)
+                    // Band selector buttons
+                    HStack(spacing: 6) {
+                        ForEach(radioBands.indices, id: \.self) { i in
+                            Button(radioBands[i].name) {
+                                selectedBandIndex = i
+                                frequencyMHz = radioBands[i].defaultFreq
+                                applyFrequency()
+                            }
+                            .font(.caption2.bold())
+                            .buttonStyle(.borderedProminent)
+                            .tint(selectedBandIndex == i ? .orange : .gray)
+                        }
+                    }
+
+                    // Slider locked to selected band range
+                    Slider(value: $frequencyMHz,
+                           in: currentBand.min...currentBand.max,
+                           step: currentBand.step) {
+                        Text("Freq")
+                    } onEditingChanged: { editing in
+                        if !editing { applyFrequency() }
+                    }
+
+                    HStack {
+                        Text(String(format: "%.1f", currentBand.min))
+                            .font(.caption2).foregroundColor(.gray)
+                        Spacer()
+                        Text("\(currentBand.name) Band")
+                            .font(.caption2.bold()).foregroundColor(.orange)
+                        Spacer()
+                        Text(String(format: "%.1f", currentBand.max))
+                            .font(.caption2).foregroundColor(.gray)
+                    }
+                } else {
+                    // TV slider
+                    Slider(value: $frequencyMHz, in: 47...862, step: 0.1) {
+                        Text("Freq")
+                    } onEditingChanged: { editing in
+                        if !editing { applyFrequency() }
                     }
                 }
             }
@@ -255,15 +303,6 @@ struct ContentView: View {
             if f >= 174, f <= 230 { return "VHF-III E\(Int((f - 175) / 8) + 5)" }
             return "Custom"
         }
-    }
-
-    private func quickFreqButton(_ label: String, freq: Double) -> some View {
-        Button(label) {
-            frequencyMHz = freq
-            applyFrequency()
-        }
-        .font(.caption2.bold())
-        .buttonStyle(.bordered)
     }
 
     // MARK: - Sample Rate (TV only)
