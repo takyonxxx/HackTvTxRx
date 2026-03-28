@@ -43,6 +43,8 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_dcBlockerX1(0.0f)
     , m_dcBlockerY1(0.0f)
     , m_resampleCounter(0)
+    , m_notchB0(1.0f), m_notchB1(0.0f), m_notchB2(0.0f), m_notchA1(0.0f), m_notchA2(0.0f)
+    , m_notchX1(0.0f), m_notchX2(0.0f), m_notchY1(0.0f), m_notchY2(0.0f)
     , m_chromaUAccum(0.0f)
     , m_chromaVAccum(0.0f)
     , m_ampMin(-1.0f)
@@ -54,7 +56,7 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_videoGain(1.5f)
     , m_videoOffset(0.0f)
     , m_videoInvert(true)
-    , m_syncLevel(0.0f)
+    , m_syncLevel(0.05f)
     , m_colorMode(false)
     , m_chromaGain(0.75f)
     , m_hSyncEnabled(true)
@@ -115,6 +117,7 @@ void PALDecoder::setSampleRate(int sampleRate)
 
     applyStandard();
     initFilters();
+    initNotchFilter();
     rebuildColorLUT();
 
     // Reset state
@@ -134,6 +137,9 @@ void PALDecoder::setSampleRate(int sampleRate)
     m_effMin = 20.0f;
     m_effMax = -20.0f;
     m_amSampleIndex = 0;
+
+    // Reset notch filter state
+    m_notchX1 = m_notchX2 = m_notchY1 = m_notchY2 = 0.0f;
 
     // Clear filter delays
     m_videoFilterDelay.clear();
@@ -176,23 +182,28 @@ void PALDecoder::initFilters()
 {
     float rate = static_cast<float>(m_sampleRate);
 
-    // Video IQ LPF: cutoff = min(5.5 MHz, rate/2 * 0.8)
-    // At 8 MHz: 5.5 would alias, use 3.5 MHz
-    // At 16 MHz: 5.5 MHz fine
-    float videoCutoff = std::min(5.5e6f, rate * 0.4f);
+    // Video IQ LPF: applied to complex IQ after NCO shift, before AM demod.
+    // Cutoff should pass full video content (luma 5 MHz + chroma subcarrier 4.43 MHz)
+    // but reject audio carrier at 5.5 MHz offset.
+    // Use 5.0 MHz cutoff to keep video but attenuate audio carrier.
+    float videoCutoff = std::min(5.0e6f, rate * 0.40f);
     int videoTaps = std::max(17, static_cast<int>(rate / videoCutoff) * 4 + 1);
     if (videoTaps > 65) videoTaps = 65;
     if (videoTaps % 2 == 0) videoTaps++;
     m_videoFilterTaps = designLowPassFIR(videoCutoff, rate, videoTaps);
 
-    // Luma LPF at decimated rate: 3.0 MHz or less
-    float lumaCutoff = std::min(3.0e6f, m_decimatedRate * 0.35f);
-    m_lumaFilterTaps = designLowPassFIR(lumaCutoff, m_decimatedRate, 33);
+    // Luma LPF at decimated rate: 5.0 MHz for FULL PAL-B video bandwidth
+    // PAL-B luminance bandwidth is 5.0 MHz (ITU-R BT.1700)
+    // Previous 3.0 MHz was cutting off half the horizontal resolution!
+    float lumaCutoff = std::min(5.0e6f, m_decimatedRate * 0.45f);
+    int lumaTaps = 21;
+    if (m_decimatedRate >= 10e6f) lumaTaps = 33;
+    m_lumaFilterTaps = designLowPassFIR(lumaCutoff, m_decimatedRate, lumaTaps);
 
     // Chroma BPF at FULL sample rate (chroma demod runs before decimation)
-    // At full rate, Nyquist is always > 4.43 MHz for our min rate of 12.5 MHz
+    // Reduced from 65 to 31 taps for performance (65 taps halved FPS)
     if (COLOR_CARRIER_FREQ < rate / 2.0f) {
-        m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, rate, 65);
+        m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, rate, 31);
     } else {
         m_chromaFilterTaps.clear();
     }
@@ -200,8 +211,55 @@ void PALDecoder::initFilters()
     qDebug() << "  Filters: video LPF" << videoCutoff / 1e6f << "MHz @" << rate / 1e6f
              << "(" << m_videoFilterTaps.size() << "taps),"
              << "luma" << lumaCutoff / 1e6f << "MHz @" << m_decimatedRate / 1e6f
-             << ", chroma" << (m_chromaFilterTaps.empty() ? "OFF" : "ON")
+             << "(" << lumaTaps << "taps),"
+             << "chroma" << (m_chromaFilterTaps.empty() ? "OFF" : "ON")
              << "@" << rate / 1e6f << "MHz";
+}
+
+// Audio carrier notch filter: removes 5.5 MHz beat from AM-demodulated video
+// After AM demod, the audio carrier (at video_carrier + 5.5 MHz) appears as a
+// beat frequency in the baseband signal, causing horizontal banding artifacts.
+// IIR biquad notch: H(z) = (1 - 2cos(w0)z^-1 + z^-2) / (1 - 2R*cos(w0)z^-1 + R^2*z^-2)
+void PALDecoder::initNotchFilter()
+{
+    float rate = static_cast<float>(m_sampleRate);
+
+    // The audio carrier is 5.5 MHz above the video carrier.
+    // After IQ LPF + AM demod, it may appear as a residual beat.
+    // If sample rate > 11 MHz, the beat is at 5.5 MHz directly.
+    // If sample rate < 11 MHz, it aliases to (sampleRate - 5.5 MHz).
+    float beatFreq = 5.5e6f;
+    if (beatFreq >= rate / 2.0f) {
+        beatFreq = rate - beatFreq;
+        if (beatFreq < 0) beatFreq = -beatFreq;
+    }
+
+    // Design notch at the beat frequency
+    float w0 = 2.0f * static_cast<float>(M_PI) * beatFreq / rate;
+    float notchBW = 300e3f;  // 300 kHz notch bandwidth
+    float bw = 2.0f * static_cast<float>(M_PI) * notchBW / rate;
+    float R = 1.0f - bw / 2.0f;
+    if (R < 0.8f) R = 0.8f;
+    if (R > 0.999f) R = 0.999f;
+
+    float cosw = std::cos(w0);
+    m_notchB0 = 1.0f;
+    m_notchB1 = -2.0f * cosw;
+    m_notchB2 = 1.0f;
+    m_notchA1 = -2.0f * R * cosw;
+    m_notchA2 = R * R;
+
+    // Normalize passband gain to 1
+    float dcGain = (m_notchB0 + m_notchB1 + m_notchB2) / (1.0f + m_notchA1 + m_notchA2);
+    if (std::fabs(dcGain) > 0.01f) {
+        m_notchB0 /= dcGain;
+        m_notchB1 /= dcGain;
+        m_notchB2 /= dcGain;
+    }
+
+    m_notchX1 = m_notchX2 = m_notchY1 = m_notchY2 = 0.0f;
+
+    qDebug() << "  Audio notch filter:" << beatFreq / 1e6f << "MHz, BW:" << notchBW / 1e3f << "kHz, R:" << R;
 }
 
 void PALDecoder::rebuildColorLUT()
@@ -456,22 +514,37 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         // AM envelope
         float magnitude = std::sqrt(filtered.real() * filtered.real() +
                                     filtered.imag() * filtered.imag());
-        float dcBlocked = dcBlock(magnitude);
+
+        // Audio carrier notch filter - remove 5.5 MHz beat
+        float notched = m_notchB0 * magnitude + m_notchB1 * m_notchX1 + m_notchB2 * m_notchX2
+                       - m_notchA1 * m_notchY1 - m_notchA2 * m_notchY2;
+        m_notchX2 = m_notchX1; m_notchX1 = magnitude;
+        m_notchY2 = m_notchY1; m_notchY1 = notched;
+
+        float dcBlocked = dcBlock(notched);
         float normalized = normalizeAndAGC(dcBlocked);
 
         // Sync at full rate (uses normalized [0,1] signal)
         processSample(normalized);
 
         // === CHROMA at FULL sample rate (before decimation) ===
-        // Only process when color mode is enabled and LUT is available
+        // PAL chroma: C = (R-Y)sin(wt) + (B-Y)cos(wt)
+        // Demod: multiply by sin -> extract V (R-Y), multiply by cos -> extract U (B-Y)
+        // PAL switching: V (R-Y) component phase is inverted on alternate lines
         if (m_colorMode && !m_colorCarrierSin.empty()) {
-            float chromaSin = normalized * m_colorCarrierSin[m_colorCarrierIndex];
-            float chromaCos = normalized * m_colorCarrierCos[m_colorCarrierIndex];
+            float carrierSin = m_colorCarrierSin[m_colorCarrierIndex];
+            float carrierCos = m_colorCarrierCos[m_colorCarrierIndex];
             m_colorCarrierIndex++;
             if (m_colorCarrierIndex >= static_cast<int>(m_colorCarrierSin.size()))
                 m_colorCarrierIndex = 0;
-            m_chromaUAccum += applyChromaFilterU(chromaSin);
-            m_chromaVAccum += applyChromaFilterV(chromaCos);
+
+            // U = B-Y (demod with cos), V = R-Y (demod with sin)
+            float chromaU = normalized * carrierCos;
+            // PAL switching: flip V phase on alternate lines
+            float chromaV = normalized * carrierSin * (m_vPhaseAlternate ? -1.0f : 1.0f);
+
+            m_chromaUAccum += applyChromaFilterU(chromaU);
+            m_chromaVAccum += applyChromaFilterV(chromaV);
         }
 
         // === Decimate for luma + output chroma ===
@@ -486,8 +559,9 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         float u = 0.0f, v = 0.0f;
         if (m_colorMode && !m_colorCarrierSin.empty()) {
             float invDecim = 1.0f / static_cast<float>(m_decimFactor);
+            // PAL switching already applied during demod (V flipped on alternate lines)
             u = m_chromaUAccum * invDecim * 2.5f;
-            v = m_chromaVAccum * invDecim * 2.5f * (m_vPhaseAlternate ? -1.0f : 1.0f);
+            v = m_chromaVAccum * invDecim * 2.5f;
             m_chromaUAccum = 0.0f;
             m_chromaVAccum = 0.0f;
         }
@@ -636,9 +710,12 @@ void PALDecoder::renderLine()
                 V = m_lineBufferV[idx] + (m_lineBufferV[idx2] - m_lineBufferV[idx]) * frac;
                 currentLineU[x] = U;
                 currentLineV[x] = V;
+                // PAL line averaging for phase error cancellation:
+                // Since PAL switching is applied during demod (V already flipped),
+                // average both U and V with previous line using addition
                 if (!m_prevLineU.empty() && x < static_cast<int>(m_prevLineU.size())) {
                     U = (U + m_prevLineU[x]) * 0.5f;
-                    V = (V - m_prevLineV[x]) * 0.5f;
+                    V = (V + m_prevLineV[x]) * 0.5f;
                 }
                 U *= m_chromaGain;
                 V *= m_chromaGain;

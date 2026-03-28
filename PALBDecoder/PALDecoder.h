@@ -121,6 +121,10 @@ private:
     float m_dcBlockerY1;
     int m_resampleCounter;
 
+    // Audio carrier notch filter (IIR biquad) - removes 5.5 MHz beat after AM demod
+    float m_notchB0, m_notchB1, m_notchB2, m_notchA1, m_notchA2;
+    float m_notchX1, m_notchX2, m_notchY1, m_notchY2;
+
     // Chroma accumulators (full-rate chroma demod, averaged over decimation period)
     float m_chromaUAccum;
     float m_chromaVAccum;
@@ -175,6 +179,7 @@ private:
     // ========== Methods ==========
     void applyStandard();
     void initFilters();
+    void initNotchFilter();
     void rebuildColorLUT();
     std::vector<float> designLowPassFIR(float cutoff, float sampleRate, int numTaps);
     std::vector<float> designBandPassFIR(float centerFreq, float bandwidth, float sampleRate, int numTaps);
