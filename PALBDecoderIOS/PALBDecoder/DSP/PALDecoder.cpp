@@ -64,16 +64,12 @@ void PALDecoder::applyStandard() {
 
 void PALDecoder::initFilters() {
     float r = (float)m_sampleRate;
-    // Video IQ FIR removed from per-sample loop - not needed for sync
-    // Keep taps for potential future use but don't use in hot path
     float vc = std::min(5.5e6f, r * 0.4f);
     m_videoFilterTaps = designLowPassFIR(vc, r, 15);
     m_vidFirI.setLen(15); m_vidFirQ.setLen(15);
-    // Luma LPF at decimated rate - this is the main video quality filter now
     float lc = std::min(3.0e6f, m_decimatedRate * 0.35f);
     m_lumaFilterTaps = designLowPassFIR(lc, m_decimatedRate, 17);
     m_lumaFir.setLen(17);
-    // Chroma BPF at full rate
     if (COLOR_CARRIER_FREQ < r / 2.0f) {
         m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, r, 25);
         m_chromaFirU.setLen(25); m_chromaFirV.setLen(25);
@@ -127,6 +123,7 @@ std::vector<float> PALDecoder::designBandPassFIR(float cf, float bw, float sr, i
     return t;
 }
 
+// Not used in hot loop anymore - kept for compatibility
 float PALDecoder::normalizeAndAGC(float s) {
     if(s<m_effMin)m_effMin=s; if(s>m_effMax)m_effMax=s;
     if(++m_amSampleIndex >= m_samplesPerLine*NB_LINES*2) {
@@ -153,77 +150,140 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
     const float* lTaps = m_lumaFilterTaps.data();
     const size_t half = len / 2;
 
-    // Accumulators for I/Q averaging over decimation window
+    // Cache AGC values locally to avoid member access in tight loop
+    float ampMin = m_ampMin, ampDelta = m_ampDelta;
+    float effMin = m_effMin, effMax = m_effMax;
+    int amIdx = m_amSampleIndex;
+    const int agcPeriod = m_samplesPerLine * NB_LINES * 2;
+    float ampMax = m_ampMax;
+
+    // Cache sync values locally
+    float prevSample = m_prevSample;
+    const float syncLevel = m_syncLevel;
+    const int spl = m_samplesPerLine;
+    const int hTop = m_numberSamplesPerHTop;
+    const int hSync = m_numberSamplesPerHSync;
+
     float accumI = 0, accumQ = 0;
 
     for (size_t i = 0; i < half; i++) {
-        m_totalSamples++;
-        if(__builtin_expect(m_totalSamples % 10000000 == 0, 0)) {
-            float dr=m_syncQualityWindow>0?(float)m_syncFoundInWindow/m_syncQualityWindow:0;
-            float ae=m_syncFoundInWindow>0?(float)(m_syncErrorAccum/m_syncFoundInWindow):(float)m_numberSamplesPerHTop;
-            float eq=1-std::clamp(ae/(float)m_numberSamplesPerHTop,0.0f,1.0f);
-            m_lastSyncQuality=(dr*0.6f+eq*0.4f)*100;
-            m_syncQualityWindow=0;m_syncFoundInWindow=0;m_syncErrorAccum=0;
-            if(m_syncStatsCallback) m_syncStatsCallback(m_lastSyncQuality,m_ampMax,m_ampMin);
-        }
-
         float sI = data[i*2] * (1.0f/128.0f);
         float sQ = data[i*2+1] * (1.0f/128.0f);
 
         // NCO freq shift
         uint32_t idx = m_ncoAccum >> (32 - NCO_LUT_BITS);
-        float nI = m_ncoCos[idx], nQ = m_ncoSin[idx];
+        float shI = sI * m_ncoCos[idx] - sQ * m_ncoSin[idx];
+        float shQ = sI * m_ncoSin[idx] + sQ * m_ncoCos[idx];
         m_ncoAccum += m_ncoStep;
-        float shI = sI*nI - sQ*nQ;
-        float shQ = sI*nQ + sQ*nI;
 
-        // Raw magnitude for sync (no FIR needed - sync pulses are strong)
-        float mag = fastMag(shI, shQ);
-        float norm = normalizeAndAGC(dcBlock(mag));
+        // Fast magnitude (no FIR, no dcBlock, no sqrtf)
+        float ai = fabsf(shI), aq = fabsf(shQ);
+        float mag = (ai > aq) ? ai + 0.4f * aq : aq + 0.4f * ai;
 
-        // Sync detection at FULL sample rate
-        processSample(norm);
+        // Inline AGC
+        if (mag < effMin) effMin = mag;
+        if (mag > effMax) effMax = mag;
+        if (++amIdx >= agcPeriod) {
+            ampMax = effMax; float r = effMax - effMin;
+            ampMin = effMin - r * 0.1f; ampDelta = ampMax - ampMin;
+            if (ampDelta <= 0) ampDelta = 1;
+            effMin = 20; effMax = -20; amIdx = 0;
+        }
+        float norm = (mag - ampMin);
+        if (ampDelta > 0) norm *= (1.0f / ampDelta);
+        if (norm > 1) norm = 1; else if (norm < 0) norm = 0;
 
-        // Accumulate shifted I/Q for decimated filtering
+        // Inline sync detection (no function call overhead)
+        if (prevSample >= syncLevel && norm < syncLevel &&
+            m_sampleOffsetDetected > spl - hTop) {
+            float fr = (norm - syncLevel) / (prevSample - norm);
+            float hs = -m_sampleOffset - m_sampleOffsetFrac - fr;
+            if (hs > spl/2) hs -= spl;
+            else if (hs < -spl/2) hs += spl;
+            if (fabsf(hs) > hTop) {
+                m_hSyncErrorCount++;
+                if (m_hSyncErrorCount >= 4) { m_hSyncShift = hs; m_hSyncErrorCount = 0; }
+            } else {
+                m_hSyncShift = hs * 0.2f; m_hSyncErrorCount = 0;
+            }
+            m_syncDetected++; m_syncFoundInWindow++; m_sampleOffsetDetected = 0;
+            m_syncErrorAccum += fabsf(hs);
+        } else {
+            m_sampleOffsetDetected++;
+        }
+        prevSample = norm;
+
+        m_sampleOffset++;
+        // VSync detection
+        if (m_sampleOffset > m_fieldDetectStartPos && m_sampleOffset < m_fieldDetectEndPos)
+            m_fieldDetectSampleCount += (norm < syncLevel) ? 1 : 0;
+        if (m_sampleOffset > m_vSyncDetectStartPos && m_sampleOffset < m_vSyncDetectEndPos)
+            m_vSyncDetectSampleCount += (norm < syncLevel) ? 1 : 0;
+
+        // End of line
+        if (m_sampleOffset >= spl) {
+            float sof = m_hSyncShift + m_sampleOffsetFrac - m_samplesPerLineFrac;
+            m_sampleOffset = (int)sof; m_sampleOffsetFrac = sof - m_sampleOffset; m_hSyncShift = 0;
+            m_lineIndex++; m_linesProcessed++; m_syncQualityWindow++;
+            processEndOfLine();
+
+            // Stats check per-line (not per-sample - was modulo every sample!)
+            m_totalSamples += spl;
+            if (__builtin_expect(m_totalSamples >= 10000000, 0)) {
+                float dr = m_syncQualityWindow > 0 ? (float)m_syncFoundInWindow / m_syncQualityWindow : 0;
+                float ae = m_syncFoundInWindow > 0 ? (float)(m_syncErrorAccum / m_syncFoundInWindow) : (float)hTop;
+                float eq = 1 - std::clamp(ae / (float)hTop, 0.0f, 1.0f);
+                m_lastSyncQuality = (dr * 0.6f + eq * 0.4f) * 100;
+                m_syncQualityWindow = 0; m_syncFoundInWindow = 0; m_syncErrorAccum = 0;
+                m_totalSamples = 0;
+                if (m_syncStatsCallback) m_syncStatsCallback(m_lastSyncQuality, ampMax, ampMin);
+            }
+        }
+
+        // Accumulate for decimation
         accumI += shI;
         accumQ += shQ;
 
-        // Chroma at full rate (only if color mode active)
-        if(doColor) {
+        // Chroma at full rate (only if color mode)
+        if (doColor) {
             float cs = m_colorCarrierSin[m_colorCarrierIndex];
             float cc = m_colorCarrierCos[m_colorCarrierIndex];
-            m_chromaFirU.push(norm*cs); m_chromaFirV.push(norm*cc);
+            m_chromaFirU.push(norm * cs); m_chromaFirV.push(norm * cc);
             m_chromaUAccum += m_chromaFirU.apply(m_chromaFilterTaps.data());
             m_chromaVAccum += m_chromaFirV.apply(m_chromaFilterTaps.data());
-            if(++m_colorCarrierIndex >= cSize) m_colorCarrierIndex = 0;
+            if (++m_colorCarrierIndex >= cSize) m_colorCarrierIndex = 0;
         }
 
         // Decimate
-        if(++m_resampleCounter < m_decimFactor) continue;
+        if (++m_resampleCounter < m_decimFactor) continue;
         m_resampleCounter = 0;
 
-        // Averaged I/Q at decimated rate -> magnitude -> luma FIR
-        float avgI = accumI * invD;
-        float avgQ = accumQ * invD;
+        float avgI = accumI * invD, avgQ = accumQ * invD;
         accumI = 0; accumQ = 0;
-        float decimMag = fastMag(avgI, avgQ);
-        float decimNorm = (decimMag - m_ampMin) / m_ampDelta;
-        if (decimNorm > 1) decimNorm = 1; else if (decimNorm < 0) decimNorm = 0;
+        float dMag = fastMag(avgI, avgQ);
+        float dNorm = (dMag - ampMin);
+        if (ampDelta > 0) dNorm *= (1.0f / ampDelta);
+        if (dNorm > 1) dNorm = 1; else if (dNorm < 0) dNorm = 0;
 
-        m_lumaFir.push(decimNorm);
+        m_lumaFir.push(dNorm);
         float luma = m_lumaFir.apply(lTaps);
-        float u=0,v=0;
-        if(doColor) {
-            u=m_chromaUAccum*invD*2.5f;
-            v=m_chromaVAccum*invD*2.5f*(m_vPhaseAlternate?-1:1);
-            m_chromaUAccum=0;m_chromaVAccum=0;
+        float u = 0, v = 0;
+        if (doColor) {
+            u = m_chromaUAccum * invD * 2.5f;
+            v = m_chromaVAccum * invD * 2.5f * (m_vPhaseAlternate ? -1 : 1);
+            m_chromaUAccum = 0; m_chromaVAccum = 0;
         }
-        if(m_sampleOffset > m_numberSamplesPerHSync) {
+        if (m_sampleOffset > hSync) {
             m_lineBuffer.push_back(luma);
             m_lineBufferU.push_back(u);
             m_lineBufferV.push_back(v);
         }
     }
+
+    // Write back cached AGC state
+    m_ampMin = ampMin; m_ampMax = ampMax; m_ampDelta = ampDelta;
+    m_effMin = effMin; m_effMax = effMax; m_amSampleIndex = amIdx;
+    m_prevSample = prevSample;
 }
 
 void PALDecoder::processSamples(const std::vector<std::complex<float>>& s) {
@@ -236,6 +296,7 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& s) {
     processSamples(b.data(),b.size());
 }
 
+// Not used in hot loop - kept for external callers
 void PALDecoder::processSample(float s) {
     if(m_hSyncEnabled) {
         if(m_prevSample>=m_syncLevel && s<m_syncLevel && m_sampleOffsetDetected>m_samplesPerLine-m_numberSamplesPerHTop) {
