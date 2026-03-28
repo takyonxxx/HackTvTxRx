@@ -86,23 +86,16 @@ final class PALDecoderManager: ObservableObject {
         let nr = enabled ? 2000000 : 12500000
         print("[MODE] Switching to \(enabled ? "Radio" : "TV")...")
 
-        // 1. Send FLUSH then SET_SAMPLE_RATE on control port (same connection!)
-        //    Server: FLUSH pauses data, drains queue. SET_SAMPLE_RATE changes rate and resumes.
-        tcpClient.flush()
-        tcpClient.setSampleRate(UInt32(nr))
-        tcpClient.setFrequency(frequency)
+        // 1. Stop everything
+        tcpClient.dropData = true
+        tcpClient.disconnect()
         audioEngine.stop()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
+            Thread.sleep(forTimeInterval: 0.5)
 
-            // 2. Wait for server to process FLUSH + SET_SAMPLE_RATE
-            Thread.sleep(forTimeInterval: 1.0)
-
-            // 3. Disconnect and configure decoders
-            self.tcpClient.disconnect()
-            Thread.sleep(forTimeInterval: 0.3)
-
+            // 2. Configure decoders (no data flowing)
             if let a = self.audioDemod {
                 audioDemod_setRadioMode(a, enabled ? 1 : 0)
                 audioDemod_setSampleRate(a, Double(nr))
@@ -119,15 +112,20 @@ final class PALDecoderManager: ObservableObject {
                 self.audioEngine.flush()
                 self.audioEngine.start()
 
-                // 4. Reconnect - server is already at new rate, no stale data
+                // 3. Reconnect with dropData ON
+                self.tcpClient.dropData = true
                 self.tcpClient.connect(host: self.lastHost, initialCommands: [
                     "SET_SAMPLE_RATE:\(nr)", "SET_FREQ:\(self.frequency)",
                     "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
                 ])
 
-                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                // 4. Background timer to stop dropping when clean data arrives
+                //    Server sends stale data from Qt queue first, then new rate data
+                //    At ~32 MB/s TCP throughput, stale data takes seconds to flush
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 5.0) { [weak self] in
                     guard let self = self else { return }
                     self.audioEngine.flush()
+                    self.tcpClient.dropData = false
                     self.switchingMode = false
                     DispatchQueue.main.async {
                         self.bufferStatus = enabled ? "Radio" : ""
@@ -140,12 +138,11 @@ final class PALDecoderManager: ObservableObject {
 
     func changeSampleRate(_ nr: Int) {
         switchingMode = true
-        tcpClient.flush()  // flush server pipeline
+        tcpClient.dropData = true
+        tcpClient.disconnect()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             Thread.sleep(forTimeInterval: 0.3)
-            self.tcpClient.disconnect()
-            Thread.sleep(forTimeInterval: 0.2)
             if let d = self.palDecoder { palDecoder_setSampleRate(d, Int32(nr)) }
             if let a = self.audioDemod { audioDemod_setSampleRate(a, Double(nr)) }
             DispatchQueue.main.async {
@@ -155,9 +152,9 @@ final class PALDecoderManager: ObservableObject {
                     "SET_SAMPLE_RATE:\(nr)", "SET_FREQ:\(self.frequency)",
                     "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
                 ])
-                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                    self?.tcpClient.dropData = false
                     self?.switchingMode = false
-                    print("[RATE] Change complete")
                 }
             }
         }
