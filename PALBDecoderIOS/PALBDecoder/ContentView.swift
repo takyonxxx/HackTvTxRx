@@ -26,6 +26,9 @@ struct ContentView: View {
     private var connected: Bool { decoder.isConnected }
 
     private let tvSampleRates: [(label: String, value: Int)] = [
+        ("2 MHz",    2000000),
+        ("4 MHz",    4000000),
+        ("8 MHz",    8000000),
         ("12.5 MHz", 12500000),
         ("16 MHz",   16000000),
         ("20 MHz",   20000000),
