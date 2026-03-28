@@ -7,7 +7,6 @@ SdrDevice::SdrDevice(QObject *parent)
     , m_hackTvLib(nullptr)
     , m_tcpServer(nullptr)
     , m_controlServer(nullptr)
-    , m_flushTimer(nullptr)
     , m_totalBytesSent(0)
     , m_totalBytesReceived(0)
     , m_currentFrequency(100000000)
@@ -24,63 +23,21 @@ SdrDevice::SdrDevice(QObject *parent)
         qDebug() << "HackTV:" << QString::fromStdString(msg);
     });
 
-    // HackRF callback -> thread-safe buffer (no Qt event queue)
+    // Set up data callback - raw IQ from HackRF -> TCP broadcast
     m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
-        if (!data || len == 0) return;
-        m_totalBytesReceived += len;
-        QMutexLocker lock(&m_writeBufMutex);
-        // Cap buffer at 2 MB to prevent unbounded growth
-        if (m_writeBuffer.size() > 2 * 1024 * 1024) {
-            m_writeBuffer.clear();
+        if (m_hackTvLib && data && len > 0) {
+            QByteArray dataCopy(reinterpret_cast<const char*>(data), static_cast<int>(len));
+            QMetaObject::invokeMethod(this, [this, dataCopy]() {
+                handleReceivedData(reinterpret_cast<const int8_t*>(dataCopy.data()),
+                                   static_cast<size_t>(dataCopy.size()));
+            }, Qt::QueuedConnection);
         }
-        m_writeBuffer.append(reinterpret_cast<const char*>(data), static_cast<int>(len));
     });
-
-    // 1ms timer flushes buffer to TCP on main thread (socket-safe)
-    m_flushTimer = new QTimer(this);
-    m_flushTimer->setTimerType(Qt::PreciseTimer);
-    m_flushTimer->setInterval(1);
-    connect(m_flushTimer, &QTimer::timeout, this, &SdrDevice::flushWriteBuffer);
-    m_flushTimer->start();
 }
 
 SdrDevice::~SdrDevice()
 {
     stopTcpServer();
-}
-
-void SdrDevice::flushWriteBuffer()
-{
-    if (m_clients.isEmpty()) {
-        // No clients, just discard buffered data
-        QMutexLocker lock(&m_writeBufMutex);
-        m_writeBuffer.clear();
-        return;
-    }
-
-    QByteArray chunk;
-    {
-        QMutexLocker lock(&m_writeBufMutex);
-        if (m_writeBuffer.isEmpty()) return;
-        chunk.swap(m_writeBuffer);
-    }
-
-    removeDisconnectedClients();
-
-    for (QTcpSocket* client : m_clients) {
-        if (client->state() == QAbstractSocket::ConnectedState) {
-            qint64 bytesWritten = client->write(chunk);
-            if (bytesWritten > 0) {
-                m_totalBytesSent += bytesWritten;
-            }
-        }
-    }
-
-    static quint64 lastEmit = 0;
-    if (m_totalBytesSent - lastEmit > 10 * 1024 * 1024) {
-        emit dataTransferred(m_totalBytesSent);
-        lastEmit = m_totalBytesSent;
-    }
 }
 
 bool SdrDevice::initialize(const std::vector<std::string>& args)
@@ -410,11 +367,6 @@ void SdrDevice::processControlCommand(QTcpSocket* client, const QString& command
         bool ok;
         uint32_t sr = parts[1].toUInt(&ok);
         if (ok && sr >= 2000000 && sr <= 20000000) {
-            // Clear write buffer before changing rate to prevent stale data
-            {
-                QMutexLocker lock(&m_writeBufMutex);
-                m_writeBuffer.clear();
-            }
             setSampleRate(sr);
             m_currentSampleRate = sr;
             response = QString("OK: Sample rate set to %1 Hz\n").arg(sr);
@@ -508,6 +460,41 @@ QString SdrDevice::getCurrentStatus()
 // ============================================================
 // Data Handling
 // ============================================================
+
+void SdrDevice::handleReceivedData(const int8_t *data, size_t len)
+{
+    if (!data || len == 0) return;
+
+    m_totalBytesReceived += len;
+
+    if (!m_clients.isEmpty()) {
+        QByteArray dataArray(reinterpret_cast<const char*>(data), static_cast<int>(len));
+        broadcastData(dataArray);
+    }
+}
+
+void SdrDevice::broadcastData(const QByteArray& data)
+{
+    if (m_clients.isEmpty()) return;
+
+    removeDisconnectedClients();
+
+    for (QTcpSocket* client : m_clients) {
+        if (client->state() == QAbstractSocket::ConnectedState) {
+            qint64 bytesWritten = client->write(data);
+            if (bytesWritten > 0) {
+                m_totalBytesSent += bytesWritten;
+            }
+            client->flush();
+        }
+    }
+
+    static quint64 lastEmit = 0;
+    if (m_totalBytesSent - lastEmit > 10 * 1024 * 1024) {
+        emit dataTransferred(m_totalBytesSent);
+        lastEmit = m_totalBytesSent;
+    }
+}
 
 void SdrDevice::removeDisconnectedClients()
 {
