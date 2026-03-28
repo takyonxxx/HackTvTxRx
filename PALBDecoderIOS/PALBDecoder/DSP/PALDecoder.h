@@ -98,9 +98,9 @@ private:
     int m_fieldDetectSampleCount, m_vSyncDetectSampleCount;
     int m_vSyncDetectThreshold, m_fieldDetectThreshold1, m_fieldDetectThreshold2;
 
-    // Video IQ FIR - separate I and Q delay lines (avoid complex overhead)
+    // Video IQ FIR - complex delay line (proven correct for image quality)
     std::vector<float> m_videoFilterTaps;
-    FIRDelay<float, MAX_FIR> m_vidFirI, m_vidFirQ;
+    FIRDelay<std::complex<float>, MAX_FIR> m_vidFir;
 
     std::vector<float> m_lumaFilterTaps;
     FIRDelay<float, 48> m_lumaFir;
