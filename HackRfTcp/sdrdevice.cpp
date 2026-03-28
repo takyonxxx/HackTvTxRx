@@ -1,6 +1,7 @@
 #include "sdrdevice.h"
 #include <QDebug>
 #include <QHostAddress>
+#include <QCoreApplication>
 
 SdrDevice::SdrDevice(QObject *parent)
     : QObject(parent)
@@ -411,6 +412,10 @@ void SdrDevice::processControlCommand(QTcpSocket* client, const QString& command
             response = "ERROR: Invalid RX amp gain (0-14)\n";
         }
     }
+    else if (cmd == "FLUSH") {
+        flushDataPipeline();
+        response = "OK: Data pipeline flushed - reconnect data port\n";
+    }
     else if (cmd == "GET_STATUS") {
         response = getCurrentStatus();
     }
@@ -422,6 +427,7 @@ void SdrDevice::processControlCommand(QTcpSocket* client, const QString& command
             "  SET_VGA_GAIN:<value>     - Set VGA gain 0-62\n"
             "  SET_LNA_GAIN:<value>     - Set LNA gain 0-40\n"
             "  SET_RX_AMP_GAIN:<value>  - Set RX amp gain 0-14\n"
+            "  FLUSH                    - Flush all queued data (for mode switch)\n"
             "  GET_STATUS               - Get current settings\n"
             "  HELP                     - Show this help\n";
     }
@@ -464,6 +470,7 @@ QString SdrDevice::getCurrentStatus()
 void SdrDevice::handleReceivedData(const int8_t *data, size_t len)
 {
     if (!data || len == 0) return;
+    if (m_flushingData.load()) return;  // FLUSH active - discard
 
     m_totalBytesReceived += len;
 
@@ -504,6 +511,36 @@ void SdrDevice::removeDisconnectedClients()
             client->deleteLater();
         }
     }
+}
+
+void SdrDevice::flushDataPipeline()
+{
+    qDebug() << "FLUSH: Stopping data flow...";
+
+    // 1. Block new data from being sent
+    m_flushingData.store(true);
+
+    // 2. Drain Qt event queue - all pending QueuedConnection callbacks are processed and discarded
+    //    (handleReceivedData will return early because m_flushingData is true)
+    for (int i = 0; i < 50; i++) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+
+    // 3. Flush TCP socket write buffers for all data clients
+    for (QTcpSocket* client : m_clients) {
+        if (client->state() == QAbstractSocket::ConnectedState) {
+            // Discard any pending write data
+            client->abort();
+        }
+    }
+
+    // 4. Remove aborted clients (they'll reconnect)
+    removeDisconnectedClients();
+
+    qDebug() << "FLUSH: Pipeline cleared, data clients disconnected";
+
+    // 5. Resume data flow
+    m_flushingData.store(false);
 }
 
 // ============================================================

@@ -86,6 +86,10 @@ private:
     unsigned int m_currentVgaGain;
     unsigned int m_currentLnaGain;
     unsigned int m_currentRxAmpGain;
+
+    // FLUSH command support - drops all queued data
+    std::atomic<bool> m_flushingData{false};
+    void flushDataPipeline();
 };
 
 #endif // SDRDEVICE_H
