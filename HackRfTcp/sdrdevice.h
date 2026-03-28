@@ -86,6 +86,9 @@ private:
     unsigned int m_currentVgaGain;
     unsigned int m_currentLnaGain;
     unsigned int m_currentRxAmpGain;
+
+    // When true, discard incoming data (flush stale samples after rate change)
+    std::atomic<bool> m_flushingData{false};
 };
 
 #endif // SDRDEVICE_H
