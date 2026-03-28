@@ -83,37 +83,31 @@ final class PALDecoderManager: ObservableObject {
         guard !switchingMode else { return }
         switchingMode = true
         radioMode = enabled
+        print("[MODE] Switching to \(enabled ? "Radio" : "TV")...")
 
-        // 1. Drop all incoming data immediately
-        tcpClient.dropData = true
+        // 1. Send FLUSH to server - clears Qt event queue and kills data clients
+        tcpClient.flush()
         audioEngine.stop()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
-            // 2. Wait for in-flight processing to finish
+            // 2. Wait for server to process FLUSH (it aborts data connections)
+            Thread.sleep(forTimeInterval: 0.5)
+
+            // 3. Disconnect our side too
+            self.tcpClient.disconnect()
             Thread.sleep(forTimeInterval: 0.3)
 
-            // 3. Configure decoders
+            // 4. Configure decoders
             let nr = enabled ? 2000000 : 12500000
             if let a = self.audioDemod {
                 audioDemod_setRadioMode(a, enabled ? 1 : 0)
                 audioDemod_setSampleRate(a, Double(nr))
+                audioDemod_setRadioMode(a, enabled ? 1 : 0)
             }
             if let d = self.palDecoder { palDecoder_setSampleRate(d, Int32(nr)) }
 
-            // 4. Send new sample rate to server (same connection, no reconnect)
-            self.tcpClient.setSampleRate(UInt32(nr))
-            if enabled {
-                self.tcpClient.setFrequency(self.frequency)
-            } else {
-                self.tcpClient.setFrequency(self.frequency)
-            }
-
-            // 5. Wait for server to apply and old data to drain
-            Thread.sleep(forTimeInterval: 1.0)
-
-            // 6. Resume with clean state
             DispatchQueue.main.async {
                 self.sampleRate = nr
                 self.videoAccumCount = 0
@@ -122,29 +116,48 @@ final class PALDecoderManager: ObservableObject {
                 self.updateAudioCarrier()
                 self.audioEngine.flush()
                 self.audioEngine.start()
-                self.tcpClient.dropData = false
-                self.switchingMode = false
-                self.bufferStatus = enabled ? "Radio" : ""
-                print("[MODE] Switch to \(enabled ? "Radio" : "TV") complete")
+
+                // 5. Reconnect with new rate - server pipeline is clean now
+                self.tcpClient.connect(host: self.lastHost, initialCommands: [
+                    "SET_SAMPLE_RATE:\(nr)", "SET_FREQ:\(self.frequency)",
+                    "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
+                ])
+
+                // 6. Small safety drop then enable
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let self = self else { return }
+                    self.audioEngine.flush()
+                    self.switchingMode = false
+                    DispatchQueue.main.async {
+                        self.bufferStatus = enabled ? "Radio" : ""
+                    }
+                    print("[MODE] Switch to \(enabled ? "Radio" : "TV") complete")
+                }
             }
         }
     }
 
     func changeSampleRate(_ nr: Int) {
         switchingMode = true
-        tcpClient.dropData = true
+        tcpClient.flush()  // flush server pipeline
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
+            Thread.sleep(forTimeInterval: 0.3)
+            self.tcpClient.disconnect()
             Thread.sleep(forTimeInterval: 0.2)
             if let d = self.palDecoder { palDecoder_setSampleRate(d, Int32(nr)) }
             if let a = self.audioDemod { audioDemod_setSampleRate(a, Double(nr)) }
-            self.tcpClient.setSampleRate(UInt32(nr))
-            Thread.sleep(forTimeInterval: 0.5)
             DispatchQueue.main.async {
                 self.sampleRate = nr; self.videoAccumCount = 0; self.updateFrameSize()
                 self.updateAudioCarrier()
-                self.tcpClient.dropData = false
-                self.switchingMode = false
+                self.tcpClient.connect(host: self.lastHost, initialCommands: [
+                    "SET_SAMPLE_RATE:\(nr)", "SET_FREQ:\(self.frequency)",
+                    "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
+                ])
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.switchingMode = false
+                    print("[RATE] Change complete")
+                }
             }
         }
     }

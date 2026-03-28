@@ -8,8 +8,9 @@ final class SDRTCPClient: ObservableObject {
 
     var onDataReceived: ((_ ptr: UnsafePointer<Int8>, _ len: Int) -> Void)?
 
-    // When true, received data is silently dropped (mode switch flush)
+    // Data dropping for mode switch
     var dropData = false
+    var dropBytes = 0  // when > 0, drop this many bytes then auto-stop + flush
 
     private var dataConnection: NWConnection?
     private var controlConnection: NWConnection?
@@ -115,6 +116,7 @@ final class SDRTCPClient: ObservableObject {
     func setVgaGain(_ gain: UInt) { sendCommand("SET_VGA_GAIN:\(gain)") }
     func setLnaGain(_ gain: UInt) { sendCommand("SET_LNA_GAIN:\(gain)") }
     func setRxAmpGain(_ gain: UInt) { sendCommand("SET_RX_AMP_GAIN:\(gain)") }
+    func flush() { sendCommand("FLUSH") }
 
     private func startReceiving() {
         guard let conn = dataConnection else { return }
