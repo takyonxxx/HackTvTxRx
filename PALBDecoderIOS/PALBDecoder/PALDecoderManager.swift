@@ -6,10 +6,10 @@ final class PALDecoderManager: ObservableObject {
     @Published var fps: Double = 0
     @Published var syncQuality: Float = 0
     @Published var isConnected: Bool = false
-    @Published var sampleRate: Int = 2000000
+    @Published var sampleRate: Int = 12500000
     @Published var bufferStatus: String = ""
 
-    var radioMode: Bool = true
+    var radioMode: Bool = false
 
     let tcpClient = SDRTCPClient()
     let audioEngine = AudioEngine()
@@ -29,30 +29,33 @@ final class PALDecoderManager: ObservableObject {
     private var videoAccumCount = 0
     private var frameSize: Int = 1000000
 
+    // Pre-allocated video decode buffer (no per-frame malloc)
+    private var videoDecodeBuf: UnsafeMutablePointer<Int8>
+    private let videoDecodeBufCapacity = 2 * 1024 * 1024
+
     private var videoProcessing = false
     private let videoLock: UnsafeMutablePointer<os_unfair_lock_s> = {
         let p = UnsafeMutablePointer<os_unfair_lock_s>.allocate(capacity: 1)
         p.initialize(to: os_unfair_lock_s()); return p
     }()
 
-    // Audio: generation counter to skip stale packets after freq change
     private var audioGeneration: Int = 0
-
     private var frameCount = 0
     private var fpsTimer: DispatchSourceTimer?
 
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
     private let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
 
-    var frequency: UInt64 = 100000000
+    var frequency: UInt64 = 479300000  // UHF E21+
 
     init() {
         videoAccumBuffer = .allocate(capacity: videoAccumCapacity)
+        videoDecodeBuf = .allocate(capacity: videoDecodeBufCapacity)
         palDecoder = palDecoder_create()
         audioDemod = audioDemod_create()
 
         if let d = palDecoder { palDecoder_setSampleRate(d, Int32(sampleRate)); palDecoder_setTuneFrequency(d, frequency); palDecoder_setVideoInvert(d, 1) }
-        if let a = audioDemod { audioDemod_setSampleRate(a, Double(sampleRate)); audioDemod_setRadioMode(a, 1) }
+        if let a = audioDemod { audioDemod_setSampleRate(a, Double(sampleRate)); audioDemod_setRadioMode(a, 0) }
         setupCallbacks()
         tcpClient.onDataReceived = { [weak self] ptr, len in self?.handleTCPData(ptr, len: len) }
         startFPSTimer(); updateFrameSize()
@@ -62,19 +65,30 @@ final class PALDecoderManager: ObservableObject {
         fpsTimer?.cancel()
         if let d = palDecoder { palDecoder_destroy(d) }
         if let a = audioDemod { audioDemod_destroy(a) }
-        videoAccumBuffer.deallocate(); videoLock.deallocate()
+        videoAccumBuffer.deallocate(); videoDecodeBuf.deallocate(); videoLock.deallocate()
     }
 
     private func updateFrameSize() { frameSize = sampleRate * 2 * 40 / 1000 }
 
     func connect(host: String) {
         lastHost = host
+        updateAudioCarrier()
+        audioGeneration += 1
+        audioEngine.flush()
+        // Drop first 0.5s of data to let HackRF stabilize (prevents initial audio glitch)
+        tcpClient.dropData = true
         tcpClient.connect(host: host, initialCommands: [
             "SET_SAMPLE_RATE:\(sampleRate)", "SET_FREQ:\(frequency)",
             "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
         ])
         audioEngine.start()
         DispatchQueue.main.async { self.isConnected = true }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self = self else { return }
+            self.audioEngine.flush()
+            self.audioGeneration += 1
+            self.tcpClient.dropData = false
+        }
     }
 
     func disconnect() {
@@ -137,6 +151,7 @@ final class PALDecoderManager: ObservableObject {
         switchingMode = true
         tcpClient.dropData = true
         tcpClient.disconnect()
+        audioEngine.stop()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             Thread.sleep(forTimeInterval: 0.3)
@@ -145,13 +160,19 @@ final class PALDecoderManager: ObservableObject {
             DispatchQueue.main.async {
                 self.sampleRate = nr; self.videoAccumCount = 0; self.updateFrameSize()
                 self.updateAudioCarrier()
+                self.audioGeneration += 1
+                self.audioEngine.flush()
+                self.audioEngine.start()
                 self.tcpClient.connect(host: self.lastHost, initialCommands: [
                     "SET_SAMPLE_RATE:\(nr)", "SET_FREQ:\(self.frequency)",
                     "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
                 ])
-                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                    self?.tcpClient.dropData = false
-                    self?.switchingMode = false
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    guard let self = self else { return }
+                    self.audioEngine.flush()
+                    self.audioGeneration += 1
+                    self.tcpClient.dropData = false
+                    self.switchingMode = false
                 }
             }
         }
@@ -164,10 +185,8 @@ final class PALDecoderManager: ObservableObject {
         audioEngine.flush()
     }
 
-    // ── Audio helper: feed small chunks to avoid queue buildup ──
     private func feedAudioChunks(_ ptr: UnsafePointer<Int8>, len: Int) {
         let gen = audioGeneration
-        // 16KB chunks = 8K IQ samples = fast to process, low latency
         let chunkSize = 16384
         var offset = 0
         while offset < len {
@@ -178,7 +197,7 @@ final class PALDecoderManager: ObservableObject {
             audioQueue.async { [weak self] in
                 defer { c.deallocate() }
                 guard let self = self, let a = self.audioDemod else { return }
-                guard gen == self.audioGeneration else { return }  // skip stale
+                guard gen == self.audioGeneration else { return }
                 audioDemod_processSamples(a, c, thisChunk)
             }
             offset += thisChunk
@@ -193,7 +212,7 @@ final class PALDecoderManager: ObservableObject {
             return
         }
 
-        // VIDEO: accumulate full PAL frame, then decode
+        // VIDEO: accumulate, then decode using pre-allocated buffer (no malloc per frame)
         let space = videoAccumCapacity - videoAccumCount
         let n = min(len, space)
         if n > 0 { memcpy(videoAccumBuffer + videoAccumCount, ptr, n); videoAccumCount += n }
@@ -205,16 +224,15 @@ final class PALDecoderManager: ObservableObject {
             os_unfair_lock_unlock(videoLock)
 
             if canV {
-                let vc = UnsafeMutablePointer<Int8>.allocate(capacity: frameSize)
-                memcpy(vc, videoAccumBuffer, frameSize)
-                let fs = frameSize
+                // Copy to pre-allocated decode buffer instead of malloc
+                let fs = min(frameSize, videoDecodeBufCapacity)
+                memcpy(videoDecodeBuf, videoAccumBuffer, fs)
                 videoQueue.async { [weak self] in
-                    defer { vc.deallocate() }
                     guard let self = self, let d = self.palDecoder else {
                         if let self = self { os_unfair_lock_lock(self.videoLock); self.videoProcessing = false; os_unfair_lock_unlock(self.videoLock) }
                         return
                     }
-                    palDecoder_processSamples(d, vc, fs)
+                    palDecoder_processSamples(d, self.videoDecodeBuf, fs)
                     os_unfair_lock_lock(self.videoLock); self.videoProcessing = false; os_unfair_lock_unlock(self.videoLock)
                 }
             }
