@@ -97,7 +97,6 @@ final class PALDecoderManager: ObservableObject {
 
             // 2. Configure decoders (no data flowing)
             if let a = self.audioDemod {
-                audioDemod_setRadioMode(a, enabled ? 1 : 0)
                 audioDemod_setSampleRate(a, Double(nr))
                 audioDemod_setRadioMode(a, enabled ? 1 : 0)
             }
@@ -119,10 +118,10 @@ final class PALDecoderManager: ObservableObject {
                     "SET_LNA_GAIN:40", "SET_VGA_GAIN:30", "SET_RX_AMP_GAIN:14"
                 ])
 
-                // 4. Background timer to stop dropping when clean data arrives
-                //    Server sends stale data from Qt queue first, then new rate data
-                //    At ~32 MB/s TCP throughput, stale data takes seconds to flush
-                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                // 4. Short wait for HackRF to stabilize at new rate
+                //    Server no longer queues stale data (direct buffer, no Qt event queue)
+                //    Only need to wait for HackRF USB buffer flush (~200ms) + margin
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.0) { [weak self] in
                     guard let self = self else { return }
                     self.audioEngine.flush()
                     self.tcpClient.dropData = false

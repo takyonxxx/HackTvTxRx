@@ -5,6 +5,8 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QList>
+#include <QMutex>
+#include <QTimer>
 #include <memory>
 #include <vector>
 #include <string>
@@ -60,9 +62,9 @@ private slots:
     void onControlDataReceived();
     void onControlSocketError(QAbstractSocket::SocketError error);
 
+    void flushWriteBuffer();
+
 private:
-    void handleReceivedData(const int8_t *data, size_t len);
-    void broadcastData(const QByteArray& data);
     void removeDisconnectedClients();
     void processControlCommand(QTcpSocket* client, const QString& command);
     QString getCurrentStatus();
@@ -79,6 +81,12 @@ private:
 
     std::atomic<quint64> m_totalBytesSent;
     std::atomic<quint64> m_totalBytesReceived;
+
+    // Thread-safe write buffer: HackRF callback writes here, timer flushes to TCP
+    // Eliminates Qt event queue accumulation that caused stale data on mode switch
+    QMutex m_writeBufMutex;
+    QByteArray m_writeBuffer;
+    QTimer* m_flushTimer;
 
     // Current RX settings
     uint64_t m_currentFrequency;

@@ -63,18 +63,18 @@ void PALDecoder::applyStandard() {
 
 void PALDecoder::initFilters() {
     float r = (float)m_sampleRate;
-    // Video LPF - 25 taps (reduced for speed)
+    // Video LPF - 33 taps (proven working for 6 FPS on iPhone)
     float vc = std::min(5.5e6f, r * 0.4f);
-    m_videoFilterTaps = designLowPassFIR(vc, r, 25);
-    m_vidFir.setLen(25);
-    // Luma LPF - 17 taps
+    m_videoFilterTaps = designLowPassFIR(vc, r, 33);
+    m_vidFir.setLen(33);
+    // Luma LPF - 21 taps
     float lc = std::min(3.0e6f, m_decimatedRate * 0.35f);
-    m_lumaFilterTaps = designLowPassFIR(lc, m_decimatedRate, 17);
-    m_lumaFir.setLen(17);
-    // Chroma BPF - 25 taps
+    m_lumaFilterTaps = designLowPassFIR(lc, m_decimatedRate, 21);
+    m_lumaFir.setLen(21);
+    // Chroma BPF - 33 taps
     if (COLOR_CARRIER_FREQ < r / 2.0f) {
-        m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, r, 25);
-        m_chromaFirU.setLen(25); m_chromaFirV.setLen(25);
+        m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, r, 33);
+        m_chromaFirU.setLen(33); m_chromaFirV.setLen(33);
     } else { m_chromaFilterTaps.clear(); m_chromaFirU.setLen(1); m_chromaFirV.setLen(1); }
 }
 
