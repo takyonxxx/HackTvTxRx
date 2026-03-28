@@ -138,7 +138,9 @@ struct ContentView: View {
             }
             .background(Color.black)
             .navigationTitle(radioMode ? "FM Radio" : "PAL-B TV")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .preferredColorScheme(.dark)
             .onAppear { restoreSettings() }
             .sheet(isPresented: $showChannelList) {
@@ -266,7 +268,9 @@ struct ContentView: View {
             HStack {
                 TextField("Server IP", text: $hostIP)
                     .textFieldStyle(.roundedBorder)
+                    #if os(iOS)
                     .keyboardType(.decimalPad)
+                    #endif
                     .autocorrectionDisabled()
                     .disabled(connected)
                 Button(connected ? "Disconnect" : "Connect") {
@@ -506,9 +510,11 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Ankara TV Channels")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .automatic) {
                     Button("Close") { showChannelList = false }
                 }
             }

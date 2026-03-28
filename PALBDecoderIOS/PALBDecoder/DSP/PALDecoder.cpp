@@ -14,7 +14,7 @@ PALDecoder::PALDecoder()
     , m_vSyncDetectThreshold(0), m_fieldDetectThreshold1(0), m_fieldDetectThreshold2(0)
     , m_ampMin(-1), m_ampMax(1), m_ampDelta(2), m_effMin(20), m_effMax(-20)
     , m_videoGain(1.5f), m_videoOffset(0), m_videoInvert(true), m_colorMode(false)
-    , m_syncLevel(0), m_chromaGain(0.75f), m_hSyncEnabled(true), m_vSyncEnabled(true)
+    , m_syncLevel(0.05f), m_chromaGain(0.75f), m_hSyncEnabled(true), m_vSyncEnabled(true)
     , m_totalSamples(0), m_frameCount(0), m_linesProcessed(0), m_syncDetected(0)
     , m_syncQualityWindow(0), m_syncFoundInWindow(0), m_syncErrorAccum(0), m_lastSyncQuality(0)
     , m_vPhaseAlternate(false), m_colorCarrierIndex(0)
@@ -67,7 +67,7 @@ void PALDecoder::initFilters() {
     float vc = std::min(5.5e6f, r * 0.4f);
     m_videoFilterTaps = designLowPassFIR(vc, r, 15);
     m_vidFirI.setLen(15); m_vidFirQ.setLen(15);
-    float lc = std::min(3.0e6f, m_decimatedRate * 0.35f);
+    float lc = std::min(5.0e6f, m_decimatedRate * 0.45f);
     m_lumaFilterTaps = designLowPassFIR(lc, m_decimatedRate, 17);
     m_lumaFir.setLen(17);
     if (COLOR_CARRIER_FREQ < r / 2.0f) {
@@ -91,8 +91,8 @@ void PALDecoder::setTuneFrequency(uint64_t f) { m_tuneFrequency = f; updateNCO()
 
 void PALDecoder::updateNCO() {
     double t = m_tuneFrequency / 1e6, vc;
-    if (t >= 470 && t <= 862) { int ch = (int)floor((t-470-0.001)/8); vc = 470+std::max(ch,0)*8.0+1.25; }
-    else if (t >= 174 && t <= 230) { int ch = (int)floor((t-174-0.001)/8); vc = 174+std::max(ch,0)*8.0+1.25; }
+    if (t >= 470 && t <= 862) { int n = (int)floor((t-470+0.5)/8); if(n<0)n=0; vc = 470+n*8.0+1.25; }
+    else if (t >= 174 && t <= 230) { int n = (int)floor((t-174+0.5)/8); if(n<0)n=0; vc = 174+n*8.0+1.25; }
     else vc = t;
     m_videoCarrierOffsetHz = (float)((vc - t) * 1e6);
     double norm = (double)m_videoCarrierOffsetHz / (double)m_sampleRate;
@@ -237,7 +237,9 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
         if (doColor) {
             float cs = m_colorCarrierSin[m_colorCarrierIndex];
             float cc = m_colorCarrierCos[m_colorCarrierIndex];
-            m_chromaFirU.push(norm * cs); m_chromaFirV.push(norm * cc);
+            // PAL: cos->U(B-Y), sin->V(R-Y), V flipped on alternate lines
+            m_chromaFirU.push(norm * cc);
+            m_chromaFirV.push(norm * cs * (m_vPhaseAlternate ? -1.0f : 1.0f));
             m_chromaUAccum += m_chromaFirU.apply(m_chromaFilterTaps.data());
             m_chromaVAccum += m_chromaFirV.apply(m_chromaFilterTaps.data());
             if (++m_colorCarrierIndex >= cSize) m_colorCarrierIndex = 0;
@@ -257,7 +259,7 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
         float u = 0, v = 0;
         if (doColor) {
             u = m_chromaUAccum * invD * 2.5f;
-            v = m_chromaVAccum * invD * 2.5f * (m_vPhaseAlternate ? -1 : 1);
+            v = m_chromaVAccum * invD * 2.5f;
             m_chromaUAccum = 0; m_chromaVAccum = 0;
         }
         if (m_sampleOffset > hSync) {
@@ -345,7 +347,7 @@ void PALDecoder::renderLine(){
                 V = m_lineBufferV[idx] + (m_lineBufferV[i2] - m_lineBufferV[idx]) * fr;
                 if (!m_prevLineU.empty() && x < (int)m_prevLineU.size()) {
                     U = (U + m_prevLineU[x]) * 0.5f;
-                    V = (V - m_prevLineV[x]) * 0.5f;
+                    V = (V + m_prevLineV[x]) * 0.5f;
                 }
                 U *= m_chromaGain; V *= m_chromaGain;
             }

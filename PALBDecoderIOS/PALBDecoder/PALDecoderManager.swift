@@ -104,7 +104,6 @@ final class PALDecoderManager: ObservableObject {
         radioMode = enabled
         hasFirstFrame = false
         let nr = enabled ? 2000000 : 12500000
-        print("[MODE] Switching to \(enabled ? "Radio" : "TV")...")
 
         tcpClient.dropData = true
         tcpClient.disconnect()
@@ -145,7 +144,6 @@ final class PALDecoderManager: ObservableObject {
                     DispatchQueue.main.async {
                         self.bufferStatus = enabled ? "Radio" : ""
                     }
-                    print("[MODE] Switch to \(enabled ? "Radio" : "TV") complete")
                 }
             }
         }
@@ -190,8 +188,19 @@ final class PALDecoderManager: ObservableObject {
         audioEngine.flush()
     }
 
+    private var tcpDataLogCount: Int = 0
+    private var tcpTotalBytes: Int = 0
+    private var videoDispatchCount: Int = 0
+
     private func handleTCPData(_ ptr: UnsafePointer<Int8>, len: Int) {
         if switchingMode { return }
+
+        tcpDataLogCount += 1
+        tcpTotalBytes += len
+
+        // Log first few calls and then every 1000th
+        if tcpDataLogCount <= 3 || tcpDataLogCount % 1000 == 0 {
+        }
 
         // AUDIO: process synchronously in TCP callback thread
         if radioMode || hasFirstFrame {
@@ -216,6 +225,9 @@ final class PALDecoderManager: ObservableObject {
             if canV {
                 let fs = min(frameSize, videoDecodeBufCapacity)
                 memcpy(videoDecodeBuf, videoAccumBuffer, fs)
+                videoDispatchCount += 1
+                if videoDispatchCount <= 5 || videoDispatchCount % 100 == 0 {
+                }
                 videoQueue.async { [weak self] in
                     guard let self = self, let d = self.palDecoder else {
                         if let self = self { os_unfair_lock_lock(self.videoLock); self.videoProcessing = false; os_unfair_lock_unlock(self.videoLock) }
@@ -253,6 +265,12 @@ final class PALDecoderManager: ObservableObject {
     private func handleFrame(_ rgba: UnsafePointer<UInt8>, width: Int, height: Int) {
         if radioMode { return }
         frameCount += 1
+        if frameCount <= 5 || frameCount % 100 == 0 {
+            // Sample a few pixels to check if frame has content
+            let midRow = height / 2
+            let midPixel = midRow * width * 4 + (width / 2) * 4
+            let r = rgba[midPixel], g = rgba[midPixel+1], b = rgba[midPixel+2]
+        }
         if !hasFirstFrame {
             hasFirstFrame = true
             audioEngine.flush()
@@ -262,7 +280,9 @@ final class PALDecoderManager: ObservableObject {
               let img = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
                                 bytesPerRow: bpr, space: colorSpace, bitmapInfo: bitmapInfo,
                                 provider: p, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
-        else { return }
+        else {
+            return
+        }
         DispatchQueue.main.async { self.currentFrame = img }
     }
 
@@ -276,10 +296,11 @@ final class PALDecoderManager: ObservableObject {
     private func updateAudioCarrier() {
         guard let a = audioDemod else { return }; if radioMode { return }
         let t = Double(frequency)/1e6; var vc: Double
-        if t>=470&&t<=862{let ch=Int(floor((t-470-0.001)/8));vc=470+Double(max(ch,0))*8+1.25}
-        else if t>=174&&t<=230{let ch=Int(floor((t-174-0.001)/8));vc=174+Double(max(ch,0))*8+1.25}
+        if t>=470&&t<=862{let n=Int(floor((t-470+0.5)/8));let cs=470.0+Double(max(n,0))*8;vc=cs+1.25}
+        else if t>=174&&t<=230{let n=Int(floor((t-174+0.5)/8));let cs=174.0+Double(max(n,0))*8;vc=cs+1.25}
         else{vc=t}
-        audioDemod_setAudioCarrierFreq(a,(vc+5.5-t)*1e6)
+        let audioCarrierOffsetHz = (vc+5.5-t)*1e6
+        audioDemod_setAudioCarrierFreq(a, audioCarrierOffsetHz)
     }
 
     func setVideoGain(_ g: Float){if let d=palDecoder{palDecoder_setVideoGain(d,g)}}

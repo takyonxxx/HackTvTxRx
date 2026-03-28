@@ -39,6 +39,7 @@ final class AudioEngine {
     }
 
     private func setupAudioSession() {
+        #if os(iOS)
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default)
@@ -46,8 +47,9 @@ final class AudioEngine {
             try session.setPreferredIOBufferDuration(0.01)
             try session.setActive(true)
         } catch {
-            print("[Audio] Session error: \(error)")
         }
+        #endif
+        // macOS does not need AVAudioSession configuration
     }
 
     private func setupEngine() {
@@ -63,9 +65,7 @@ final class AudioEngine {
             playerNode.play()
             isRunning = true
             scheduleNextBuffer()
-            print("[Audio] Engine started")
         } catch {
-            print("[Audio] Start error: \(error)")
         }
     }
 

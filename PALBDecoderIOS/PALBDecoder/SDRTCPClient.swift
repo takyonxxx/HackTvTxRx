@@ -39,12 +39,10 @@ final class SDRTCPClient: ObservableObject {
             switch state {
             case .ready:
                 DispatchQueue.main.async { self?.isControlConnected = true }
-                print("[TCP] Control connected")
                 // Send initial config, then connect data
                 self?.sendInitialConfig()
             case .failed(let error):
                 DispatchQueue.main.async { self?.isControlConnected = false }
-                print("[TCP] Control failed: \(error)")
             case .cancelled:
                 DispatchQueue.main.async { self?.isControlConnected = false }
             default: break
@@ -57,7 +55,6 @@ final class SDRTCPClient: ObservableObject {
         // Send all initial commands immediately (don't wait for welcome)
         for cmd in self.initialConfig {
             self.sendCommand(cmd)
-            print("[TCP] Sent initial: \(cmd)")
         }
 
         // Wait for server to apply settings, then connect data port
@@ -79,10 +76,8 @@ final class SDRTCPClient: ObservableObject {
                 DispatchQueue.main.async { self?.isConnected = true }
                 self?.startReceiving()
                 self?.startRateTimer()
-                print("[TCP] Data connected")
             case .failed(let error):
                 DispatchQueue.main.async { self?.isConnected = false }
-                print("[TCP] Data failed: \(error)")
             case .cancelled:
                 DispatchQueue.main.async { self?.isConnected = false }
             default: break
