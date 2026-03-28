@@ -73,6 +73,13 @@ final class AudioEngine {
         isRunning = false
         playerNode.stop()
         engine.stop()
+        flush()
+    }
+
+    func flush() {
+        os_unfair_lock_lock(ringLock)
+        ringWritePos = 0; ringReadPos = 0; ringCount = 0
+        os_unfair_lock_unlock(ringLock)
     }
 
     func enqueueAudio(_ samples: UnsafePointer<Float>, count: Int) {

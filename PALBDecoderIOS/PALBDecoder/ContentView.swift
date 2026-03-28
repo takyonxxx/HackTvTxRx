@@ -179,21 +179,28 @@ struct ContentView: View {
     // MARK: - Status
 
     private var statusBar: some View {
-        HStack(spacing: 12) {
-            if !radioMode {
-                Label(String(format: "%.1f FPS", decoder.fps), systemImage: "film")
+        VStack(spacing: 4) {
+            HStack(spacing: 12) {
+                if !radioMode {
+                    Label(String(format: "%.1f FPS", decoder.fps), systemImage: "film")
+                        .font(.caption)
+                    Label(String(format: "Sync: %.0f%%", decoder.syncQuality), systemImage: "waveform")
+                        .font(.caption)
+                        .foregroundColor(decoder.syncQuality >= 95 ? .green :
+                                         decoder.syncQuality >= 85 ? .yellow :
+                                         decoder.syncQuality >= 70 ? .orange : .red)
+                }
+                Label(String(format: "%.1f MB/s", decoder.tcpClient.dataRate), systemImage: "arrow.down.circle")
                     .font(.caption)
-                Label(String(format: "Sync: %.0f%%", decoder.syncQuality), systemImage: "waveform")
-                    .font(.caption)
-                    .foregroundColor(decoder.syncQuality >= 95 ? .green :
-                                     decoder.syncQuality >= 85 ? .yellow :
-                                     decoder.syncQuality >= 70 ? .orange : .red)
+                Text(sampleRateLabel)
+                    .font(.caption.bold())
+                    .foregroundColor(.cyan)
             }
-            Label(String(format: "%.1f MB/s", decoder.tcpClient.dataRate), systemImage: "arrow.down.circle")
-                .font(.caption)
-            Text(sampleRateLabel)
-                .font(.caption.bold())
-                .foregroundColor(.cyan)
+            if !radioMode {
+                Text(decoder.bufferStatus)
+                    .font(.caption.bold())
+                    .foregroundColor(.yellow)
+            }
         }
         .padding(.vertical, 4)
     }

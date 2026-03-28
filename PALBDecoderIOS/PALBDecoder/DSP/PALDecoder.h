@@ -10,26 +10,15 @@
 #include <cstring>
 #include <algorithm>
 
-// Fixed-size circular buffer for FIR delay lines - zero heap allocation
 template<typename T, int MAX_TAPS>
 struct FIRDelay {
     T buf[MAX_TAPS] = {};
-    int pos = 0;
-    int len = 0;
-
+    int pos = 0, len = 0;
     void reset() { memset(buf, 0, sizeof(buf)); pos = 0; }
     void setLen(int n) { len = n; reset(); }
-
-    inline void push(const T& val) {
-        pos = (pos == 0) ? len - 1 : pos - 1;
-        buf[pos] = val;
-    }
-
+    inline void push(const T& val) { pos = (pos == 0) ? len - 1 : pos - 1; buf[pos] = val; }
     inline T apply(const float* taps) const {
-        T out{};
-        for (int i = 0; i < len; i++)
-            out += buf[(pos + i) % len] * taps[i];
-        return out;
+        T out{}; for (int i = 0; i < len; i++) out += buf[(pos + i) % len] * taps[i]; return out;
     }
 };
 
@@ -71,155 +60,91 @@ public:
 private:
     static constexpr int NB_LINES = 625;
     static constexpr float FPS = 25.0f;
-    static constexpr float SYNC_PULSE_FRAC    = 4.7f / 64.0f;
-    static constexpr float BLANKING_FRAC      = 12.0f / 64.0f;
-    static constexpr float HSYNC_FRAC         = 10.5f / 64.0f;
-    static constexpr float HSYNC_CROP_FRAC    = 0.085f;
+    static constexpr float SYNC_PULSE_FRAC = 4.7f / 64.0f;
+    static constexpr float BLANKING_FRAC = 12.0f / 64.0f;
+    static constexpr float HSYNC_FRAC = 10.5f / 64.0f;
     static constexpr float FIELD_DETECT_START = 2.35f / 64.0f;
-    static constexpr float FIELD_DETECT_END   = 27.3f / 64.0f;
-    static constexpr float HALF_LINE          = 32.0f / 64.0f;
+    static constexpr float FIELD_DETECT_END = 27.3f / 64.0f;
+    static constexpr float HALF_LINE = 32.0f / 64.0f;
     static constexpr int VSYNC_LINES = 3;
     static constexpr int FIRST_VISIBLE_LINE = 23;
     static constexpr float COLOR_CARRIER_FREQ = 4433618.75f;
-    static constexpr int MAX_FIR_TAPS = 72;  // max filter taps (65 + margin)
+    static constexpr int MAX_FIR = 72;
+
+    // NCO LUT
+    static constexpr int NCO_LUT_BITS = 12;
+    static constexpr int NCO_LUT_SIZE = 1 << NCO_LUT_BITS;  // 4096
+    float m_ncoSin[NCO_LUT_SIZE];
+    float m_ncoCos[NCO_LUT_SIZE];
+    uint32_t m_ncoAccum = 0, m_ncoStep = 0;
+    float m_videoCarrierOffsetHz = 0;
+    uint64_t m_tuneFrequency = 479300000ULL;
 
     std::mutex m_processMutex;
     FrameCallback m_frameCallback;
     SyncStatsCallback m_syncStatsCallback;
 
-    int m_sampleRate;
-    int m_decimFactor;
-    float m_decimatedRate;
-    float m_chromaBandwidth;
+    int m_sampleRate, m_decimFactor;
+    float m_decimatedRate, m_chromaBandwidth;
 
-    double m_ncoPhase;
-    double m_ncoPhaseIncrement;
-    float m_videoCarrierOffsetHz;
-    uint64_t m_tuneFrequency;
-    void updateNCO();
-
-    int m_samplesPerLine;
-    float m_samplesPerLineFrac;
-    int m_sampleOffset;
-    float m_sampleOffsetFrac;
+    int m_samplesPerLine; float m_samplesPerLineFrac;
+    int m_sampleOffset; float m_sampleOffsetFrac;
     int m_sampleOffsetDetected;
-    float m_hSyncShift;
-    int m_hSyncErrorCount;
-    float m_prevSample;
+    float m_hSyncShift; int m_hSyncErrorCount; float m_prevSample;
+    int m_numberSamplesPerHTop, m_numberSamplesPerHSync, m_numberSamplesPerLineSignals;
+    int m_lineIndex, m_fieldIndex;
+    int m_fieldDetectStartPos, m_fieldDetectEndPos;
+    int m_vSyncDetectStartPos, m_vSyncDetectEndPos;
+    int m_fieldDetectSampleCount, m_vSyncDetectSampleCount;
+    int m_vSyncDetectThreshold, m_fieldDetectThreshold1, m_fieldDetectThreshold2;
 
-    int m_numberSamplesPerHTop;
-    int m_numberSamplesPerHSync;
-    int m_numberSamplesPerLineSignals;
-    int m_numberSamplesHSyncCrop;
-
-    int m_lineIndex;
-    int m_fieldIndex;
-    int m_fieldDetectStartPos;
-    int m_fieldDetectEndPos;
-    int m_vSyncDetectStartPos;
-    int m_vSyncDetectEndPos;
-    int m_fieldDetectSampleCount;
-    int m_vSyncDetectSampleCount;
-    int m_vSyncDetectThreshold;
-    int m_fieldDetectThreshold1;
-    int m_fieldDetectThreshold2;
-
-    // FIR filters - fixed circular buffers (NO heap allocation per sample)
+    // Video IQ FIR - separate I and Q delay lines (avoid complex overhead)
     std::vector<float> m_videoFilterTaps;
-    FIRDelay<std::complex<float>, MAX_FIR_TAPS> m_videoFilterDelay;
-    int m_videoFilterLen;
+    FIRDelay<float, MAX_FIR> m_vidFirI, m_vidFirQ;
 
     std::vector<float> m_lumaFilterTaps;
-    FIRDelay<float, 48> m_lumaFilterDelay;
-    int m_lumaFilterLen;
+    FIRDelay<float, 48> m_lumaFir;
 
     std::vector<float> m_chromaFilterTaps;
-    FIRDelay<float, MAX_FIR_TAPS> m_chromaUFilterDelay;
-    FIRDelay<float, MAX_FIR_TAPS> m_chromaVFilterDelay;
-    int m_chromaFilterLen;
+    FIRDelay<float, MAX_FIR> m_chromaFirU, m_chromaFirV;
 
-    float m_dcBlockerX1;
-    float m_dcBlockerY1;
-    int m_resampleCounter;
-    float m_chromaUAccum;
-    float m_chromaVAccum;
+    float m_dcX1 = 0, m_dcY1 = 0;
+    int m_resampleCounter = 0;
+    float m_chromaUAccum = 0, m_chromaVAccum = 0;
+    float m_ampMin, m_ampMax, m_ampDelta, m_effMin, m_effMax;
+    int m_amSampleIndex = 0;
 
-    float m_ampMin;
-    float m_ampMax;
-    float m_ampDelta;
-    float m_effMin;
-    float m_effMax;
-    int m_amSampleIndex;
-
-    std::vector<float> m_lineBuffer;
-    std::vector<float> m_lineBufferU;
-    std::vector<float> m_lineBufferV;
+    std::vector<float> m_lineBuffer, m_lineBufferU, m_lineBufferV;
     std::vector<uint8_t> m_frameBuffer;
 
-    float m_videoGain;
-    float m_videoOffset;
-    bool m_videoInvert;
-    float m_syncLevel;
-    bool m_colorMode;
-    float m_chromaGain;
-    bool m_hSyncEnabled;
-    bool m_vSyncEnabled;
+    float m_videoGain, m_videoOffset;
+    bool m_videoInvert, m_colorMode;
+    float m_syncLevel, m_chromaGain;
+    bool m_hSyncEnabled, m_vSyncEnabled;
 
-    uint64_t m_totalSamples;
-    uint64_t m_frameCount;
-    uint64_t m_linesProcessed;
-    uint64_t m_syncDetected;
-    uint64_t m_syncQualityWindow;
-    uint64_t m_syncFoundInWindow;
-    double   m_syncErrorAccum;
-    float    m_lastSyncQuality;
+    uint64_t m_totalSamples, m_frameCount, m_linesProcessed, m_syncDetected;
+    uint64_t m_syncQualityWindow, m_syncFoundInWindow;
+    double m_syncErrorAccum; float m_lastSyncQuality;
 
     bool m_vPhaseAlternate;
-    std::vector<float> m_colorCarrierSin;
-    std::vector<float> m_colorCarrierCos;
+    std::vector<float> m_colorCarrierSin, m_colorCarrierCos;
     int m_colorCarrierIndex;
-    std::vector<float> m_prevLineU;
-    std::vector<float> m_prevLineV;
+    std::vector<float> m_prevLineU, m_prevLineV;
 
+    void updateNCO();
     void applyStandard();
     void initFilters();
     void rebuildColorLUT();
-    std::vector<float> designLowPassFIR(float cutoff, float sampleRate, int numTaps);
-    std::vector<float> designBandPassFIR(float centerFreq, float bandwidth, float sampleRate, int numTaps);
+    std::vector<float> designLowPassFIR(float cutoff, float sr, int n);
+    std::vector<float> designBandPassFIR(float cf, float bw, float sr, int n);
 
-    inline std::complex<float> applyVideoFilter(const std::complex<float>& sample) {
-        m_videoFilterDelay.push(sample);
-        return m_videoFilterDelay.apply(m_videoFilterTaps.data());
-    }
-    inline float applyLumaFilter(float sample) {
-        m_lumaFilterDelay.push(sample);
-        return m_lumaFilterDelay.apply(m_lumaFilterTaps.data());
-    }
-    inline float applyChromaFilterU(float sample) {
-        m_chromaUFilterDelay.push(sample);
-        return m_chromaUFilterDelay.apply(m_chromaFilterTaps.data());
-    }
-    inline float applyChromaFilterV(float sample) {
-        m_chromaVFilterDelay.push(sample);
-        return m_chromaVFilterDelay.apply(m_chromaFilterTaps.data());
-    }
-
-    inline float dcBlock(float sample) {
-        float out = sample - m_dcBlockerX1 + 0.995f * m_dcBlockerY1;
-        m_dcBlockerX1 = sample;
-        m_dcBlockerY1 = out;
-        return out;
-    }
-
+    inline float dcBlock(float s) { float o = s - m_dcX1 + 0.995f * m_dcY1; m_dcX1 = s; m_dcY1 = o; return o; }
     float normalizeAndAGC(float sample);
     void processSample(float sample);
     void processEndOfLine();
     void renderLine();
     void buildFrame();
-
-    inline float clipValue(float value, float mn, float mx) {
-        return value < mn ? mn : (value > mx ? mx : value);
-    }
+    inline float clip(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
     void yuv2rgb(float y, float u, float v, uint8_t& r, uint8_t& g, uint8_t& b);
 };
 
