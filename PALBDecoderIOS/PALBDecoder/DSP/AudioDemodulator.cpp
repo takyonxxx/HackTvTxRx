@@ -60,7 +60,6 @@ void AudioDemodulator::rebuildDecimationChain()
     m_decimChain.clear();
 
     double nyquist = m_inputSampleRate / 2.0;
-
     if (!m_radioMode && m_currentCarrierFreq >= nyquist) {
         m_audioCapable = false;
         return;
@@ -113,13 +112,15 @@ std::vector<float> AudioDemodulator::designLowPassFIR(int numTaps, float cutoffF
     return coeffs;
 }
 
-// In-place FIR filter - uses pre-allocated m_firTemp, no malloc
+// In-place FIR filter
 void AudioDemodulator::applyFIRFilterInPlace(std::vector<float>& signal, const std::vector<float>& coeffs)
 {
     if (signal.empty() || coeffs.empty()) return;
     const size_t signalSize = signal.size();
     const size_t filterSize = coeffs.size();
     const int halfTaps = filterSize / 2;
+    const float* cData = coeffs.data();
+    const float* sData = signal.data();
 
     m_firTemp.resize(signalSize);
     for (size_t i = 0; i < signalSize; i++) {
@@ -128,11 +129,73 @@ void AudioDemodulator::applyFIRFilterInPlace(std::vector<float>& signal, const s
         const int iEnd = std::min((int)signalSize, (int)i - halfTaps + (int)filterSize);
         const int jStart = iStart - ((int)i - halfTaps);
         for (int k = iStart, j = jStart; k < iEnd; k++, j++) {
-            sum += signal[k] * coeffs[j];
+            sum += sData[k] * cData[j];
         }
         m_firTemp[i] = sum;
     }
     signal.swap(m_firTemp);
+}
+
+// Combined filter + decimate for complex IQ: only compute every decimFactor'th output
+// This is the KEY optimization: instead of filtering ALL samples then picking every Nth,
+// we only compute the FIR output at positions 0, D, 2D, 3D... saving D× work.
+static void filterDecimateComplex(
+    const float* inReal, const float* inImag, size_t inSize,
+    const std::vector<float>& taps, int decimFactor,
+    std::vector<float>& outReal, std::vector<float>& outImag)
+{
+    const int numTaps = (int)taps.size();
+    const int halfTaps = numTaps / 2;
+    const float* cData = taps.data();
+    size_t outCount = 0;
+
+    // Pre-size outputs
+    size_t maxOut = inSize / decimFactor + 1;
+    outReal.resize(maxOut);
+    outImag.resize(maxOut);
+
+    for (size_t i = 0; i < inSize; i += decimFactor) {
+        float sumR = 0.0f, sumI = 0.0f;
+        const int iStart = std::max(0, (int)i - halfTaps);
+        const int iEnd = std::min((int)inSize, (int)i - halfTaps + numTaps);
+        const int jStart = iStart - ((int)i - halfTaps);
+        for (int k = iStart, j = jStart; k < iEnd; k++, j++) {
+            sumR += inReal[k] * cData[j];
+            sumI += inImag[k] * cData[j];
+        }
+        outReal[outCount] = sumR;
+        outImag[outCount] = sumI;
+        outCount++;
+    }
+    outReal.resize(outCount);
+    outImag.resize(outCount);
+}
+
+// Combined filter + decimate for real signal
+static void filterDecimateReal(
+    const std::vector<float>& signal,
+    const std::vector<float>& taps, int decimFactor,
+    std::vector<float>& out)
+{
+    const int numTaps = (int)taps.size();
+    const int halfTaps = numTaps / 2;
+    const float* cData = taps.data();
+    const float* sData = signal.data();
+    const size_t inSize = signal.size();
+    size_t outCount = 0;
+
+    out.resize(inSize / decimFactor + 1);
+    for (size_t i = 0; i < inSize; i += decimFactor) {
+        float sum = 0.0f;
+        const int iStart = std::max(0, (int)i - halfTaps);
+        const int iEnd = std::min((int)inSize, (int)i - halfTaps + numTaps);
+        const int jStart = iStart - ((int)i - halfTaps);
+        for (int k = iStart, j = jStart; k < iEnd; k++, j++) {
+            sum += sData[k] * cData[j];
+        }
+        out[outCount++] = sum;
+    }
+    out.resize(outCount);
 }
 
 std::vector<std::complex<float>> AudioDemodulator::frequencyShift(
@@ -143,8 +206,10 @@ std::vector<std::complex<float>> AudioDemodulator::frequencyShift(
     double phaseInc = 2.0 * M_PI * shiftFreq / m_inputSampleRate;
     double phase = m_audioPhase;
     for (size_t i = 0; i < signal.size(); i++) {
-        std::complex<float> shift(std::cos(phase), std::sin(phase));
-        shifted[i] = signal[i] * shift;
+        float cs = std::cos(phase), sn = std::sin(phase);
+        shifted[i] = std::complex<float>(
+            signal[i].real() * cs - signal[i].imag() * sn,
+            signal[i].real() * sn + signal[i].imag() * cs);
         phase += phaseInc;
         if (phase > M_PI) phase -= 2.0 * M_PI;
         if (phase < -M_PI) phase += 2.0 * M_PI;
@@ -161,7 +226,7 @@ float AudioDemodulator::unwrapPhase(float phase, float lastPhase)
     return delta;
 }
 
-// Fast FM demod using conjugate multiply - avoids expensive atan2
+// Fast FM demod: conjugate multiply
 void AudioDemodulator::fmDemodulateInPlace(
     const std::vector<std::complex<float>>& signal, std::vector<float>& out, double signalRate)
 {
@@ -170,38 +235,22 @@ void AudioDemodulator::fmDemodulateInPlace(
     std::lock_guard<std::mutex> lock(m_phaseMutex);
     float outputScale = m_radioMode ? 0.8f : 0.3f;
 
-    // First sample uses stored last phase
+    // First sample
     {
         float phase = std::atan2(signal[0].imag(), signal[0].real());
-        float delta = unwrapPhase(phase, m_lastPhase);
-        out[0] = delta * outputScale;
+        out[0] = unwrapPhase(phase, m_lastPhase) * outputScale;
     }
-
-    // Remaining samples: conjugate multiply (prev* × curr).imag ≈ phase delta
-    // Much faster than atan2 per sample
+    // Conjugate multiply for remaining
     for (size_t i = 1; i < signal.size(); i++) {
-        // conj(prev) * curr = (pR + j*(-pI)) * (cR + j*cI) = (pR*cR + pI*cI) + j*(pR*cI - pI*cR)
         float pR = signal[i-1].real(), pI = signal[i-1].imag();
         float cR = signal[i].real(), cI = signal[i].imag();
         float crossImag = pR * cI - pI * cR;
         float crossReal = pR * cR + pI * cI;
-        // Fast atan2 approximation for small angles: atan2(y,x) ≈ y/x when |y/x| < 1
-        // For FM with reasonable deviation this is accurate enough
-        float mag2 = crossReal * crossReal + crossImag * crossImag;
-        float delta;
-        if (mag2 > 1e-12f) {
-            delta = std::atan2(crossImag, crossReal);
-        } else {
-            delta = 0.0f;
-        }
-        out[i] = delta * outputScale;
+        out[i] = std::atan2(crossImag, crossReal) * outputScale;
     }
-
-    // Store last phase for continuity
     m_lastPhase = std::atan2(signal.back().imag(), signal.back().real());
 }
 
-// In-place decimate
 void AudioDemodulator::decimateInPlace(std::vector<float>& signal, int factor)
 {
     if (factor <= 1) return;
@@ -211,7 +260,6 @@ void AudioDemodulator::decimateInPlace(std::vector<float>& signal, int factor)
     signal.resize(outSize);
 }
 
-// In-place resample
 void AudioDemodulator::resampleInPlace(std::vector<float>& signal, double inputRate, double outputRate)
 {
     if (signal.empty() || inputRate <= 0 || outputRate <= 0) return;
@@ -224,7 +272,7 @@ void AudioDemodulator::resampleInPlace(std::vector<float>& signal, double inputR
         size_t idx = static_cast<size_t>(srcPos);
         if (idx + 1 < signal.size()) {
             double frac = srcPos - idx;
-            m_firTemp[i] = signal[idx] * (1.0 - frac) + signal[idx + 1] * frac;
+            m_firTemp[i] = signal[idx] * (1.0f - (float)frac) + signal[idx + 1] * (float)frac;
         } else if (idx < signal.size()) {
             m_firTemp[i] = signal[idx];
         } else {
@@ -238,8 +286,7 @@ void AudioDemodulator::emitAudioBuffer(const std::vector<float>& audio)
 {
     if (audio.empty()) return;
     for (float sample : audio) {
-        float processed = std::clamp(sample * m_audioGain, -1.0f, 1.0f);
-        m_audioBuffer.push_back(processed);
+        m_audioBuffer.push_back(std::clamp(sample * m_audioGain, -1.0f, 1.0f));
     }
     static constexpr int CHUNK_SIZE = 480;
     size_t emitted = 0;
@@ -256,63 +303,84 @@ void AudioDemodulator::emitAudioBuffer(const std::vector<float>& audio)
     }
 }
 
+// Process raw int8 IQ: avoid intermediate complex vector allocation
 void AudioDemodulator::processSamples(const int8_t* data, size_t len)
 {
     if (!data || len == 0 || !m_audioEnabled) return;
     std::lock_guard<std::mutex> lock(m_processMutex);
-    std::vector<std::complex<float>> samples;
-    samples.reserve(len / 2);
-    for (size_t i = 0; i < len; i += 2)
-        samples.emplace_back(static_cast<float>(data[i]) / 128.0f,
-                             static_cast<float>(data[i + 1]) / 128.0f);
-    processSamples(samples);
-}
+    if (!m_audioCapable) return;
 
-void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& samples)
-{
-    if (!m_audioEnabled || samples.empty() || !m_audioCapable) return;
+    const size_t numSamples = len / 2;
 
-    // Radio: IQ already at baseband, no shift needed - use directly
-    // TV: shift audio carrier to baseband
-    std::vector<std::complex<float>> shiftedIQ;
-    const std::vector<std::complex<float>>& iqRef = m_radioMode
-        ? samples
-        : (shiftedIQ = frequencyShift(samples, -m_currentCarrierFreq), shiftedIQ);
+    // Split I/Q directly into work buffers (no complex<float> vector alloc)
+    m_workReal.resize(numSamples);
+    m_workImag.resize(numSamples);
+
+    if (m_radioMode) {
+        // Radio: no freq shift, direct copy
+        for (size_t i = 0; i < numSamples; i++) {
+            m_workReal[i] = data[i * 2] * (1.0f / 128.0f);
+            m_workImag[i] = data[i * 2 + 1] * (1.0f / 128.0f);
+        }
+    } else {
+        // TV: freq shift while converting
+        double phaseInc = -2.0 * M_PI * m_currentCarrierFreq / m_inputSampleRate;
+        double phase = m_audioPhase;
+        for (size_t i = 0; i < numSamples; i++) {
+            float sI = data[i * 2] * (1.0f / 128.0f);
+            float sQ = data[i * 2 + 1] * (1.0f / 128.0f);
+            float cs = std::cos(phase), sn = std::sin(phase);
+            m_workReal[i] = sI * cs - sQ * sn;
+            m_workImag[i] = sI * sn + sQ * cs;
+            phase += phaseInc;
+            if (phase > M_PI) phase -= 2.0 * M_PI;
+            if (phase < -M_PI) phase += 2.0 * M_PI;
+        }
+        m_audioPhase = phase;
+    }
 
     double currentRate = m_inputSampleRate;
     size_t stageIdx = 0;
 
-    // For decimation we need a mutable copy (only if decimating)
-    std::vector<std::complex<float>> iq;
-    bool needDecim = !m_decimChain.empty() && currentRate > 200000.0;
-    if (needDecim) {
-        iq = iqRef;  // copy only when needed
-    }
-    const std::vector<std::complex<float>>& iqWork = needDecim ? iq : iqRef;
-
-    // Decimate complex IQ until rate <= 200 kHz
+    // Combined filter+decimate for complex IQ stages (D× less FIR work!)
     while (stageIdx < m_decimChain.size() && currentRate > 200000.0) {
         const auto& stage = m_decimChain[stageIdx];
-        m_workReal.resize(iq.size());
-        m_workImag.resize(iq.size());
-        for (size_t i = 0; i < iq.size(); i++) { m_workReal[i] = iq[i].real(); m_workImag[i] = iq[i].imag(); }
-        applyFIRFilterInPlace(m_workReal, stage.filterTaps);
-        applyFIRFilterInPlace(m_workImag, stage.filterTaps);
-        iq.clear();
-        iq.reserve(m_workReal.size() / stage.decimFactor + 1);
-        for (size_t i = 0; i < m_workReal.size(); i += stage.decimFactor)
-            iq.emplace_back(m_workReal[i], m_workImag[i]);
+        std::vector<float> outR, outI;
+        filterDecimateComplex(
+            m_workReal.data(), m_workImag.data(), m_workReal.size(),
+            stage.filterTaps, stage.decimFactor, outR, outI);
+        m_workReal.swap(outR);
+        m_workImag.swap(outI);
         currentRate = stage.outputRate;
         stageIdx++;
     }
 
-    fmDemodulateInPlace(iqWork, m_workAudio, currentRate);
+    // FM demod from I/Q floats (no complex<float> needed)
+    {
+        const size_t n = m_workReal.size();
+        m_workAudio.resize(n);
+        std::lock_guard<std::mutex> lock2(m_phaseMutex);
+        float outputScale = m_radioMode ? 0.8f : 0.3f;
+        // First sample
+        if (n > 0) {
+            float phase = std::atan2(m_workImag[0], m_workReal[0]);
+            m_workAudio[0] = unwrapPhase(phase, m_lastPhase) * outputScale;
+        }
+        // Conjugate multiply
+        for (size_t i = 1; i < n; i++) {
+            float pR = m_workReal[i-1], pI = m_workImag[i-1];
+            float cR = m_workReal[i], cI = m_workImag[i];
+            m_workAudio[i] = std::atan2(pR*cI - pI*cR, pR*cR + pI*cI) * outputScale;
+        }
+        if (n > 0) m_lastPhase = std::atan2(m_workImag[n-1], m_workReal[n-1]);
+    }
 
-    // Continue remaining decimation (real-valued)
+    // Remaining real-valued decimation stages: combined filter+decimate
     while (stageIdx < m_decimChain.size()) {
         const auto& stage = m_decimChain[stageIdx];
-        applyFIRFilterInPlace(m_workAudio, stage.filterTaps);
-        decimateInPlace(m_workAudio, stage.decimFactor);
+        std::vector<float> out;
+        filterDecimateReal(m_workAudio, stage.filterTaps, stage.decimFactor, out);
+        m_workAudio.swap(out);
         currentRate = stage.outputRate;
         stageIdx++;
     }
@@ -320,6 +388,19 @@ void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& sa
     if (std::abs(currentRate - 48000.0) > 1.0) resampleInPlace(m_workAudio, currentRate, 48000.0);
     applyFIRFilterInPlace(m_workAudio, m_audioFilterTaps);
     emitAudioBuffer(m_workAudio);
+}
+
+// Keep complex version for compatibility but route through optimized path
+void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& samples)
+{
+    if (!m_audioEnabled || samples.empty() || !m_audioCapable) return;
+    // Convert to int8 and use optimized path (rare - only called from complex overload)
+    std::vector<int8_t> buf(samples.size() * 2);
+    for (size_t i = 0; i < samples.size(); i++) {
+        buf[i*2] = (int8_t)std::clamp(samples[i].real() * 128.0f, -127.0f, 127.0f);
+        buf[i*2+1] = (int8_t)std::clamp(samples[i].imag() * 128.0f, -127.0f, 127.0f);
+    }
+    processSamples(buf.data(), buf.size());
 }
 
 void AudioDemodulator::setSampleRate(double newSampleRate)
