@@ -15,6 +15,10 @@ AudioDemodulator::AudioDemodulator()
     , fmDeviation(FM_DEVIATION_TV)
 {
     m_audioBuffer.reserve(AUDIO_BUFFER_SIZE * 2);
+    m_workReal.reserve(262144);
+    m_workImag.reserve(262144);
+    m_workAudio.reserve(262144);
+    m_firTemp.reserve(262144);
     m_currentCarrierFreq = AUDIO_CARRIER;
     m_audioPhaseIncrement = -2.0 * M_PI * AUDIO_CARRIER / m_inputSampleRate;
     initFinalFilter();
@@ -26,31 +30,28 @@ void AudioDemodulator::setRadioMode(bool radio)
     std::lock_guard<std::mutex> lock(m_processMutex);
     m_radioMode = radio;
     if (radio) {
-        m_currentCarrierFreq = 0.0;  // baseband - no shift needed
-        fmDeviation = FM_DEVIATION_RADIO;  // 75 kHz for broadcast FM
+        m_currentCarrierFreq = 0.0;
+        fmDeviation = FM_DEVIATION_RADIO;
         m_audioCapable = true;
     } else {
-        fmDeviation = FM_DEVIATION_TV;  // 50 kHz for PAL-B TV
+        fmDeviation = FM_DEVIATION_TV;
     }
     m_audioPhase = 0.0;
     m_lastPhase = 0.0f;
     m_audioBuffer.clear();
-    // Wider audio filter for radio (15 kHz mono)
     initFinalFilter();
     rebuildDecimationChain();
 }
 
 void AudioDemodulator::setAudioCarrierFreq(double freqHz)
 {
-    if (m_radioMode) return;  // radio mode uses baseband, ignore carrier changes
+    if (m_radioMode) return;
     m_currentCarrierFreq = freqHz;
     m_audioPhaseIncrement = -2.0 * M_PI * freqHz / m_inputSampleRate;
 }
 
 void AudioDemodulator::initFinalFilter()
 {
-    // Radio: 15 kHz mono audio bandwidth
-    // TV: 15 kHz PAL-B audio
     m_audioFilterTaps = designLowPassFIR(FILTER_TAPS, 15000.0f, 48000.0f);
 }
 
@@ -112,22 +113,26 @@ std::vector<float> AudioDemodulator::designLowPassFIR(int numTaps, float cutoffF
     return coeffs;
 }
 
-std::vector<float> AudioDemodulator::applyFIRFilter(const std::vector<float>& signal, const std::vector<float>& coeffs)
+// In-place FIR filter - uses pre-allocated m_firTemp, no malloc
+void AudioDemodulator::applyFIRFilterInPlace(std::vector<float>& signal, const std::vector<float>& coeffs)
 {
-    if (signal.empty() || coeffs.empty()) return {};
+    if (signal.empty() || coeffs.empty()) return;
     const size_t signalSize = signal.size();
     const size_t filterSize = coeffs.size();
     const int halfTaps = filterSize / 2;
-    std::vector<float> filtered(signalSize);
+
+    m_firTemp.resize(signalSize);
     for (size_t i = 0; i < signalSize; i++) {
         float sum = 0.0f;
-        for (size_t j = 0; j < filterSize; j++) {
-            int idx = (int)i - halfTaps + (int)j;
-            if (idx >= 0 && idx < (int)signalSize) sum += signal[idx] * coeffs[j];
+        const int iStart = std::max(0, (int)i - halfTaps);
+        const int iEnd = std::min((int)signalSize, (int)i - halfTaps + (int)filterSize);
+        const int jStart = iStart - ((int)i - halfTaps);
+        for (int k = iStart, j = jStart; k < iEnd; k++, j++) {
+            sum += signal[k] * coeffs[j];
         }
-        filtered[i] = sum;
+        m_firTemp[i] = sum;
     }
-    return filtered;
+    signal.swap(m_firTemp);
 }
 
 std::vector<std::complex<float>> AudioDemodulator::frequencyShift(
@@ -156,52 +161,55 @@ float AudioDemodulator::unwrapPhase(float phase, float lastPhase)
     return delta;
 }
 
-std::vector<float> AudioDemodulator::fmDemodulateNarrowband(
-    const std::vector<std::complex<float>>& signal, double signalRate)
+// In-place FM demod - writes into out vector
+void AudioDemodulator::fmDemodulateInPlace(
+    const std::vector<std::complex<float>>& signal, std::vector<float>& out, double signalRate)
 {
-    if (signal.empty()) return {};
-    std::vector<float> demod(signal.size());
+    if (signal.empty()) { out.clear(); return; }
+    out.resize(signal.size());
     std::lock_guard<std::mutex> lock(m_phaseMutex);
     float currentPhase = m_lastPhase;
-    // Scale: radio mode uses higher output scale for better volume
     float outputScale = m_radioMode ? 0.8f : 0.3f;
     for (size_t i = 0; i < signal.size(); i++) {
         float phase = std::atan2(signal[i].imag(), signal[i].real());
         float delta = unwrapPhase(phase, currentPhase);
-        demod[i] = delta * outputScale;
+        out[i] = delta * outputScale;
         currentPhase = phase;
     }
     m_lastPhase = currentPhase;
-    return demod;
 }
 
-std::vector<float> AudioDemodulator::decimate(const std::vector<float>& signal, int factor)
+// In-place decimate
+void AudioDemodulator::decimateInPlace(std::vector<float>& signal, int factor)
 {
-    if (factor <= 1) return signal;
-    std::vector<float> decimated;
-    decimated.reserve(signal.size() / factor + 1);
-    for (size_t i = 0; i < signal.size(); i += factor) decimated.push_back(signal[i]);
-    return decimated;
+    if (factor <= 1) return;
+    size_t outSize = 0;
+    for (size_t i = 0; i < signal.size(); i += factor)
+        signal[outSize++] = signal[i];
+    signal.resize(outSize);
 }
 
-std::vector<float> AudioDemodulator::resample(const std::vector<float>& signal, double inputRate, double outputRate)
+// In-place resample
+void AudioDemodulator::resampleInPlace(std::vector<float>& signal, double inputRate, double outputRate)
 {
-    if (signal.empty() || inputRate <= 0 || outputRate <= 0) return signal;
+    if (signal.empty() || inputRate <= 0 || outputRate <= 0) return;
     double ratio = inputRate / outputRate;
     size_t outputSize = static_cast<size_t>(signal.size() / ratio);
-    std::vector<float> resampled;
-    resampled.reserve(outputSize);
+
+    m_firTemp.resize(outputSize);
     for (size_t i = 0; i < outputSize; i++) {
         double srcPos = i * ratio;
         size_t idx = static_cast<size_t>(srcPos);
         if (idx + 1 < signal.size()) {
             double frac = srcPos - idx;
-            resampled.push_back(signal[idx] * (1.0 - frac) + signal[idx + 1] * frac);
+            m_firTemp[i] = signal[idx] * (1.0 - frac) + signal[idx + 1] * frac;
         } else if (idx < signal.size()) {
-            resampled.push_back(signal[idx]);
+            m_firTemp[i] = signal[idx];
+        } else {
+            m_firTemp[i] = 0;
         }
     }
-    return resampled;
+    signal.swap(m_firTemp);
 }
 
 void AudioDemodulator::emitAudioBuffer(const std::vector<float>& audio)
@@ -238,10 +246,8 @@ void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& sa
     std::vector<std::complex<float>> iq;
 
     if (m_radioMode) {
-        // Radio mode: IQ is already at baseband, no frequency shift needed
         iq = samples;
     } else {
-        // TV mode: shift audio carrier to baseband
         iq = frequencyShift(samples, -m_currentCarrierFreq);
     }
 
@@ -251,33 +257,33 @@ void AudioDemodulator::processSamples(const std::vector<std::complex<float>>& sa
     // Decimate complex IQ until rate <= 200 kHz
     while (stageIdx < m_decimChain.size() && currentRate > 200000.0) {
         const auto& stage = m_decimChain[stageIdx];
-        std::vector<float> realPart(iq.size()), imagPart(iq.size());
-        for (size_t i = 0; i < iq.size(); i++) { realPart[i] = iq[i].real(); imagPart[i] = iq[i].imag(); }
-        realPart = applyFIRFilter(realPart, stage.filterTaps);
-        imagPart = applyFIRFilter(imagPart, stage.filterTaps);
-        std::vector<std::complex<float>> decimated;
-        decimated.reserve(iq.size() / stage.decimFactor + 1);
-        for (size_t i = 0; i < realPart.size(); i += stage.decimFactor)
-            decimated.emplace_back(realPart[i], imagPart[i]);
-        iq = std::move(decimated);
+        m_workReal.resize(iq.size());
+        m_workImag.resize(iq.size());
+        for (size_t i = 0; i < iq.size(); i++) { m_workReal[i] = iq[i].real(); m_workImag[i] = iq[i].imag(); }
+        applyFIRFilterInPlace(m_workReal, stage.filterTaps);
+        applyFIRFilterInPlace(m_workImag, stage.filterTaps);
+        iq.clear();
+        iq.reserve(m_workReal.size() / stage.decimFactor + 1);
+        for (size_t i = 0; i < m_workReal.size(); i += stage.decimFactor)
+            iq.emplace_back(m_workReal[i], m_workImag[i]);
         currentRate = stage.outputRate;
         stageIdx++;
     }
 
-    auto audio = fmDemodulateNarrowband(iq, currentRate);
+    fmDemodulateInPlace(iq, m_workAudio, currentRate);
 
     // Continue remaining decimation (real-valued)
     while (stageIdx < m_decimChain.size()) {
         const auto& stage = m_decimChain[stageIdx];
-        audio = applyFIRFilter(audio, stage.filterTaps);
-        audio = decimate(audio, stage.decimFactor);
+        applyFIRFilterInPlace(m_workAudio, stage.filterTaps);
+        decimateInPlace(m_workAudio, stage.decimFactor);
         currentRate = stage.outputRate;
         stageIdx++;
     }
 
-    if (std::abs(currentRate - 48000.0) > 1.0) audio = resample(audio, currentRate, 48000.0);
-    audio = applyFIRFilter(audio, m_audioFilterTaps);
-    emitAudioBuffer(audio);
+    if (std::abs(currentRate - 48000.0) > 1.0) resampleInPlace(m_workAudio, currentRate, 48000.0);
+    applyFIRFilterInPlace(m_workAudio, m_audioFilterTaps);
+    emitAudioBuffer(m_workAudio);
 }
 
 void AudioDemodulator::setSampleRate(double newSampleRate)

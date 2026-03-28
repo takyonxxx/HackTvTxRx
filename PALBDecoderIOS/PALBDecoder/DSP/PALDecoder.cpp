@@ -21,7 +21,6 @@ PALDecoder::PALDecoder()
 {
     m_frameBuffer.resize(VIDEO_WIDTH * VIDEO_HEIGHT * 4, 0);
     m_lineBuffer.reserve(2048); m_lineBufferU.reserve(2048); m_lineBufferV.reserve(2048);
-    // Build NCO LUT
     for (int i = 0; i < NCO_LUT_SIZE; i++) {
         double ph = 2.0 * M_PI * i / NCO_LUT_SIZE;
         m_ncoSin[i] = (float)sin(ph); m_ncoCos[i] = (float)cos(ph);
@@ -61,17 +60,15 @@ void PALDecoder::applyStandard() {
     m_vSyncDetectThreshold = (int)(dtl * 0.5f);
 }
 
+// CHANGE: separate I/Q FIR instead of complex FIR
 void PALDecoder::initFilters() {
     float r = (float)m_sampleRate;
-    // Video LPF - 25 taps (reduced for speed, proven 6 FPS on iPhone)
     float vc = std::min(5.5e6f, r * 0.4f);
     m_videoFilterTaps = designLowPassFIR(vc, r, 25);
     m_vidFirI.setLen(25); m_vidFirQ.setLen(25);
-    // Luma LPF - 17 taps
     float lc = std::min(3.0e6f, m_decimatedRate * 0.35f);
     m_lumaFilterTaps = designLowPassFIR(lc, m_decimatedRate, 17);
     m_lumaFir.setLen(17);
-    // Chroma BPF - 25 taps
     if (COLOR_CARRIER_FREQ < r / 2.0f) {
         m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, r, 25);
         m_chromaFirU.setLen(25); m_chromaFirV.setLen(25);
@@ -97,7 +94,6 @@ void PALDecoder::updateNCO() {
     else if (t >= 174 && t <= 230) { int ch = (int)floor((t-174-0.001)/8); vc = 174+std::max(ch,0)*8.0+1.25; }
     else vc = t;
     m_videoCarrierOffsetHz = (float)((vc - t) * 1e6);
-    // Phase step: offset/sampleRate * 2^32
     double norm = (double)m_videoCarrierOffsetHz / (double)m_sampleRate;
     m_ncoStep = (uint32_t)(int64_t)(-norm * 4294967296.0);
     m_ncoAccum = 0;
@@ -138,6 +134,7 @@ float PALDecoder::normalizeAndAGC(float s) {
     return n>1?1:n;
 }
 
+// CHANGE: separate I/Q FIR instead of complex FIR in hot loop
 void PALDecoder::processSamples(const int8_t* data, size_t len) {
     if(!data||len==0) return;
     std::lock_guard<std::mutex> lock(m_processMutex);
@@ -145,7 +142,6 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
     const int cSize = doColor ? (int)m_colorCarrierSin.size() : 1;
     const float invD = 1.0f / m_decimFactor;
     const float* vTaps = m_videoFilterTaps.data();
-    const int vLen = (int)m_videoFilterTaps.size();
     const float* lTaps = m_lumaFilterTaps.data();
     const size_t half = len / 2;
 
@@ -163,27 +159,23 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
         float sI = data[i*2] * (1.0f/128.0f);
         float sQ = data[i*2+1] * (1.0f/128.0f);
 
-        // NCO from LUT - no trig!
         uint32_t idx = m_ncoAccum >> (32 - NCO_LUT_BITS);
         float nI = m_ncoCos[idx], nQ = m_ncoSin[idx];
         m_ncoAccum += m_ncoStep;
 
-        // Freq shift
         float shI = sI*nI - sQ*nQ;
         float shQ = sI*nQ + sQ*nI;
 
-        // Video IQ LPF - separate I/Q (no complex multiply overhead)
+        // Separate I/Q FIR - no complex multiply overhead
         m_vidFirI.push(shI); m_vidFirQ.push(shQ);
         float fI = m_vidFirI.apply(vTaps);
         float fQ = m_vidFirQ.apply(vTaps);
 
-        // Magnitude (sqrtf kept for AGC accuracy)
         float mag = sqrtf(fI*fI + fQ*fQ);
         float norm = normalizeAndAGC(dcBlock(mag));
 
         processSample(norm);
 
-        // Chroma (only if color mode)
         if(doColor) {
             float cs = m_colorCarrierSin[m_colorCarrierIndex];
             float cc = m_colorCarrierCos[m_colorCarrierIndex];

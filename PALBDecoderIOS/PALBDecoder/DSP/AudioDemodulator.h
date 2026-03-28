@@ -72,13 +72,17 @@ private:
 
     void initFinalFilter();
     std::vector<float> designLowPassFIR(int numTaps, float cutoffFreq, float sampleRate);
-    std::vector<float> applyFIRFilter(const std::vector<float>& signal, const std::vector<float>& coeffs);
+    void applyFIRFilterInPlace(std::vector<float>& signal, const std::vector<float>& coeffs);
     std::vector<std::complex<float>> frequencyShift(const std::vector<std::complex<float>>& signal, double shiftFreq);
-    std::vector<float> fmDemodulateNarrowband(const std::vector<std::complex<float>>& signal, double signalRate);
+    void fmDemodulateInPlace(const std::vector<std::complex<float>>& signal, std::vector<float>& out, double signalRate);
     float unwrapPhase(float phase, float lastPhase);
-    std::vector<float> decimate(const std::vector<float>& signal, int factor);
-    std::vector<float> resample(const std::vector<float>& signal, double inputRate, double outputRate);
+    void decimateInPlace(std::vector<float>& signal, int factor);
+    void resampleInPlace(std::vector<float>& signal, double inputRate, double outputRate);
     void emitAudioBuffer(const std::vector<float>& audio);
+
+    // Pre-allocated work buffers (avoid per-call malloc)
+    std::vector<float> m_workReal, m_workImag, m_workAudio;
+    std::vector<float> m_firTemp;
 };
 
 #endif
