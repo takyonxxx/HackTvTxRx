@@ -106,9 +106,8 @@ final class PALDecoderManager: ObservableObject {
                 if !enabled { self.bufferStatus = "" }
                 else { self.bufferStatus = "Radio - tuning..." }
 
-                // Drop first 2 seconds of data (server flushes old rate data)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    // Flush audio again to clear any stale decoded audio
+                // Drop first 1 second of data (server flushes, just in case)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     self.audioEngine.flush()
                     self.switchingMode = false
                     if enabled { self.bufferStatus = "Radio" }
