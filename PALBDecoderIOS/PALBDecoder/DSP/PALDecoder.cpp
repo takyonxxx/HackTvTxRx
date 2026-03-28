@@ -6,66 +6,30 @@
 #endif
 
 PALDecoder::PALDecoder()
-    : m_sampleRate(16000000)
-    , m_decimFactor(2)
-    , m_decimatedRate(8000000.0f)
-    , m_chromaBandwidth(1.2e6f)
-    , m_ncoPhase(0.0)
-    , m_ncoPhaseIncrement(0.0)
-    , m_videoCarrierOffsetHz(0.0f)
-    , m_tuneFrequency(479300000ULL)
-    , m_samplesPerLine(1024)
-    , m_samplesPerLineFrac(0.0f)
-    , m_sampleOffset(0)
-    , m_sampleOffsetFrac(0.0f)
-    , m_sampleOffsetDetected(0)
-    , m_hSyncShift(0.0f)
-    , m_hSyncErrorCount(0)
-    , m_prevSample(0.0f)
-    , m_numberSamplesPerHTop(0)
-    , m_numberSamplesPerHSync(0)
-    , m_numberSamplesPerLineSignals(0)
-    , m_numberSamplesHSyncCrop(0)
-    , m_lineIndex(0)
-    , m_fieldIndex(0)
-    , m_fieldDetectStartPos(0)
-    , m_fieldDetectEndPos(0)
-    , m_vSyncDetectStartPos(0)
-    , m_vSyncDetectEndPos(0)
-    , m_fieldDetectSampleCount(0)
-    , m_vSyncDetectSampleCount(0)
-    , m_vSyncDetectThreshold(0)
-    , m_fieldDetectThreshold1(0)
-    , m_fieldDetectThreshold2(0)
-    , m_dcBlockerX1(0.0f)
-    , m_dcBlockerY1(0.0f)
-    , m_resampleCounter(0)
-    , m_chromaUAccum(0.0f)
-    , m_chromaVAccum(0.0f)
-    , m_ampMin(-1.0f)
-    , m_ampMax(1.0f)
-    , m_ampDelta(2.0f)
-    , m_effMin(20.0f)
-    , m_effMax(-20.0f)
-    , m_amSampleIndex(0)
-    , m_videoGain(1.5f)
-    , m_videoOffset(0.0f)
-    , m_videoInvert(true)
-    , m_syncLevel(0.0f)
-    , m_colorMode(false)
-    , m_chromaGain(0.75f)
-    , m_hSyncEnabled(true)
-    , m_vSyncEnabled(true)
-    , m_totalSamples(0)
-    , m_frameCount(0)
-    , m_linesProcessed(0)
-    , m_syncDetected(0)
-    , m_syncQualityWindow(0)
-    , m_syncFoundInWindow(0)
-    , m_syncErrorAccum(0.0)
-    , m_lastSyncQuality(0.0f)
-    , m_vPhaseAlternate(false)
-    , m_colorCarrierIndex(0)
+    : m_sampleRate(16000000), m_decimFactor(2), m_decimatedRate(8000000.0f)
+    , m_chromaBandwidth(1.2e6f), m_ncoPhase(0.0), m_ncoPhaseIncrement(0.0)
+    , m_videoCarrierOffsetHz(0.0f), m_tuneFrequency(479300000ULL)
+    , m_samplesPerLine(1024), m_samplesPerLineFrac(0.0f)
+    , m_sampleOffset(0), m_sampleOffsetFrac(0.0f), m_sampleOffsetDetected(0)
+    , m_hSyncShift(0.0f), m_hSyncErrorCount(0), m_prevSample(0.0f)
+    , m_numberSamplesPerHTop(0), m_numberSamplesPerHSync(0)
+    , m_numberSamplesPerLineSignals(0), m_numberSamplesHSyncCrop(0)
+    , m_lineIndex(0), m_fieldIndex(0)
+    , m_fieldDetectStartPos(0), m_fieldDetectEndPos(0)
+    , m_vSyncDetectStartPos(0), m_vSyncDetectEndPos(0)
+    , m_fieldDetectSampleCount(0), m_vSyncDetectSampleCount(0)
+    , m_vSyncDetectThreshold(0), m_fieldDetectThreshold1(0), m_fieldDetectThreshold2(0)
+    , m_videoFilterLen(0), m_lumaFilterLen(0), m_chromaFilterLen(0)
+    , m_dcBlockerX1(0.0f), m_dcBlockerY1(0.0f)
+    , m_resampleCounter(0), m_chromaUAccum(0.0f), m_chromaVAccum(0.0f)
+    , m_ampMin(-1.0f), m_ampMax(1.0f), m_ampDelta(2.0f)
+    , m_effMin(20.0f), m_effMax(-20.0f), m_amSampleIndex(0)
+    , m_videoGain(1.5f), m_videoOffset(0.0f), m_videoInvert(true)
+    , m_syncLevel(0.0f), m_colorMode(false), m_chromaGain(0.75f)
+    , m_hSyncEnabled(true), m_vSyncEnabled(true)
+    , m_totalSamples(0), m_frameCount(0), m_linesProcessed(0), m_syncDetected(0)
+    , m_syncQualityWindow(0), m_syncFoundInWindow(0), m_syncErrorAccum(0.0)
+    , m_lastSyncQuality(0.0f), m_vPhaseAlternate(false), m_colorCarrierIndex(0)
 {
     m_frameBuffer.resize(VIDEO_WIDTH * VIDEO_HEIGHT * 4, 0);
     m_lineBuffer.reserve(2048);
@@ -81,32 +45,21 @@ void PALDecoder::setSampleRate(int sampleRate)
 {
     std::lock_guard<std::mutex> lock(m_processMutex);
     m_sampleRate = sampleRate;
-    if (m_sampleRate <= 12500000) m_decimFactor = 1;
-    else m_decimFactor = 2;
+    m_decimFactor = (m_sampleRate <= 12500000) ? 1 : 2;
     m_decimatedRate = static_cast<float>(m_sampleRate) / m_decimFactor;
-    if (m_sampleRate >= 16000000) m_chromaBandwidth = 1.5e6f;
-    else m_chromaBandwidth = 1.2e6f;
+    m_chromaBandwidth = (m_sampleRate >= 16000000) ? 1.5e6f : 1.2e6f;
     applyStandard();
     initFilters();
     rebuildColorLUT();
-    // NCO phase increment depends on sample rate - must recalculate
     m_ncoPhaseIncrement = -2.0 * M_PI * static_cast<double>(m_videoCarrierOffsetHz)
                           / static_cast<double>(m_sampleRate);
     m_ncoPhase = 0.0;
     m_resampleCounter = 0;
-    m_sampleOffset = 0;
-    m_sampleOffsetFrac = 0.0f;
-    m_hSyncShift = 0.0f;
-    m_hSyncErrorCount = 0;
-    m_lineIndex = 0;
-    m_fieldIndex = 0;
-    m_colorCarrierIndex = 0;
+    m_sampleOffset = 0; m_sampleOffsetFrac = 0.0f;
+    m_hSyncShift = 0.0f; m_hSyncErrorCount = 0;
+    m_lineIndex = 0; m_fieldIndex = 0; m_colorCarrierIndex = 0;
     m_ampMin = -1.0f; m_ampMax = 1.0f; m_ampDelta = 2.0f;
     m_effMin = 20.0f; m_effMax = -20.0f; m_amSampleIndex = 0;
-    m_videoFilterDelay.clear();
-    m_lumaFilterDelay.clear();
-    m_chromaUFilterDelay.clear();
-    m_chromaVFilterDelay.clear();
 }
 
 void PALDecoder::applyStandard()
@@ -137,21 +90,30 @@ void PALDecoder::initFilters()
     if (videoTaps > 65) videoTaps = 65;
     if (videoTaps % 2 == 0) videoTaps++;
     m_videoFilterTaps = designLowPassFIR(videoCutoff, rate, videoTaps);
+    m_videoFilterLen = videoTaps;
+    m_videoFilterDelay.setLen(videoTaps);
+
     float lumaCutoff = std::min(3.0e6f, m_decimatedRate * 0.35f);
     m_lumaFilterTaps = designLowPassFIR(lumaCutoff, m_decimatedRate, 33);
-    if (COLOR_CARRIER_FREQ < rate / 2.0f)
+    m_lumaFilterLen = 33;
+    m_lumaFilterDelay.setLen(33);
+
+    if (COLOR_CARRIER_FREQ < rate / 2.0f) {
         m_chromaFilterTaps = designBandPassFIR(COLOR_CARRIER_FREQ, m_chromaBandwidth, rate, 65);
-    else
+        m_chromaFilterLen = 65;
+    } else {
         m_chromaFilterTaps.clear();
+        m_chromaFilterLen = 0;
+    }
+    m_chromaUFilterDelay.setLen(std::max(m_chromaFilterLen, 1));
+    m_chromaVFilterDelay.setLen(std::max(m_chromaFilterLen, 1));
 }
 
 void PALDecoder::rebuildColorLUT()
 {
     float rate = static_cast<float>(m_sampleRate);
     if (COLOR_CARRIER_FREQ >= rate / 2.0f) {
-        m_colorCarrierSin.clear();
-        m_colorCarrierCos.clear();
-        return;
+        m_colorCarrierSin.clear(); m_colorCarrierCos.clear(); return;
     }
     int carrierSamples = static_cast<int>(rate / COLOR_CARRIER_FREQ * 100.0f + 0.5f);
     if (carrierSamples < 200) carrierSamples = 200;
@@ -231,55 +193,6 @@ std::vector<float> PALDecoder::designBandPassFIR(float centerFreq, float bandwid
     return taps;
 }
 
-std::complex<float> PALDecoder::applyVideoFilter(const std::complex<float>& sample)
-{
-    m_videoFilterDelay.push_front(sample);
-    if (m_videoFilterDelay.size() > m_videoFilterTaps.size()) m_videoFilterDelay.pop_back();
-    std::complex<float> out(0.0f, 0.0f);
-    size_t n = std::min(m_videoFilterDelay.size(), m_videoFilterTaps.size());
-    for (size_t i = 0; i < n; i++) out += m_videoFilterDelay[i] * m_videoFilterTaps[i];
-    return out;
-}
-
-float PALDecoder::applyLumaFilter(float sample)
-{
-    m_lumaFilterDelay.push_front(sample);
-    if (m_lumaFilterDelay.size() > m_lumaFilterTaps.size()) m_lumaFilterDelay.pop_back();
-    float out = 0.0f;
-    size_t n = std::min(m_lumaFilterDelay.size(), m_lumaFilterTaps.size());
-    for (size_t i = 0; i < n; i++) out += m_lumaFilterDelay[i] * m_lumaFilterTaps[i];
-    return out;
-}
-
-float PALDecoder::applyChromaFilterU(float sample)
-{
-    m_chromaUFilterDelay.push_front(sample);
-    if (m_chromaUFilterDelay.size() > m_chromaFilterTaps.size()) m_chromaUFilterDelay.pop_back();
-    float out = 0.0f;
-    size_t n = std::min(m_chromaUFilterDelay.size(), m_chromaFilterTaps.size());
-    for (size_t i = 0; i < n; i++) out += m_chromaUFilterDelay[i] * m_chromaFilterTaps[i];
-    return out;
-}
-
-float PALDecoder::applyChromaFilterV(float sample)
-{
-    m_chromaVFilterDelay.push_front(sample);
-    if (m_chromaVFilterDelay.size() > m_chromaFilterTaps.size()) m_chromaVFilterDelay.pop_back();
-    float out = 0.0f;
-    size_t n = std::min(m_chromaVFilterDelay.size(), m_chromaFilterTaps.size());
-    for (size_t i = 0; i < n; i++) out += m_chromaVFilterDelay[i] * m_chromaFilterTaps[i];
-    return out;
-}
-
-float PALDecoder::dcBlock(float sample)
-{
-    constexpr float alpha = 0.995f;
-    float out = sample - m_dcBlockerX1 + alpha * m_dcBlockerY1;
-    m_dcBlockerX1 = sample;
-    m_dcBlockerY1 = out;
-    return out;
-}
-
 float PALDecoder::normalizeAndAGC(float sample)
 {
     if (sample < m_effMin) m_effMin = sample;
@@ -291,31 +204,108 @@ float PALDecoder::normalizeAndAGC(float sample)
         m_ampMin = m_effMin - range * 0.10f;
         m_ampDelta = m_ampMax - m_ampMin;
         if (m_ampDelta <= 0.0f) m_ampDelta = 1.0f;
-        m_effMin = 20.0f;
-        m_effMax = -20.0f;
-        m_amSampleIndex = 0;
+        m_effMin = 20.0f; m_effMax = -20.0f; m_amSampleIndex = 0;
     }
     float normalized = (sample - m_ampMin) / m_ampDelta;
     return (normalized > 1.0f) ? 1.0f : normalized;
 }
 
+// ============================================================
+// Main Processing Loop - optimized hot path
+// ============================================================
+
 void PALDecoder::processSamples(const int8_t* data, size_t len)
 {
     if (!data || len == 0) return;
-    std::vector<std::complex<float>> samples;
-    samples.reserve(len / 2);
-    for (size_t i = 0; i < len; i += 2) {
-        samples.emplace_back(
-            static_cast<float>(data[i]) / 128.0f,
-            static_cast<float>(data[i + 1]) / 128.0f);
+    std::lock_guard<std::mutex> lock(m_processMutex);
+    if (len > 200000000) return;
+
+    const bool doColor = m_colorMode && !m_colorCarrierSin.empty();
+    const int carrierSize = doColor ? static_cast<int>(m_colorCarrierSin.size()) : 1;
+    const float invDecim = 1.0f / static_cast<float>(m_decimFactor);
+    const float* chromaTaps = doColor ? m_chromaFilterTaps.data() : nullptr;
+
+    for (size_t i = 0; i + 1 < len; i += 2) {
+        m_totalSamples++;
+
+        if (m_totalSamples % 10000000 == 0) {
+            float detectionRate = (m_syncQualityWindow > 0)
+                ? static_cast<float>(m_syncFoundInWindow) / m_syncQualityWindow : 0.0f;
+            float avgError = (m_syncFoundInWindow > 0)
+                ? static_cast<float>(m_syncErrorAccum / m_syncFoundInWindow)
+                : static_cast<float>(m_numberSamplesPerHTop);
+            float errorQuality = 1.0f - std::clamp(avgError / static_cast<float>(m_numberSamplesPerHTop), 0.0f, 1.0f);
+            m_lastSyncQuality = (detectionRate * 0.6f + errorQuality * 0.4f) * 100.0f;
+            m_syncQualityWindow = 0; m_syncFoundInWindow = 0; m_syncErrorAccum = 0.0;
+            if (m_syncStatsCallback)
+                m_syncStatsCallback(m_lastSyncQuality, m_ampMax, m_ampMin);
+        }
+
+        // IQ to float
+        float sI = static_cast<float>(data[i]) * (1.0f / 128.0f);
+        float sQ = static_cast<float>(data[i + 1]) * (1.0f / 128.0f);
+
+        // NCO frequency shift
+        float ncoI = static_cast<float>(std::cos(m_ncoPhase));
+        float ncoQ = static_cast<float>(std::sin(m_ncoPhase));
+        m_ncoPhase += m_ncoPhaseIncrement;
+        if (m_ncoPhase > M_PI) m_ncoPhase -= 2.0 * M_PI;
+        else if (m_ncoPhase < -M_PI) m_ncoPhase += 2.0 * M_PI;
+
+        std::complex<float> shifted(sI * ncoI - sQ * ncoQ, sI * ncoQ + sQ * ncoI);
+
+        // Video IQ LPF
+        std::complex<float> filtered = applyVideoFilter(shifted);
+
+        // AM envelope
+        float magnitude = std::sqrt(filtered.real() * filtered.real() +
+                                    filtered.imag() * filtered.imag());
+        float normalized = normalizeAndAGC(dcBlock(magnitude));
+
+        // Sync at full rate
+        processSample(normalized);
+
+        // Chroma at full rate (before decimation)
+        if (doColor) {
+            float cSin = normalized * m_colorCarrierSin[m_colorCarrierIndex];
+            float cCos = normalized * m_colorCarrierCos[m_colorCarrierIndex];
+            m_colorCarrierIndex++;
+            if (m_colorCarrierIndex >= carrierSize) m_colorCarrierIndex = 0;
+            m_chromaUAccum += applyChromaFilterU(cSin);
+            m_chromaVAccum += applyChromaFilterV(cCos);
+        }
+
+        // Decimation
+        m_resampleCounter++;
+        if (m_resampleCounter < m_decimFactor) continue;
+        m_resampleCounter = 0;
+
+        float luma = applyLumaFilter(normalized);
+        float u = 0.0f, v = 0.0f;
+        if (doColor) {
+            u = m_chromaUAccum * invDecim * 2.5f;
+            v = m_chromaVAccum * invDecim * 2.5f * (m_vPhaseAlternate ? -1.0f : 1.0f);
+            m_chromaUAccum = 0.0f; m_chromaVAccum = 0.0f;
+        }
+
+        if (m_sampleOffset > m_numberSamplesPerHSync) {
+            m_lineBuffer.push_back(luma);
+            m_lineBufferU.push_back(u);
+            m_lineBufferV.push_back(v);
+        }
     }
-    processSamples(samples);
 }
 
 void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
 {
+    // Convert to int8 format and call the optimized version
+    // (this path is not used in iOS, kept for compatibility)
     std::lock_guard<std::mutex> lock(m_processMutex);
-    if (samples.empty() || samples.size() > 100000000) return;
+    if (samples.empty()) return;
+
+    const bool doColor = m_colorMode && !m_colorCarrierSin.empty();
+    const int carrierSize = doColor ? static_cast<int>(m_colorCarrierSin.size()) : 1;
+    const float invDecim = 1.0f / static_cast<float>(m_decimFactor);
 
     for (const auto& sample : samples) {
         m_totalSamples++;
@@ -327,13 +317,10 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
                 ? static_cast<float>(m_syncErrorAccum / m_syncFoundInWindow)
                 : static_cast<float>(m_numberSamplesPerHTop);
             float errorQuality = 1.0f - std::clamp(avgError / static_cast<float>(m_numberSamplesPerHTop), 0.0f, 1.0f);
-            float syncQuality = (detectionRate * 0.6f + errorQuality * 0.4f) * 100.0f;
-            m_lastSyncQuality = syncQuality;
-            m_syncQualityWindow = 0;
-            m_syncFoundInWindow = 0;
-            m_syncErrorAccum = 0.0;
+            m_lastSyncQuality = (detectionRate * 0.6f + errorQuality * 0.4f) * 100.0f;
+            m_syncQualityWindow = 0; m_syncFoundInWindow = 0; m_syncErrorAccum = 0.0;
             if (m_syncStatsCallback)
-                m_syncStatsCallback(syncQuality, m_ampMax, m_ampMin);
+                m_syncStatsCallback(m_lastSyncQuality, m_ampMax, m_ampMin);
         }
 
         float ncoI = static_cast<float>(std::cos(m_ncoPhase));
@@ -349,18 +336,14 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         std::complex<float> filtered = applyVideoFilter(shifted);
         float magnitude = std::sqrt(filtered.real() * filtered.real() +
                                     filtered.imag() * filtered.imag());
-        float dcBlocked = dcBlock(magnitude);
-        float normalized = normalizeAndAGC(dcBlocked);
+        float normalized = normalizeAndAGC(dcBlock(magnitude));
         processSample(normalized);
 
-        if (m_colorMode && !m_colorCarrierSin.empty()) {
-            float chromaSin = normalized * m_colorCarrierSin[m_colorCarrierIndex];
-            float chromaCos = normalized * m_colorCarrierCos[m_colorCarrierIndex];
+        if (doColor) {
+            m_chromaUAccum += applyChromaFilterU(normalized * m_colorCarrierSin[m_colorCarrierIndex]);
+            m_chromaVAccum += applyChromaFilterV(normalized * m_colorCarrierCos[m_colorCarrierIndex]);
             m_colorCarrierIndex++;
-            if (m_colorCarrierIndex >= static_cast<int>(m_colorCarrierSin.size()))
-                m_colorCarrierIndex = 0;
-            m_chromaUAccum += applyChromaFilterU(chromaSin);
-            m_chromaVAccum += applyChromaFilterV(chromaCos);
+            if (m_colorCarrierIndex >= carrierSize) m_colorCarrierIndex = 0;
         }
 
         m_resampleCounter++;
@@ -369,12 +352,10 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
 
         float luma = applyLumaFilter(normalized);
         float u = 0.0f, v = 0.0f;
-        if (m_colorMode && !m_colorCarrierSin.empty()) {
-            float invDecim = 1.0f / static_cast<float>(m_decimFactor);
+        if (doColor) {
             u = m_chromaUAccum * invDecim * 2.5f;
             v = m_chromaVAccum * invDecim * 2.5f * (m_vPhaseAlternate ? -1.0f : 1.0f);
-            m_chromaUAccum = 0.0f;
-            m_chromaVAccum = 0.0f;
+            m_chromaUAccum = 0.0f; m_chromaVAccum = 0.0f;
         }
 
         if (m_sampleOffset > m_numberSamplesPerHSync) {
@@ -403,8 +384,7 @@ void PALDecoder::processSample(float sample)
                 m_hSyncErrorCount = 0;
                 m_syncErrorAccum += static_cast<double>(std::fabs(hSyncShift));
             }
-            m_syncDetected++;
-            m_syncFoundInWindow++;
+            m_syncDetected++; m_syncFoundInWindow++;
             m_sampleOffsetDetected = 0;
         } else {
             m_sampleOffsetDetected++;
@@ -422,9 +402,7 @@ void PALDecoder::processSample(float sample)
         m_sampleOffset = static_cast<int>(sampleOffsetFloat);
         m_sampleOffsetFrac = sampleOffsetFloat - m_sampleOffset;
         m_hSyncShift = 0.0f;
-        m_lineIndex++;
-        m_linesProcessed++;
-        m_syncQualityWindow++;
+        m_lineIndex++; m_linesProcessed++; m_syncQualityWindow++;
         processEndOfLine();
     }
     m_prevSample = sample;
@@ -439,16 +417,12 @@ void PALDecoder::processEndOfLine()
         else if (m_fieldDetectSampleCount < m_fieldDetectThreshold2) m_fieldIndex = 1;
         m_lineIndex = 2;
     }
-    m_fieldDetectSampleCount = 0;
-    m_vSyncDetectSampleCount = 0;
+    m_fieldDetectSampleCount = 0; m_vSyncDetectSampleCount = 0;
     if (m_lineIndex > NB_LINES / 2 + m_fieldIndex) {
-        m_lineIndex = 1;
-        m_fieldIndex = 1 - m_fieldIndex;
+        m_lineIndex = 1; m_fieldIndex = 1 - m_fieldIndex;
     }
     renderLine();
-    m_lineBuffer.clear();
-    m_lineBufferU.clear();
-    m_lineBufferV.clear();
+    m_lineBuffer.clear(); m_lineBufferU.clear(); m_lineBufferV.clear();
     m_vPhaseAlternate = !m_vPhaseAlternate;
     m_colorCarrierIndex = 0;
 }
@@ -461,8 +435,7 @@ void PALDecoder::renderLine()
     int activeSamples = static_cast<int>(m_lineBuffer.size());
     if (activeSamples < 10) return;
 
-    std::vector<float> currentLineU(VIDEO_WIDTH, 0.0f);
-    std::vector<float> currentLineV(VIDEO_WIDTH, 0.0f);
+    uint8_t* rowPtr = m_frameBuffer.data() + rowIndex * VIDEO_WIDTH * 4;
 
     for (int x = 0; x < VIDEO_WIDTH; x++) {
         float srcX = (x * activeSamples) / static_cast<float>(VIDEO_WIDTH);
@@ -481,44 +454,39 @@ void PALDecoder::renderLine()
                 int idx2 = std::min(idx + 1, static_cast<int>(m_lineBufferU.size()) - 1);
                 U = m_lineBufferU[idx] + (m_lineBufferU[idx2] - m_lineBufferU[idx]) * frac;
                 V = m_lineBufferV[idx] + (m_lineBufferV[idx2] - m_lineBufferV[idx]) * frac;
-                currentLineU[x] = U;
-                currentLineV[x] = V;
                 if (!m_prevLineU.empty() && x < static_cast<int>(m_prevLineU.size())) {
                     U = (U + m_prevLineU[x]) * 0.5f;
                     V = (V - m_prevLineV[x]) * 0.5f;
                 }
-                U *= m_chromaGain;
-                V *= m_chromaGain;
+                U *= m_chromaGain; V *= m_chromaGain;
             }
             yuv2rgb(Y, U, V, r, g, b);
             if (m_videoInvert) { r = 255 - r; g = 255 - g; b = 255 - b; }
         }
-        // RGBA for iOS (not BGRA like Qt)
-        int offset = (rowIndex * VIDEO_WIDTH + x) * 4;
-        if (offset >= 0 && offset + 3 < static_cast<int>(m_frameBuffer.size())) {
-            m_frameBuffer[offset + 0] = r;
-            m_frameBuffer[offset + 1] = g;
-            m_frameBuffer[offset + 2] = b;
-            m_frameBuffer[offset + 3] = 255;
+        int off = x * 4;
+        rowPtr[off] = r; rowPtr[off+1] = g; rowPtr[off+2] = b; rowPtr[off+3] = 255;
+    }
+
+    if (m_colorMode) {
+        // Save for PAL line averaging
+        m_prevLineU.resize(VIDEO_WIDTH);
+        m_prevLineV.resize(VIDEO_WIDTH);
+        for (int x = 0; x < VIDEO_WIDTH; x++) {
+            float srcX = (x * activeSamples) / static_cast<float>(VIDEO_WIDTH);
+            int idx = std::min(static_cast<int>(srcX), static_cast<int>(m_lineBufferU.size()) - 1);
+            if (idx >= 0 && idx < static_cast<int>(m_lineBufferU.size())) {
+                m_prevLineU[x] = m_lineBufferU[idx];
+                m_prevLineV[x] = m_lineBufferV[idx];
+            }
         }
     }
-    m_prevLineU = currentLineU;
-    m_prevLineV = currentLineV;
 }
 
 void PALDecoder::buildFrame()
 {
     m_frameCount++;
-    if (m_frameCallback) {
+    if (m_frameCallback)
         m_frameCallback(m_frameBuffer.data(), VIDEO_WIDTH, VIDEO_HEIGHT);
-    }
-}
-
-float PALDecoder::clipValue(float value, float min, float max)
-{
-    if (value < min) return min;
-    if (value > max) return max;
-    return value;
 }
 
 void PALDecoder::yuv2rgb(float y, float u, float v, uint8_t& r, uint8_t& g, uint8_t& b)

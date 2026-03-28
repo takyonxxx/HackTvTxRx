@@ -3,13 +3,35 @@
 
 #include <vector>
 #include <complex>
-#include <deque>
 #include <cstdint>
 #include <cmath>
 #include <mutex>
 #include <functional>
 #include <cstring>
 #include <algorithm>
+
+// Fixed-size circular buffer for FIR delay lines - zero heap allocation
+template<typename T, int MAX_TAPS>
+struct FIRDelay {
+    T buf[MAX_TAPS] = {};
+    int pos = 0;
+    int len = 0;
+
+    void reset() { memset(buf, 0, sizeof(buf)); pos = 0; }
+    void setLen(int n) { len = n; reset(); }
+
+    inline void push(const T& val) {
+        pos = (pos == 0) ? len - 1 : pos - 1;
+        buf[pos] = val;
+    }
+
+    inline T apply(const float* taps) const {
+        T out{};
+        for (int i = 0; i < len; i++)
+            out += buf[(pos + i) % len] * taps[i];
+        return out;
+    }
+};
 
 class PALDecoder
 {
@@ -49,7 +71,6 @@ public:
 private:
     static constexpr int NB_LINES = 625;
     static constexpr float FPS = 25.0f;
-    static constexpr float LINE_DURATION_US = 64.0f;
     static constexpr float SYNC_PULSE_FRAC    = 4.7f / 64.0f;
     static constexpr float BLANKING_FRAC      = 12.0f / 64.0f;
     static constexpr float HSYNC_FRAC         = 10.5f / 64.0f;
@@ -60,6 +81,7 @@ private:
     static constexpr int VSYNC_LINES = 3;
     static constexpr int FIRST_VISIBLE_LINE = 23;
     static constexpr float COLOR_CARRIER_FREQ = 4433618.75f;
+    static constexpr int MAX_FIR_TAPS = 72;  // max filter taps (65 + margin)
 
     std::mutex m_processMutex;
     FrameCallback m_frameCallback;
@@ -102,13 +124,19 @@ private:
     int m_fieldDetectThreshold1;
     int m_fieldDetectThreshold2;
 
+    // FIR filters - fixed circular buffers (NO heap allocation per sample)
     std::vector<float> m_videoFilterTaps;
-    std::deque<std::complex<float>> m_videoFilterDelay;
+    FIRDelay<std::complex<float>, MAX_FIR_TAPS> m_videoFilterDelay;
+    int m_videoFilterLen;
+
     std::vector<float> m_lumaFilterTaps;
-    std::deque<float> m_lumaFilterDelay;
+    FIRDelay<float, 48> m_lumaFilterDelay;
+    int m_lumaFilterLen;
+
     std::vector<float> m_chromaFilterTaps;
-    std::deque<float> m_chromaUFilterDelay;
-    std::deque<float> m_chromaVFilterDelay;
+    FIRDelay<float, MAX_FIR_TAPS> m_chromaUFilterDelay;
+    FIRDelay<float, MAX_FIR_TAPS> m_chromaVFilterDelay;
+    int m_chromaFilterLen;
 
     float m_dcBlockerX1;
     float m_dcBlockerY1;
@@ -158,17 +186,40 @@ private:
     void rebuildColorLUT();
     std::vector<float> designLowPassFIR(float cutoff, float sampleRate, int numTaps);
     std::vector<float> designBandPassFIR(float centerFreq, float bandwidth, float sampleRate, int numTaps);
-    std::complex<float> applyVideoFilter(const std::complex<float>& sample);
-    float applyLumaFilter(float sample);
-    float applyChromaFilterU(float sample);
-    float applyChromaFilterV(float sample);
-    float dcBlock(float sample);
+
+    inline std::complex<float> applyVideoFilter(const std::complex<float>& sample) {
+        m_videoFilterDelay.push(sample);
+        return m_videoFilterDelay.apply(m_videoFilterTaps.data());
+    }
+    inline float applyLumaFilter(float sample) {
+        m_lumaFilterDelay.push(sample);
+        return m_lumaFilterDelay.apply(m_lumaFilterTaps.data());
+    }
+    inline float applyChromaFilterU(float sample) {
+        m_chromaUFilterDelay.push(sample);
+        return m_chromaUFilterDelay.apply(m_chromaFilterTaps.data());
+    }
+    inline float applyChromaFilterV(float sample) {
+        m_chromaVFilterDelay.push(sample);
+        return m_chromaVFilterDelay.apply(m_chromaFilterTaps.data());
+    }
+
+    inline float dcBlock(float sample) {
+        float out = sample - m_dcBlockerX1 + 0.995f * m_dcBlockerY1;
+        m_dcBlockerX1 = sample;
+        m_dcBlockerY1 = out;
+        return out;
+    }
+
     float normalizeAndAGC(float sample);
     void processSample(float sample);
     void processEndOfLine();
     void renderLine();
     void buildFrame();
-    float clipValue(float value, float min, float max);
+
+    inline float clipValue(float value, float mn, float mx) {
+        return value < mn ? mn : (value > mx ? mx : value);
+    }
     void yuv2rgb(float y, float u, float v, uint8_t& r, uint8_t& g, uint8_t& b);
 };
 
