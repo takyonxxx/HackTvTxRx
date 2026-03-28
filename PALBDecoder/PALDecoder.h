@@ -125,6 +125,10 @@ private:
     float m_notchB0, m_notchB1, m_notchB2, m_notchA1, m_notchA2;
     float m_notchX1, m_notchX2, m_notchY1, m_notchY2;
 
+    // Chroma subcarrier notch (4.43 MHz) - removes subcarrier from luma to prevent color stripes
+    float m_chromaNotchB0, m_chromaNotchB1, m_chromaNotchB2, m_chromaNotchA1, m_chromaNotchA2;
+    float m_chromaNotchX1, m_chromaNotchX2, m_chromaNotchY1, m_chromaNotchY2;
+
     // Chroma accumulators (full-rate chroma demod, averaged over decimation period)
     float m_chromaUAccum;
     float m_chromaVAccum;

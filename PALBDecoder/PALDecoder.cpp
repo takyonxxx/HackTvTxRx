@@ -45,6 +45,8 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_resampleCounter(0)
     , m_notchB0(1.0f), m_notchB1(0.0f), m_notchB2(0.0f), m_notchA1(0.0f), m_notchA2(0.0f)
     , m_notchX1(0.0f), m_notchX2(0.0f), m_notchY1(0.0f), m_notchY2(0.0f)
+    , m_chromaNotchB0(1.0f), m_chromaNotchB1(0.0f), m_chromaNotchB2(0.0f), m_chromaNotchA1(0.0f), m_chromaNotchA2(0.0f)
+    , m_chromaNotchX1(0.0f), m_chromaNotchX2(0.0f), m_chromaNotchY1(0.0f), m_chromaNotchY2(0.0f)
     , m_chromaUAccum(0.0f)
     , m_chromaVAccum(0.0f)
     , m_ampMin(-1.0f)
@@ -140,6 +142,7 @@ void PALDecoder::setSampleRate(int sampleRate)
 
     // Reset notch filter state
     m_notchX1 = m_notchX2 = m_notchY1 = m_notchY2 = 0.0f;
+    m_chromaNotchX1 = m_chromaNotchX2 = m_chromaNotchY1 = m_chromaNotchY2 = 0.0f;
 
     // Clear filter delays
     m_videoFilterDelay.clear();
@@ -260,6 +263,41 @@ void PALDecoder::initNotchFilter()
     m_notchX1 = m_notchX2 = m_notchY1 = m_notchY2 = 0.0f;
 
     qDebug() << "  Audio notch filter:" << beatFreq / 1e6f << "MHz, BW:" << notchBW / 1e3f << "kHz, R:" << R;
+
+    // === Chroma subcarrier notch at 4.43 MHz ===
+    // This removes the colour subcarrier from the luma path, preventing
+    // the vertical coloured stripes (dot crawl) that appear when chroma
+    // energy leaks into luma.
+    float chromaFreq = COLOR_CARRIER_FREQ;
+    if (chromaFreq >= rate / 2.0f) {
+        chromaFreq = rate - chromaFreq;
+        if (chromaFreq < 0) chromaFreq = -chromaFreq;
+    }
+    float cw0 = 2.0f * static_cast<float>(M_PI) * chromaFreq / rate;
+    float cBW = 600e3f;  // 600 kHz notch bandwidth - wide enough to catch subcarrier
+    float cbw = 2.0f * static_cast<float>(M_PI) * cBW / rate;
+    float cR = 1.0f - cbw / 2.0f;
+    if (cR < 0.8f) cR = 0.8f;
+    if (cR > 0.999f) cR = 0.999f;
+
+    float ccosw = std::cos(cw0);
+    m_chromaNotchB0 = 1.0f;
+    m_chromaNotchB1 = -2.0f * ccosw;
+    m_chromaNotchB2 = 1.0f;
+    m_chromaNotchA1 = -2.0f * cR * ccosw;
+    m_chromaNotchA2 = cR * cR;
+
+    float cdcGain = (m_chromaNotchB0 + m_chromaNotchB1 + m_chromaNotchB2) /
+                    (1.0f + m_chromaNotchA1 + m_chromaNotchA2);
+    if (std::fabs(cdcGain) > 0.01f) {
+        m_chromaNotchB0 /= cdcGain;
+        m_chromaNotchB1 /= cdcGain;
+        m_chromaNotchB2 /= cdcGain;
+    }
+
+    m_chromaNotchX1 = m_chromaNotchX2 = m_chromaNotchY1 = m_chromaNotchY2 = 0.0f;
+
+    qDebug() << "  Chroma notch filter:" << chromaFreq / 1e6f << "MHz, BW:" << cBW / 1e3f << "kHz, R:" << cR;
 }
 
 void PALDecoder::rebuildColorLUT()
@@ -528,9 +566,14 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         processSample(normalized);
 
         // === CHROMA at FULL sample rate (before decimation) ===
-        // PAL chroma: C = (R-Y)sin(wt) + (B-Y)cos(wt)
-        // Demod: multiply by sin -> extract V (R-Y), multiply by cos -> extract U (B-Y)
-        // PAL switching: V (R-Y) component phase is inverted on alternate lines
+        // CRITICAL: Chroma demod must use the composite baseband signal WITH phase info.
+        // The AM envelope (magnitude) loses phase, making chroma demod impossible.
+        // After NCO shift + IQ LPF, filtered.real() IS the composite baseband
+        // (video carrier shifted to DC, so real part = AM envelope * cos(0) = baseband).
+        // Actually for proper AM demod composite: use magnitude for luma, but for chroma
+        // we need the original composite. The magnitude IS the composite for AM signals.
+        // The issue is that our chroma LUT phase drifts because we have no burst PLL.
+        // For now, use the magnitude-based normalized signal but ensure proper filtering.
         if (m_colorMode && !m_colorCarrierSin.empty()) {
             float carrierSin = m_colorCarrierSin[m_colorCarrierIndex];
             float carrierCos = m_colorCarrierCos[m_colorCarrierIndex];
@@ -538,13 +581,27 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
             if (m_colorCarrierIndex >= static_cast<int>(m_colorCarrierSin.size()))
                 m_colorCarrierIndex = 0;
 
-            // U = B-Y (demod with cos), V = R-Y (demod with sin)
-            float chromaU = normalized * carrierCos;
-            // PAL switching: flip V phase on alternate lines
-            float chromaV = normalized * carrierSin * (m_vPhaseAlternate ? -1.0f : 1.0f);
+            // Use magnitude (before notch/AGC) for chroma demod - preserves subcarrier
+            // The audio notch removes energy near 5.5 MHz which could affect chroma
+            float chromaSample = magnitude;
+            float chromaU = chromaSample * carrierCos;
+            float chromaV = chromaSample * carrierSin * (m_vPhaseAlternate ? -1.0f : 1.0f);
 
             m_chromaUAccum += applyChromaFilterU(chromaU);
             m_chromaVAccum += applyChromaFilterV(chromaV);
+        }
+
+        // === Chroma subcarrier notch at FULL rate (before decimation) ===
+        // ALWAYS apply to luma path: the 4.43 MHz subcarrier creates
+        // visible vertical stripe artifacts if left in luma.
+        // Applied at full rate (not after decimation) to avoid aliasing.
+        float lumaSignal;
+        {
+            float cn = m_chromaNotchB0 * normalized + m_chromaNotchB1 * m_chromaNotchX1 + m_chromaNotchB2 * m_chromaNotchX2
+                      - m_chromaNotchA1 * m_chromaNotchY1 - m_chromaNotchA2 * m_chromaNotchY2;
+            m_chromaNotchX2 = m_chromaNotchX1; m_chromaNotchX1 = normalized;
+            m_chromaNotchY2 = m_chromaNotchY1; m_chromaNotchY1 = cn;
+            lumaSignal = cn;
         }
 
         // === Decimate for luma + output chroma ===
@@ -552,16 +609,17 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         if (m_resampleCounter < m_decimFactor) continue;
         m_resampleCounter = 0;
 
-        // Luma at decimated rate
-        float luma = applyLumaFilter(normalized);
+        // Luma at decimated rate (chroma subcarrier removed)
+        float luma = applyLumaFilter(lumaSignal);
 
         // Chroma: average accumulated values over decimation period
         float u = 0.0f, v = 0.0f;
         if (m_colorMode && !m_colorCarrierSin.empty()) {
             float invDecim = 1.0f / static_cast<float>(m_decimFactor);
-            // PAL switching already applied during demod (V flipped on alternate lines)
-            u = m_chromaUAccum * invDecim * 2.5f;
-            v = m_chromaVAccum * invDecim * 2.5f;
+            // Scale chroma by AGC since we use raw magnitude (not normalized)
+            float chromaScale = (m_ampDelta > 0.001f) ? (invDecim * 4.0f / m_ampDelta) : invDecim;
+            u = m_chromaUAccum * chromaScale;
+            v = m_chromaVAccum * chromaScale;
             m_chromaUAccum = 0.0f;
             m_chromaVAccum = 0.0f;
         }

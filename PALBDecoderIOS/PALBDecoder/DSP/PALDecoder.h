@@ -9,18 +9,7 @@
 #include <functional>
 #include <cstring>
 #include <algorithm>
-
-template<typename T, int MAX_TAPS>
-struct FIRDelay {
-    T buf[MAX_TAPS] = {};
-    int pos = 0, len = 0;
-    void reset() { memset(buf, 0, sizeof(buf)); pos = 0; }
-    void setLen(int n) { len = n; reset(); }
-    inline void push(const T& val) { pos = (pos == 0) ? len - 1 : pos - 1; buf[pos] = val; }
-    inline T apply(const float* taps) const {
-        T out{}; for (int i = 0; i < len; i++) out += buf[(pos + i) % len] * taps[i]; return out;
-    }
-};
+#include <deque>
 
 class PALDecoder
 {
@@ -69,20 +58,14 @@ private:
     static constexpr int VSYNC_LINES = 3;
     static constexpr int FIRST_VISIBLE_LINE = 23;
     static constexpr float COLOR_CARRIER_FREQ = 4433618.75f;
-    static constexpr int MAX_FIR = 72;
-
-    // NCO LUT
-    static constexpr int NCO_LUT_BITS = 12;
-    static constexpr int NCO_LUT_SIZE = 1 << NCO_LUT_BITS;
-    float m_ncoSin[NCO_LUT_SIZE];
-    float m_ncoCos[NCO_LUT_SIZE];
-    uint32_t m_ncoAccum = 0, m_ncoStep = 0;
-    float m_videoCarrierOffsetHz = 0;
-    uint64_t m_tuneFrequency = 479300000ULL;
 
     std::mutex m_processMutex;
     FrameCallback m_frameCallback;
     SyncStatsCallback m_syncStatsCallback;
+
+    double m_ncoPhase, m_ncoPhaseIncrement;
+    float m_videoCarrierOffsetHz;
+    uint64_t m_tuneFrequency;
 
     int m_sampleRate, m_decimFactor;
     float m_decimatedRate, m_chromaBandwidth;
@@ -98,21 +81,27 @@ private:
     int m_fieldDetectSampleCount, m_vSyncDetectSampleCount;
     int m_vSyncDetectThreshold, m_fieldDetectThreshold1, m_fieldDetectThreshold2;
 
-    // Video IQ FIR - separate I and Q float delay lines (faster than complex)
     std::vector<float> m_videoFilterTaps;
-    FIRDelay<float, MAX_FIR> m_vidFirI, m_vidFirQ;
-
+    std::deque<std::complex<float>> m_videoFilterDelay;
     std::vector<float> m_lumaFilterTaps;
-    FIRDelay<float, 48> m_lumaFir;
-
+    std::deque<float> m_lumaFilterDelay;
     std::vector<float> m_chromaFilterTaps;
-    FIRDelay<float, MAX_FIR> m_chromaFirU, m_chromaFirV;
+    std::deque<float> m_chromaUFilterDelay, m_chromaVFilterDelay;
 
-    float m_dcX1 = 0, m_dcY1 = 0;
-    int m_resampleCounter = 0;
-    float m_chromaUAccum = 0, m_chromaVAccum = 0;
+    float m_dcBlockerX1, m_dcBlockerY1;
+    int m_resampleCounter;
+
+    // Audio carrier notch (5.5 MHz)
+    float m_notchB0, m_notchB1, m_notchB2, m_notchA1, m_notchA2;
+    float m_notchX1, m_notchX2, m_notchY1, m_notchY2;
+
+    // Chroma subcarrier notch (4.43 MHz) - removes from luma
+    float m_chromaNotchB0, m_chromaNotchB1, m_chromaNotchB2, m_chromaNotchA1, m_chromaNotchA2;
+    float m_chromaNotchX1, m_chromaNotchX2, m_chromaNotchY1, m_chromaNotchY2;
+
+    float m_chromaUAccum, m_chromaVAccum;
     float m_ampMin, m_ampMax, m_ampDelta, m_effMin, m_effMax;
-    int m_amSampleIndex = 0;
+    int m_amSampleIndex;
 
     std::vector<float> m_lineBuffer, m_lineBufferU, m_lineBufferV;
     std::vector<uint8_t> m_frameBuffer;
@@ -134,17 +123,21 @@ private:
     void updateNCO();
     void applyStandard();
     void initFilters();
+    void initNotchFilter();
     void rebuildColorLUT();
     std::vector<float> designLowPassFIR(float cutoff, float sr, int n);
     std::vector<float> designBandPassFIR(float cf, float bw, float sr, int n);
-
-    inline float dcBlock(float s) { float o = s - m_dcX1 + 0.995f * m_dcY1; m_dcX1 = s; m_dcY1 = o; return o; }
+    std::complex<float> applyVideoFilter(const std::complex<float>& sample);
+    float applyLumaFilter(float sample);
+    float applyChromaFilterU(float sample);
+    float applyChromaFilterV(float sample);
+    float dcBlock(float sample);
     float normalizeAndAGC(float sample);
     void processSample(float sample);
     void processEndOfLine();
     void renderLine();
     void buildFrame();
-    inline float clip(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
+    inline float clip(float v, float lo, float hi) { return v<lo?lo:(v>hi?hi:v); }
     void yuv2rgb(float y, float u, float v, uint8_t& r, uint8_t& g, uint8_t& b);
 };
 
