@@ -59,7 +59,7 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_videoGain(1.5f)
     , m_videoOffset(0.0f)
     , m_videoInvert(true)
-    , m_syncLevel(0.20f)
+    , m_syncLevel(0.0f)
     , m_colorMode(false)
     , m_chromaGain(0.75f)
     , m_hSyncEnabled(true)
@@ -681,22 +681,14 @@ float PALDecoder::normalizeAndAGC(float sample)
     if (sample > m_effMax) m_effMax = sample;
     m_amSampleIndex++;
 
-    // Adaptive AGC window: fast convergence initially, stable afterward.
-    // First 2 frames use 1-line window for rapid lock, then switch to
-    // 2-frame window for stability.
-    int agcWindow;
-    if (m_frameCount < 2) {
-        agcWindow = m_samplesPerLine;  // 1 line = ~64 us
-    } else {
-        agcWindow = m_samplesPerLine * NB_LINES * 2;  // 2 frames = ~80 ms
-    }
-
-    if (m_amSampleIndex >= agcWindow) {
+    if (m_amSampleIndex >= m_samplesPerLine * NB_LINES * 2) {
         m_ampMax = m_effMax;
-        // No offset: sync tips normalize to 0.0, peak white to 1.0.
-        // PAL blanking level at ~0.30, black at ~0.30, white at ~1.0.
-        // Sync threshold should be set to ~0.15-0.20 (between sync=0 and blanking=0.30).
-        m_ampMin = m_effMin;
+        // Offset minimum below actual min (~10% of range).
+        // Sync tips normalize to ~0.09 (always positive).
+        // With threshold=0, no sync crossing occurs → flywheel free-runs.
+        // Increase threshold above 0.09 to enable sync detection.
+        float range = m_effMax - m_effMin;
+        m_ampMin = m_effMin - range * 0.10f;
         m_ampDelta = m_ampMax - m_ampMin;
         if (m_ampDelta <= 0.0f) m_ampDelta = 1.0f;
         m_effMin = 20.0f;
@@ -705,7 +697,7 @@ float PALDecoder::normalizeAndAGC(float sample)
     }
 
     float normalized = (sample - m_ampMin) / m_ampDelta;
-    // No lower clamp: sync tips may dip slightly below 0 due to noise.
+    // No lower clamp: sync tips may dip slightly below 0, enabling threshold=0 detection.
     // Upper clamp only to prevent overflow. Video rendering clips via clipValue().
     return (normalized > 1.0f) ? 1.0f : normalized;
 }
@@ -796,9 +788,12 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         processSample(normalized);
 
         // === CHROMA at FULL sample rate (before decimation) ===
-        // Demod on raw magnitude — the chroma "BPF" (which is actually a
-        // double-modulated filter with passband at both DC and 2*fsc) acts
-        // as lowpass on the demodulated signal, extracting baseband chroma.
+        // Demod on raw magnitude — the chroma BPF (bandpass at 4.43 MHz)
+        // inherently rejects DC and low-frequency luma content.
+        // Using magnitude instead of normalized because:
+        // 1. BPF already handles DC rejection (no need for dcBlock)
+        // 2. Raw magnitude preserves subcarrier amplitude for proper scaling
+        // 3. No AGC artifacts from normalizeAndAGC distorting chroma
         if (m_colorMode && !m_colorCarrierSin.empty()) {
             float carrierCos = m_colorCarrierCos[m_colorCarrierIndex];
             float carrierSin = m_colorCarrierSin[m_colorCarrierIndex];
@@ -806,7 +801,7 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
             if (m_colorCarrierIndex >= static_cast<int>(m_colorCarrierSin.size()))
                 m_colorCarrierIndex = 0;
 
-            // Multiply magnitude by carrier, then filter extracts chroma
+            // Multiply magnitude by carrier, then bandpass filter extracts chroma
             float chromaU = magnitude * carrierCos;
             float chromaV = magnitude * carrierSin * (m_vPhaseAlternate ? -1.0f : 1.0f);
 
@@ -872,7 +867,7 @@ void PALDecoder::processSample(float sample)
     if (m_hSyncEnabled)
     {
         if (m_prevSample >= m_syncLevel && sample < m_syncLevel
-            && m_sampleOffsetDetected > m_samplesPerLine * 3 / 4)
+            && m_sampleOffsetDetected > m_samplesPerLine - m_numberSamplesPerHTop)
         {
             float frac = (sample - m_syncLevel) / (m_prevSample - sample);
             float hSyncShift = -m_sampleOffset - m_sampleOffsetFrac - frac;
@@ -883,12 +878,10 @@ void PALDecoder::processSample(float sample)
                 hSyncShift += m_samplesPerLine;
 
             if (std::fabs(hSyncShift) > m_numberSamplesPerHTop) {
+                // Large error: flywheel is far off or false sync detected.
+                // Do NOT apply large corrections - they destabilize the image.
+                // Just count the error and let flywheel free-run.
                 m_hSyncErrorCount++;
-                if (m_hSyncErrorCount >= 4) {
-                    m_hSyncShift = hSyncShift;
-                    m_hSyncErrorCount = 0;
-                }
-                // Large error: count as detected but record the error
                 m_syncErrorAccum += static_cast<double>(std::fabs(hSyncShift));
             } else {
                 m_hSyncShift = hSyncShift * 0.2f;
