@@ -59,7 +59,7 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_videoGain(1.5f)
     , m_videoOffset(0.0f)
     , m_videoInvert(true)
-    , m_syncLevel(0.05f)
+    , m_syncLevel(0.20f)
     , m_colorMode(false)
     , m_chromaGain(0.75f)
     , m_hSyncEnabled(true)
@@ -681,14 +681,22 @@ float PALDecoder::normalizeAndAGC(float sample)
     if (sample > m_effMax) m_effMax = sample;
     m_amSampleIndex++;
 
-    if (m_amSampleIndex >= m_samplesPerLine * NB_LINES * 2) {
+    // Adaptive AGC window: fast convergence initially, stable afterward.
+    // First 2 frames use 1-line window for rapid lock, then switch to
+    // 2-frame window for stability.
+    int agcWindow;
+    if (m_frameCount < 2) {
+        agcWindow = m_samplesPerLine;  // 1 line = ~64 us
+    } else {
+        agcWindow = m_samplesPerLine * NB_LINES * 2;  // 2 frames = ~80 ms
+    }
+
+    if (m_amSampleIndex >= agcWindow) {
         m_ampMax = m_effMax;
-        // Offset minimum below actual min (~10% of range).
-        // PAL sync tips are the lowest point. With 10% offset, sync tips
-        // normalize to about -0.1, blanking to ~0.2, white to ~0.9.
-        // This ensures threshold=0 catches sync falling edges reliably.
-        float range = m_effMax - m_effMin;
-        m_ampMin = m_effMin - range * 0.10f;
+        // No offset: sync tips normalize to 0.0, peak white to 1.0.
+        // PAL blanking level at ~0.30, black at ~0.30, white at ~1.0.
+        // Sync threshold should be set to ~0.15-0.20 (between sync=0 and blanking=0.30).
+        m_ampMin = m_effMin;
         m_ampDelta = m_ampMax - m_ampMin;
         if (m_ampDelta <= 0.0f) m_ampDelta = 1.0f;
         m_effMin = 20.0f;
@@ -697,7 +705,7 @@ float PALDecoder::normalizeAndAGC(float sample)
     }
 
     float normalized = (sample - m_ampMin) / m_ampDelta;
-    // No lower clamp: sync tips may dip slightly below 0, enabling threshold=0 detection.
+    // No lower clamp: sync tips may dip slightly below 0 due to noise.
     // Upper clamp only to prevent overflow. Video rendering clips via clipValue().
     return (normalized > 1.0f) ? 1.0f : normalized;
 }
@@ -788,12 +796,9 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         processSample(normalized);
 
         // === CHROMA at FULL sample rate (before decimation) ===
-        // Demod on raw magnitude — the chroma BPF (bandpass at 4.43 MHz)
-        // inherently rejects DC and low-frequency luma content.
-        // Using magnitude instead of normalized because:
-        // 1. BPF already handles DC rejection (no need for dcBlock)
-        // 2. Raw magnitude preserves subcarrier amplitude for proper scaling
-        // 3. No AGC artifacts from normalizeAndAGC distorting chroma
+        // Demod on raw magnitude — the chroma "BPF" (which is actually a
+        // double-modulated filter with passband at both DC and 2*fsc) acts
+        // as lowpass on the demodulated signal, extracting baseband chroma.
         if (m_colorMode && !m_colorCarrierSin.empty()) {
             float carrierCos = m_colorCarrierCos[m_colorCarrierIndex];
             float carrierSin = m_colorCarrierSin[m_colorCarrierIndex];
@@ -801,7 +806,7 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
             if (m_colorCarrierIndex >= static_cast<int>(m_colorCarrierSin.size()))
                 m_colorCarrierIndex = 0;
 
-            // Multiply magnitude by carrier, then bandpass filter extracts chroma
+            // Multiply magnitude by carrier, then filter extracts chroma
             float chromaU = magnitude * carrierCos;
             float chromaV = magnitude * carrierSin * (m_vPhaseAlternate ? -1.0f : 1.0f);
 
@@ -867,7 +872,7 @@ void PALDecoder::processSample(float sample)
     if (m_hSyncEnabled)
     {
         if (m_prevSample >= m_syncLevel && sample < m_syncLevel
-            && m_sampleOffsetDetected > m_samplesPerLine - m_numberSamplesPerHTop)
+            && m_sampleOffsetDetected > m_samplesPerLine * 3 / 4)
         {
             float frac = (sample - m_syncLevel) / (m_prevSample - sample);
             float hSyncShift = -m_sampleOffset - m_sampleOffsetFrac - frac;

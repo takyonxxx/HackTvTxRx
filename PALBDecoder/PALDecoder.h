@@ -183,6 +183,11 @@ private:
     std::vector<float> m_prevLineU;
     std::vector<float> m_prevLineV;
 
+    // ========== 1H Comb Filter (line delay for luma/chroma separation) ==========
+    std::vector<float> m_prevLineSamples;      // previous line's normalized samples at full rate
+    std::vector<float> m_currentLineSamples;   // current line's normalized samples at full rate
+    int m_fullRateSampleIndex;                 // sample index within current line (full rate)
+
     // ========== Colour Burst PLL ==========
     // Back porch burst window (samples at full rate)
     int m_burstStartSample;       // start of burst window (~5.6 us from line start)

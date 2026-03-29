@@ -153,9 +153,12 @@ void MainWindow::setupUI()
     videoGroup->setFixedWidth(736);
     leftColumn->addWidget(videoGroup);
 
-    // Video Processing Controls (BELOW VIDEO)
+    // Video Processing + Audio Controls SIDE BY SIDE
+    QHBoxLayout* bottomControlsLayout = new QHBoxLayout();
+    bottomControlsLayout->setSpacing(10);
+
+    // Video Processing Controls (LEFT)
     QGroupBox* videoControlGroup = new QGroupBox("Video Processing", this);
-    videoControlGroup->setMaximumWidth(736); // Video ile aynı genişlik
     QVBoxLayout* videoControlLayout = new QVBoxLayout(videoControlGroup);
 
     // Video Gain
@@ -242,11 +245,10 @@ void MainWindow::setupUI()
 
     videoControlLayout->addLayout(chromaGainLayout);
 
-    leftColumn->addWidget(videoControlGroup);
+    bottomControlsLayout->addWidget(videoControlGroup);
 
-    // Audio Controls (NEW - BELOW VIDEO CONTROLS)
+    // Audio Controls (RIGHT side, next to Video Processing)
     QGroupBox* audioControlGroup = new QGroupBox("Audio Controls", this);
-    audioControlGroup->setMaximumWidth(736);
     QVBoxLayout* audioControlLayout = new QVBoxLayout(audioControlGroup);
 
     // Audio Enable Checkbox
@@ -310,7 +312,9 @@ void MainWindow::setupUI()
     volumeLayout->addWidget(m_volumeLabel);
     audioControlLayout->addLayout(volumeLayout);
 
-    leftColumn->addWidget(audioControlGroup);
+    bottomControlsLayout->addWidget(audioControlGroup);
+
+    leftColumn->addLayout(bottomControlsLayout);
 
     leftColumn->addStretch();
 
