@@ -47,7 +47,11 @@ Based on [fsphil/hacktv](https://github.com/fsphil/hacktv) with significant modi
 - **Channel Selection**: UHF/VHF European TV channel presets with fine-tuning controls
 - **Optimized DSP**: Separate I/Q FIR filters, NCO lookup table, fast magnitude approximation, 15-tap video FIR, decimation factor 2 at 12.5 MHz for efficient mobile performance
 
-![PALBDecoderIOS Screenshot](palbdecoder_ios.png)
+<p align="center">
+  <img src="palbdecoder_ios.png" alt="PALBDecoderIOS TV Mode" width="300"/>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="palbdecoder_ios_radio.png" alt="PALBDecoderIOS Radio Mode" width="300"/>
+</p>
 
 ## Architecture
 
