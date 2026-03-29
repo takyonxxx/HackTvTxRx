@@ -39,6 +39,16 @@ Based on [fsphil/hacktv](https://github.com/fsphil/hacktv) with significant modi
 
 ![PALBDecoder Screenshot](paldecoder.jpg)
 
+### PALBDecoderIOS - Mobile TV Receiver
+- **iOS/macOS Port**: Native Swift/Qt port of PALBDecoder for iPhone and iPad
+- **Network Streaming**: Connects to HackRF TCP IQ Server (HackRfTcp) over WiFi — no USB connection needed on the mobile device
+- **TV & Radio Modes**: PAL-B/G video decoding and FM radio demodulation
+- **Real-time Stats**: FPS, sync quality, data rate, and sample rate display
+- **Channel Selection**: UHF/VHF European TV channel presets with fine-tuning controls
+- **Optimized DSP**: Separate I/Q FIR filters, NCO lookup table, fast magnitude approximation, 15-tap video FIR, decimation factor 2 at 12.5 MHz for efficient mobile performance
+
+![PALBDecoderIOS Screenshot](palbdecoder_ios.png)
+
 ## Architecture
 
 ### PAL-B/G Audio Demodulation Pipeline
@@ -168,6 +178,10 @@ HackTvRxTx/
 │   ├── audiodemodulator.*  # FM audio demodulator (dynamic decimation chain)
 │   ├── audiooutput.cpp/h  # Audio playback engine (48 kHz, FFmpeg backend)
 │   └── FrameBuffer.h      # IQ frame accumulator (40ms PAL frames)
+├── PALBDecoderIOS/        # iOS/macOS mobile TV decoder (connects via WiFi)
+├── HackRfTcp/             # HackRF TCP IQ Server (headless, runs on Raspberry Pi)
+│   ├── main.cpp           # Server entry point
+│   └── sdrdevice.cpp/h    # TCP streaming IQ server (data port + control port)
 ├── include/               # Shared headers
 └── lib/                   # Pre-built libraries (windows/macos/linux)
 ```
@@ -247,6 +261,158 @@ sudo apt install libhackrf-dev libusb-1.0-0-dev librtlsdr-dev \
   libavcodec-dev libavformat-dev libavutil-dev libswresample-dev \
   libfftw3-dev libportaudio-ocaml-dev libopus-dev
 ```
+
+### Raspberry Pi (Debian Bookworm, aarch64)
+
+Raspberry Pi OS minimal images don't include `-dev` packages. All dependencies must be built from source.
+
+**1. Install base build tools:**
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install build-essential cmake autoconf automake libtool pkg-config git qt6-base-dev qt6-multimedia-dev
+```
+
+**2. Build libusb (header + pkg-config):**
+
+```bash
+cd /tmp
+git clone https://github.com/libusb/libusb.git
+cd libusb
+./autogen.sh && ./configure && make
+sudo make install && sudo ldconfig
+```
+
+**3. Build libhackrf:**
+
+```bash
+cd /tmp
+git clone https://github.com/greatscottgadgets/hackrf.git
+cd hackrf && git checkout v2024.02.1
+cd host && mkdir build && cd build
+cmake ../libhackrf
+make && sudo make install && sudo ldconfig
+```
+
+**4. Build PortAudio:**
+
+```bash
+cd /tmp
+git clone https://github.com/PortAudio/portaudio.git
+cd portaudio && cmake -B build && cmake --build build
+sudo cmake --install build && sudo ldconfig
+```
+
+**5. Build FFTW3 (float):**
+
+```bash
+cd /tmp
+wget http://www.fftw.org/fftw-3.3.10.tar.gz
+tar xzf fftw-3.3.10.tar.gz && cd fftw-3.3.10
+./configure --enable-float --enable-shared --prefix=/usr/local
+make -j4 && sudo make install && sudo ldconfig
+```
+
+**6. Build Opus:**
+
+```bash
+cd /tmp
+git clone https://github.com/xiph/opus.git
+cd opus && mkdir build && cd build
+cmake .. -DBUILD_SHARED_LIBS=ON
+make -j4 && sudo make install && sudo ldconfig
+```
+
+**7. Build FDK-AAC:**
+
+```bash
+cd /tmp
+git clone https://github.com/mstorsjo/fdk-aac.git
+cd fdk-aac && mkdir build && cd build
+cmake .. -DBUILD_SHARED_LIBS=ON
+make -j4 && sudo make install && sudo ldconfig
+```
+
+**8. Build RTL-SDR:**
+
+```bash
+cd /tmp
+git clone https://github.com/osmocom/rtl-sdr.git
+cd rtl-sdr && mkdir build && cd build
+cmake .. && make && sudo make install && sudo ldconfig
+```
+
+**9. Install FFmpeg dev (if not available via apt):**
+
+```bash
+sudo apt install libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev libavdevice-dev libavfilter-dev
+```
+
+If apt packages are unavailable, build from source:
+
+```bash
+cd /tmp
+git clone https://git.ffmpeg.org/ffmpeg.git
+cd ffmpeg
+./configure --enable-shared --disable-static --prefix=/usr/local
+make -j4 && sudo make install && sudo ldconfig
+```
+
+**10. Build HackTvLib:**
+
+```bash
+cd HackTvLib
+qmake6 HackTvLib.pro
+make
+```
+
+**11. Build HackRfTcp:**
+
+```bash
+cd HackRfTcp
+qmake6 HackRfTcp.pro
+make
+```
+
+**12. Run:**
+
+```bash
+export LD_LIBRARY_PATH=$(pwd)/../lib/linux:$LD_LIBRARY_PATH
+./HackRfTcp
+```
+
+**13. Install as systemd service (optional):**
+
+```bash
+sudo tee /etc/systemd/system/hackrftcp.service << 'EOF'
+[Unit]
+Description=HackRF TCP IQ Server
+After=network.target
+
+[Service]
+ExecStart=/home/pi/HackRf/HackRfTcp/HackRfTcp
+WorkingDirectory=/home/pi/HackRf/HackRfTcp
+Environment=LD_LIBRARY_PATH=/home/pi/HackRf/lib/linux
+User=root
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable hackrftcp.service
+sudo systemctl start hackrftcp.service
+```
+
+Monitor the service:
+
+```bash
+sudo journalctl -u hackrftcp.service -f
+```
+
+> **Note:** HackRF One draws significant USB current. Use a powered USB hub or a 5V/5A power supply to avoid undervoltage issues on the Raspberry Pi.
 
 ## Supported TV Modes (TX)
 
