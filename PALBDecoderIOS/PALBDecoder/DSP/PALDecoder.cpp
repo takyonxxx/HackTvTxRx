@@ -14,7 +14,7 @@ PALDecoder::PALDecoder()
     , m_vSyncDetectThreshold(0), m_fieldDetectThreshold1(0), m_fieldDetectThreshold2(0)
     , m_ampMin(-1), m_ampMax(1), m_ampDelta(2), m_effMin(20), m_effMax(-20)
     , m_videoGain(1.5f), m_videoOffset(0), m_videoInvert(true), m_colorMode(false)
-    , m_syncLevel(0.05f), m_chromaGain(0.75f), m_hSyncEnabled(true), m_vSyncEnabled(true)
+    , m_syncLevel(0.20f), m_chromaGain(0.75f), m_hSyncEnabled(true), m_vSyncEnabled(true)
     , m_totalSamples(0), m_frameCount(0), m_linesProcessed(0), m_syncDetected(0)
     , m_syncQualityWindow(0), m_syncFoundInWindow(0), m_syncErrorAccum(0), m_lastSyncQuality(0)
     , m_vPhaseAlternate(false), m_colorCarrierIndex(0)
@@ -125,9 +125,12 @@ std::vector<float> PALDecoder::designBandPassFIR(float cf, float bw, float sr, i
 
 float PALDecoder::normalizeAndAGC(float s) {
     if(s<m_effMin)m_effMin=s; if(s>m_effMax)m_effMax=s;
-    if(++m_amSampleIndex >= m_samplesPerLine*NB_LINES*2) {
-        m_ampMax=m_effMax; float r=m_effMax-m_effMin;
-        m_ampMin=m_effMin-r*0.1f; m_ampDelta=m_ampMax-m_ampMin;
+    // Adaptive window: per-line for first 2 frames, then 2-frame period
+    int agcPeriod = (m_frameCount < 2) ? m_samplesPerLine : m_samplesPerLine*NB_LINES*2;
+    if(++m_amSampleIndex >= agcPeriod) {
+        m_ampMax=m_effMax;
+        // No offset: sync tips at 0.0, threshold should be ~0.20
+        m_ampMin=m_effMin; m_ampDelta=m_ampMax-m_ampMin;
         if(m_ampDelta<=0)m_ampDelta=1;
         m_effMin=20;m_effMax=-20;m_amSampleIndex=0;
     }
@@ -152,7 +155,7 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
     float ampMin = m_ampMin, ampDelta = m_ampDelta;
     float effMin = m_effMin, effMax = m_effMax;
     int amIdx = m_amSampleIndex;
-    const int agcPeriod = m_samplesPerLine * NB_LINES * 2;
+    const int agcPeriod = (m_frameCount < 2) ? m_samplesPerLine : m_samplesPerLine * NB_LINES * 2;
     float ampMax = m_ampMax;
     float prevSample = m_prevSample;
     const float syncLevel = m_syncLevel;
@@ -181,8 +184,8 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
         if (mag < effMin) effMin = mag;
         if (mag > effMax) effMax = mag;
         if (++amIdx >= agcPeriod) {
-            ampMax = effMax; float r = effMax - effMin;
-            ampMin = effMin - r * 0.1f; ampDelta = ampMax - ampMin;
+            ampMax = effMax;
+            ampMin = effMin; ampDelta = ampMax - ampMin;
             if (ampDelta <= 0) ampDelta = 1;
             effMin = 20; effMax = -20; amIdx = 0;
         }
@@ -191,7 +194,7 @@ void PALDecoder::processSamples(const int8_t* data, size_t len) {
 
         // Inline sync
         if (prevSample >= syncLevel && norm < syncLevel &&
-            m_sampleOffsetDetected > spl - hTop) {
+            m_sampleOffsetDetected > spl * 3 / 4) {
             float fr = (norm - syncLevel) / (prevSample - norm);
             float hs = -m_sampleOffset - m_sampleOffsetFrac - fr;
             if (hs > spl/2) hs -= spl;
