@@ -115,8 +115,8 @@ void RadioWindow::loadSettings()
     m_txGainSlider->setValue(s.value("txGain", 47).toInt());
     m_amplitudeSlider->setValue(s.value("amplitude", 10).toInt());
     m_modIndexSlider->setValue(s.value("modIndex", 40).toInt());
-    m_rxGainSlider->setValue(s.value("rxGain", 30).toInt());
-    m_deemphSlider->setValue(s.value("deemph", 0).toInt());
+    m_rxGainSlider->setValue(s.value("rxGain", 45).toInt());
+    m_deemphSlider->setValue(s.value("deemph", 750).toInt());
 
     // Window geometry
     if (s.contains("geometry"))
@@ -256,8 +256,8 @@ void RadioWindow::setupUi()
     g->addWidget(new QLabel("Mod Idx:"), row, 0); g->addWidget(m_modIndexSlider, row, 1); g->addWidget(m_modIndexLabel, row, 2); row++;
 
     // RX audio gain (0.1 - 10.0, slider 1-100, display /10)
-    m_rxGainSlider = new QSlider(Qt::Horizontal); m_rxGainSlider->setRange(1, 100); m_rxGainSlider->setValue(30);
-    m_rxGainLabel = new QLabel("3.0");
+    m_rxGainSlider = new QSlider(Qt::Horizontal); m_rxGainSlider->setRange(1, 100); m_rxGainSlider->setValue(45);
+    m_rxGainLabel = new QLabel("4.5");
     connect(m_rxGainSlider, &QSlider::valueChanged, [this](int v) {
         float gain = v / 10.0f;
         m_rxGainLabel->setText(QString::number(gain, 'f', 1));
@@ -266,8 +266,8 @@ void RadioWindow::setupUi()
     g->addWidget(new QLabel("RX Gain:"), row, 0); g->addWidget(m_rxGainSlider, row, 1); g->addWidget(m_rxGainLabel, row, 2); row++;
 
     // De-emphasis tau (0 - 1000 us, slider 0-1000, 0=off)
-    m_deemphSlider = new QSlider(Qt::Horizontal); m_deemphSlider->setRange(0, 1000); m_deemphSlider->setValue(0);
-    m_deemphLabel = new QLabel("OFF");
+    m_deemphSlider = new QSlider(Qt::Horizontal); m_deemphSlider->setRange(0, 1000); m_deemphSlider->setValue(750);
+    m_deemphLabel = new QLabel("750us");
     connect(m_deemphSlider, &QSlider::valueChanged, [this](int v) {
         if (v == 0) m_deemphLabel->setText("OFF");
         else m_deemphLabel->setText(QString("%1us").arg(v));

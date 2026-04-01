@@ -95,17 +95,16 @@ void FMDemodulator::rebuildChain()
 
     double rate = m_inputRate;
 
-    // Determine if NBFM or WBFM based on bandwidth
     bool isNBFM = (m_bandwidth <= 25000.0);
 
-    // For NBFM: use wider IQ target to preserve signal quality
-    // NBFM needs ~4x bandwidth for clean demod, minimum 100kHz for good SNR
-    // For WBFM: ~300kHz as before
+    // IQ decimation target:
+    // NBFM (Yaesu FT-60 etc): +-5kHz deviation, 12.5kHz channel
+    //   Need at least 10x deviation = 50kHz IF bandwidth for clean demod
+    //   But keep enough headroom: target 200kHz for good phase tracking
+    // WBFM: +-75kHz deviation, need ~300kHz
     double iqTarget;
     if (isNBFM) {
-        // NBFM: don't decimate too aggressively
-        // Keep at least 100kHz post-decimation rate for clean FM demod
-        iqTarget = std::max(m_bandwidth * 8.0, 100000.0);
+        iqTarget = 200000.0;  // 200kHz - gives clean FM demod for 5kHz deviation
     } else {
         iqTarget = std::max(m_bandwidth * 2.0, 300000.0);
     }
@@ -135,7 +134,7 @@ void FMDemodulator::rebuildChain()
         rate = newRate;
     }
 
-    // Phase 2: Real decimation - bring rate toward ~50 kHz
+    // Phase 2: Real decimation - bring rate toward ~48 kHz
     while (rate > 96000.0) {
         int best = 0;
         for (int f : candidates) {
@@ -158,24 +157,34 @@ void FMDemodulator::rebuildChain()
         rate = newRate;
     }
 
-    // Audio filter and output gain depend on mode
+    // Audio filter and output gain
     if (isNBFM) {
-        // NBFM: 3.5 kHz audio bandwidth, higher gain (narrow deviation = weak audio)
-        m_audioFilterTaps = designLPF(31, 3500.0f, 48000.0f);
-        m_outputGain = 3.0f;
+        // Yaesu FT-60 NFM: audio 300Hz-3kHz, deviation +-5kHz
+        // Audio LPF at 3.0kHz matches FT-60 receive audio passband
+        m_audioFilterTaps = designLPF(31, 3000.0f, 48000.0f);
+        // Gain: FM demod phase delta is proportional to deviation
+        // For +-5kHz deviation at 200kHz IF rate: delta_max = 2*pi*5000/200000 = 0.157 rad
+        // We want ~0.7 output peak, so gain = 0.7/0.157 = ~4.5
+        m_outputGain = 4.5f;
+        // Default de-emphasis 750us (standard NFM, matching FT-60 pre-emphasis)
+        if (m_deemphTau <= 0.0f) {
+            m_deemphTau = 750e-6f;
+        }
     } else {
-        // WBFM: 15 kHz audio bandwidth, standard gain
+        // WBFM: 15 kHz audio bandwidth
         m_audioFilterTaps = designLPF(31, 15000.0f, 48000.0f);
         m_outputGain = 0.5f;
+        m_deemphTau = 0.0f;  // WFM has its own de-emphasis in MPX
     }
 
     // IQ bandwidth filter at post-decimation rate
     double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
 
-    // For NBFM use wider filter than channel bandwidth for better audio
     float filterBW;
     if (isNBFM) {
-        filterBW = static_cast<float>(std::min(m_bandwidth * 2.0, postDecimRate * 0.45));
+        // FT-60 NFM: +-5kHz deviation = 10kHz signal BW
+        // Use 15kHz filter for clean edges without cutting sidebands
+        filterBW = static_cast<float>(std::min(15000.0, postDecimRate * 0.45));
     } else {
         filterBW = static_cast<float>(std::min(m_bandwidth, postDecimRate * 0.45));
     }
