@@ -95,6 +95,16 @@ private:
     int m_numberSamplesPerLineSignals;
     int m_numberSamplesHSyncCrop;
 
+    // Sync pulse width validation: count how many samples stay below threshold
+    // to distinguish real sync pulses (~4.7 us) from video content dips
+    int m_syncPulseCounter;          // samples below threshold in current candidate pulse
+    int m_syncPulseMinWidth;         // minimum pulse width to accept (samples) ~2 us
+    int m_syncPulseMaxWidth;         // maximum pulse width to accept (samples) ~6 us
+    float m_syncPulseEntryFrac;      // fractional sample at zero-crossing entry
+    int m_syncPulseEntryOffset;      // m_sampleOffset when pulse started
+    float m_syncPulseEntryOffsetFrac; // m_sampleOffsetFrac when pulse started
+    bool m_syncPulseActive;          // currently tracking a candidate pulse
+
     // ========== VSync ==========
     int m_lineIndex;
     int m_fieldIndex;

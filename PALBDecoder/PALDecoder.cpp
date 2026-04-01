@@ -29,6 +29,13 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_numberSamplesPerHSync(0)
     , m_numberSamplesPerLineSignals(0)
     , m_numberSamplesHSyncCrop(0)
+    , m_syncPulseCounter(0)
+    , m_syncPulseMinWidth(0)
+    , m_syncPulseMaxWidth(0)
+    , m_syncPulseEntryFrac(0.0f)
+    , m_syncPulseEntryOffset(0)
+    , m_syncPulseEntryOffsetFrac(0.0f)
+    , m_syncPulseActive(false)
     , m_lineIndex(0)
     , m_fieldIndex(0)
     , m_fieldDetectStartPos(0)
@@ -148,6 +155,8 @@ void PALDecoder::setSampleRate(int sampleRate)
     m_lineIndex = 0;
     m_fieldIndex = 0;
     m_colorCarrierIndex = 0;
+    m_syncPulseCounter = 0;
+    m_syncPulseActive = false;
 
     // Reset burst PLL
     m_burstCorrI = 0.0f;
@@ -187,6 +196,7 @@ void PALDecoder::setSampleRate(int sampleRate)
     qDebug() << "  Decimation:" << m_decimFactor << "-> video:" << m_decimatedRate / 1e6f << "MHz";
     qDebug() << "  Samples/line:" << m_samplesPerLine << "+" << m_samplesPerLineFrac << "(at" << m_sampleRate / 1e6f << "MHz)";
     qDebug() << "  HSync pulse:" << m_numberSamplesPerHTop << "Blanking:" << m_numberSamplesPerLineSignals;
+    qDebug() << "  Sync pulse validation: min" << m_syncPulseMinWidth << "max" << m_syncPulseMaxWidth << "samples";
     qDebug() << "  Chroma BW:" << m_chromaBandwidth / 1e6f << "MHz";
 }
 
@@ -202,6 +212,12 @@ void PALDecoder::applyStandard()
     m_numberSamplesPerHSync       = static_cast<int>(HSYNC_FRAC * exactSPL);
     m_numberSamplesPerLineSignals = static_cast<int>(BLANKING_FRAC * exactSPL);
     m_numberSamplesHSyncCrop      = static_cast<int>(HSYNC_CROP_FRAC * exactSPL);
+
+    // Sync pulse width validation limits:
+    // Real H-sync pulse is 4.7 us. Accept pulses between ~2 us and ~7 us.
+    // This rejects short video content dips (< 2 us) and VSync broad pulses (> 7 us).
+    m_syncPulseMinWidth = static_cast<int>(2.0f / 64.0f * exactSPL);
+    m_syncPulseMaxWidth = static_cast<int>(7.0f / 64.0f * exactSPL);
 
     m_fieldDetectStartPos = static_cast<int>(FIELD_DETECT_START * exactSPL);
     m_fieldDetectEndPos   = static_cast<int>(FIELD_DETECT_END * exactSPL);
@@ -681,25 +697,22 @@ float PALDecoder::normalizeAndAGC(float sample)
     if (sample > m_effMax) m_effMax = sample;
     m_amSampleIndex++;
 
-    if (m_amSampleIndex >= m_samplesPerLine * NB_LINES * 2) {
+    // Update AGC every half frame (~312 lines) for faster convergence.
+    // Previously 2 full frames (1250 lines) - too slow for initial lock.
+    if (m_amSampleIndex >= m_samplesPerLine * NB_LINES / 2) {
         m_ampMax = m_effMax;
-        // Offset minimum below actual min (~10% of range).
-        // Sync tips normalize to ~0.09 (always positive).
-        // With threshold=0, no sync crossing occurs → flywheel free-runs.
-        // Increase threshold above 0.09 to enable sync detection.
-        float range = m_effMax - m_effMin;
-        m_ampMin = m_effMin - range * 0.10f;
+        m_ampMin = m_effMin;
         m_ampDelta = m_ampMax - m_ampMin;
-        if (m_ampDelta <= 0.0f) m_ampDelta = 1.0f;
+        if (m_ampDelta <= 0.001f) m_ampDelta = 1.0f;
         m_effMin = 20.0f;
         m_effMax = -20.0f;
         m_amSampleIndex = 0;
     }
 
     float normalized = (sample - m_ampMin) / m_ampDelta;
-    // No lower clamp: sync tips may dip slightly below 0, enabling threshold=0 detection.
-    // Upper clamp only to prevent overflow. Video rendering clips via clipValue().
-    return (normalized > 1.0f) ? 1.0f : normalized;
+    if (normalized < 0.0f) normalized = 0.0f;
+    if (normalized > 1.0f) normalized = 1.0f;
+    return normalized;
 }
 
 // ============================================================
@@ -784,8 +797,26 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         float dcBlocked = dcBlock(notched);
         float normalized = normalizeAndAGC(dcBlocked);
 
-        // Sync at full rate (uses normalized [0,1] signal)
-        processSample(normalized);
+        // === PAL-B NEGATIVE MODULATION INVERSION ===
+        // AM demod (magnitude) produces a signal where sync tips are at the
+        // HIGHEST level and white is at the LOWEST level. This is because
+        // PAL-B uses negative modulation: sync = max RF power, white = min.
+        // After normalizeAndAGC, sync tips are ~0.9-1.0 and white is ~0.3.
+        //
+        // Sync detection looks for downward zero-crossings below m_syncLevel,
+        // but the signal never goes below ~0.3, so sync is never found.
+        //
+        // Solution: invert the signal HERE so that:
+        //   sync tips -> ~0.0-0.1 (below threshold)
+        //   black level -> ~0.3
+        //   white -> ~0.7
+        // This matches standard PAL video levels and makes sync detection work.
+        // The inversion is applied to both sync and luma paths for consistency.
+        // Chroma uses raw magnitude (before AGC) so it is unaffected.
+        float video = m_videoInvert ? (1.0f - normalized) : normalized;
+
+        // Sync at full rate (inverted signal: sync tips are now LOW)
+        processSample(video);
 
         // === CHROMA at FULL sample rate (before decimation) ===
         // Demod on raw magnitude — the chroma BPF (bandpass at 4.43 MHz)
@@ -812,12 +843,13 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         // === Chroma subcarrier notch at FULL rate (before decimation) ===
         // Cascaded 2-stage biquad notch at 4.43 MHz — removes subcarrier
         // from luma path to prevent colour stripe artifacts (dot crawl).
+        // Uses inverted video signal so luma path is consistent with sync.
         float lumaSignal;
         {
             // Stage 1
-            float cn1 = m_chromaNotchB0 * normalized + m_chromaNotchB1 * m_chromaNotchX1 + m_chromaNotchB2 * m_chromaNotchX2
+            float cn1 = m_chromaNotchB0 * video + m_chromaNotchB1 * m_chromaNotchX1 + m_chromaNotchB2 * m_chromaNotchX2
                        - m_chromaNotchA1 * m_chromaNotchY1 - m_chromaNotchA2 * m_chromaNotchY2;
-            m_chromaNotchX2 = m_chromaNotchX1; m_chromaNotchX1 = normalized;
+            m_chromaNotchX2 = m_chromaNotchX1; m_chromaNotchX1 = video;
             m_chromaNotchY2 = m_chromaNotchY1; m_chromaNotchY1 = cn1;
             // Stage 2
             float cn2 = m_chromaNotchB0 * cn1 + m_chromaNotchB1 * m_chromaNotch2X1 + m_chromaNotchB2 * m_chromaNotch2X2
@@ -866,37 +898,78 @@ void PALDecoder::processSample(float sample)
 {
     if (m_hSyncEnabled)
     {
-        if (m_prevSample >= m_syncLevel && sample < m_syncLevel
-            && m_sampleOffsetDetected > m_samplesPerLine - m_numberSamplesPerHTop)
-        {
-            float frac = (sample - m_syncLevel) / (m_prevSample - sample);
-            float hSyncShift = -m_sampleOffset - m_sampleOffsetFrac - frac;
+        // === Sync Pulse Width Validation ===
+        // Track how long the signal stays below sync threshold.
+        // Real H-sync pulse is ~4.7 us. Video content dips are < 1 us.
+        // Accept pulses between m_syncPulseMinWidth (~2 us) and
+        // m_syncPulseMaxWidth (~7 us).
 
-            if (hSyncShift > m_samplesPerLine / 2)
-                hSyncShift -= m_samplesPerLine;
-            else if (hSyncShift < -m_samplesPerLine / 2)
-                hSyncShift += m_samplesPerLine;
-
-            if (std::fabs(hSyncShift) > m_numberSamplesPerHTop) {
-                // Large error: flywheel is far off or false sync detected.
-                // Do NOT apply large corrections - they destabilize the image.
-                // Just count the error and let flywheel free-run.
-                m_hSyncErrorCount++;
-                m_syncErrorAccum += static_cast<double>(std::fabs(hSyncShift));
+        if (sample < m_syncLevel) {
+            if (!m_syncPulseActive) {
+                // Leading edge: signal just dropped below threshold
+                m_syncPulseActive = true;
+                m_syncPulseCounter = 1;
+                // Record the leading edge position (for timing reference)
+                // Use fractional zero-crossing interpolation
+                float denom = m_prevSample - sample;
+                m_syncPulseEntryFrac = (denom > 1e-6f)
+                    ? (m_prevSample - m_syncLevel) / denom
+                    : 0.0f;
+                // Save current sampleOffset at the leading edge
+                m_syncPulseEntryOffset = m_sampleOffset;
+                m_syncPulseEntryOffsetFrac = m_sampleOffsetFrac;
             } else {
-                m_hSyncShift = hSyncShift * 0.2f;
-                m_hSyncErrorCount = 0;
-                // Good sync: small error
-                m_syncErrorAccum += static_cast<double>(std::fabs(hSyncShift));
+                m_syncPulseCounter++;
+                // Too wide -> not H-sync (probably V-sync equalizing pulse)
+                if (m_syncPulseCounter > m_syncPulseMaxWidth) {
+                    m_syncPulseActive = false;
+                    m_syncPulseCounter = 0;
+                }
             }
+        } else {
+            if (m_syncPulseActive) {
+                // Trailing edge: pulse ended. Validate width.
+                if (m_syncPulseCounter >= m_syncPulseMinWidth
+                    && m_syncPulseCounter <= m_syncPulseMaxWidth
+                    && m_sampleOffsetDetected > m_samplesPerLine - m_numberSamplesPerHTop)
+                {
+                    // Valid H-sync pulse!
+                    // Compute flywheel correction from the LEADING edge position.
+                    // The leading edge should ideally be at sampleOffset=0.
+                    // hSyncShift = how far off the flywheel was at that moment.
+                    float hSyncShift = -(static_cast<float>(m_syncPulseEntryOffset)
+                                       + m_syncPulseEntryOffsetFrac
+                                       + m_syncPulseEntryFrac);
 
-            m_syncDetected++;
-            m_syncFoundInWindow++;
-            m_sampleOffsetDetected = 0;
+                    if (hSyncShift > m_samplesPerLine / 2)
+                        hSyncShift -= m_samplesPerLine;
+                    else if (hSyncShift < -m_samplesPerLine / 2)
+                        hSyncShift += m_samplesPerLine;
+
+                    if (std::fabs(hSyncShift) > m_numberSamplesPerHTop) {
+                        // Large error: flywheel far off or ambiguous detection
+                        m_hSyncErrorCount++;
+                        m_syncErrorAccum += static_cast<double>(std::fabs(hSyncShift));
+                    } else {
+                        // Good sync: apply correction.
+                        // Use stronger correction (0.5) for faster lock.
+                        // The flywheel will converge in 2-3 lines instead of 5+.
+                        m_hSyncShift = hSyncShift * 0.5f;
+                        m_hSyncErrorCount = 0;
+                        m_syncErrorAccum += static_cast<double>(std::fabs(hSyncShift));
+                    }
+
+                    m_syncDetected++;
+                    m_syncFoundInWindow++;
+                    m_sampleOffsetDetected = 0;
+                }
+                m_syncPulseActive = false;
+                m_syncPulseCounter = 0;
+            }
         }
-        else {
-            m_sampleOffsetDetected++;
-        }
+        // Always increment sampleOffsetDetected (even during pulse)
+        // This tracks distance since last accepted sync for gating
+        m_sampleOffsetDetected++;
     }
 
     m_sampleOffset++;
@@ -920,6 +993,10 @@ void PALDecoder::processSample(float sample)
         m_linesProcessed++;
         m_syncQualityWindow++;
         processEndOfLine();
+
+        // Reset pulse tracking at line boundary
+        m_syncPulseActive = false;
+        m_syncPulseCounter = 0;
     }
 
     m_prevSample = sample;
@@ -1015,7 +1092,9 @@ void PALDecoder::renderLine()
             }
 
             yuv2rgb(Y, U, V, r, g, b);
-            if (m_videoInvert) { r = 255 - r; g = 255 - g; b = 255 - b; }
+            // Note: m_videoInvert is now applied early in processSamples()
+            // (before sync detection and luma filtering), so the signal
+            // arriving here is already in correct polarity. No RGB inversion needed.
         }
 
         int offset = (rowIndex * VIDEO_WIDTH + x) * 4;
