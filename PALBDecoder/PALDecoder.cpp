@@ -26,7 +26,7 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_hSyncErrorCount(0)
     , m_prevSample(0.0f)
     , m_numberSamplesPerHTop(0)
-    , m_numberSamplesPerHSync(0)
+    , m_numberSamplesActiveStart(0)
     , m_numberSamplesPerLineSignals(0)
     , m_numberSamplesHSyncCrop(0)
     , m_syncPulseCounter(0)
@@ -109,10 +109,6 @@ PALDecoder::PALDecoder(QObject *parent)
 
 PALDecoder::~PALDecoder()
 {
-    qDebug() << "PALDecoder: Frames:" << m_frameCount
-             << "Lines:" << m_linesProcessed
-             << "SyncDetected:" << m_syncDetected
-             << "LastQuality:" << m_lastSyncQuality << "%";
 }
 
 void PALDecoder::setSampleRate(int sampleRate)
@@ -192,12 +188,6 @@ void PALDecoder::setSampleRate(int sampleRate)
     m_chromaUFilterDelay.clear();
     m_chromaVFilterDelay.clear();
 
-    qDebug() << "PALDecoder::setSampleRate:" << m_sampleRate / 1e6f << "MHz";
-    qDebug() << "  Decimation:" << m_decimFactor << "-> video:" << m_decimatedRate / 1e6f << "MHz";
-    qDebug() << "  Samples/line:" << m_samplesPerLine << "+" << m_samplesPerLineFrac << "(at" << m_sampleRate / 1e6f << "MHz)";
-    qDebug() << "  HSync pulse:" << m_numberSamplesPerHTop << "Blanking:" << m_numberSamplesPerLineSignals;
-    qDebug() << "  Sync pulse validation: min" << m_syncPulseMinWidth << "max" << m_syncPulseMaxWidth << "samples";
-    qDebug() << "  Chroma BW:" << m_chromaBandwidth / 1e6f << "MHz";
 }
 
 void PALDecoder::applyStandard()
@@ -209,15 +199,16 @@ void PALDecoder::applyStandard()
     m_samplesPerLineFrac = exactSPL - m_samplesPerLine;
 
     m_numberSamplesPerHTop        = static_cast<int>(SYNC_PULSE_FRAC * exactSPL);
-    m_numberSamplesPerHSync       = static_cast<int>(HSYNC_FRAC * exactSPL);
+    m_numberSamplesActiveStart       = static_cast<int>(ACTIVE_VIDEO_START_FRAC * exactSPL);
     m_numberSamplesPerLineSignals = static_cast<int>(BLANKING_FRAC * exactSPL);
     m_numberSamplesHSyncCrop      = static_cast<int>(HSYNC_CROP_FRAC * exactSPL);
 
     // Sync pulse width validation limits:
-    // Real H-sync pulse is 4.7 us. Accept pulses between ~2 us and ~7 us.
-    // This rejects short video content dips (< 2 us) and VSync broad pulses (> 7 us).
-    m_syncPulseMinWidth = static_cast<int>(2.0f / 64.0f * exactSPL);
-    m_syncPulseMaxWidth = static_cast<int>(7.0f / 64.0f * exactSPL);
+    // Real H-sync pulse is 4.7 us. Accept pulses between ~1.5 us and ~8 us.
+    // Wider range because HackRF's 8-bit ADC + noise erodes pulse edges.
+    // This rejects short video content dips (< 1.5 us) and VSync broad pulses (> 8 us).
+    m_syncPulseMinWidth = static_cast<int>(1.5f / 64.0f * exactSPL);
+    m_syncPulseMaxWidth = static_cast<int>(8.0f / 64.0f * exactSPL);
 
     m_fieldDetectStartPos = static_cast<int>(FIELD_DETECT_START * exactSPL);
     m_fieldDetectEndPos   = static_cast<int>(FIELD_DETECT_END * exactSPL);
@@ -271,15 +262,6 @@ void PALDecoder::initFilters()
     } else {
         m_chromaFilterTaps.clear();
     }
-
-    qDebug() << "  Filters: video LPF" << videoCutoff / 1e6f << "MHz @" << rate / 1e6f
-             << "(" << m_videoFilterTaps.size() << "taps),"
-             << "luma" << lumaCutoff / 1e6f << "MHz @" << m_decimatedRate / 1e6f
-             << "(" << lumaTaps << "taps),"
-             << "chroma BPF" << (m_chromaFilterTaps.empty() ? "OFF" : "ON")
-             << m_chromaBandwidth / 1e6f << "MHz BW"
-             << "(" << m_chromaFilterTaps.size() << "taps)"
-             << "@" << rate / 1e6f << "MHz";
 }
 
 // Audio carrier notch filter: removes 5.5 MHz beat from AM-demodulated video
@@ -325,7 +307,6 @@ void PALDecoder::initNotchFilter()
 
     m_notchX1 = m_notchX2 = m_notchY1 = m_notchY2 = 0.0f;
 
-    qDebug() << "  Audio notch filter:" << beatFreq / 1e6f << "MHz, BW:" << notchBW / 1e3f << "kHz, R:" << R;
 
     // === Chroma subcarrier notch at 4.43 MHz ===
     // Cascaded 2-stage biquad for ~40 dB suppression of colour subcarrier from luma.
@@ -360,7 +341,6 @@ void PALDecoder::initNotchFilter()
     m_chromaNotchX1 = m_chromaNotchX2 = m_chromaNotchY1 = m_chromaNotchY2 = 0.0f;
     m_chromaNotch2X1 = m_chromaNotch2X2 = m_chromaNotch2Y1 = m_chromaNotch2Y2 = 0.0f;
 
-    qDebug() << "  Chroma notch filter (2-stage):" << chromaFreq / 1e6f << "MHz, BW:" << cBW / 1e3f << "kHz, R:" << cR;
 }
 
 void PALDecoder::rebuildColorLUT()
@@ -396,11 +376,6 @@ void PALDecoder::initBurstPLL()
     float exactSPL = rate / (NB_LINES * FPS);
     m_burstStartSample = static_cast<int>(5.6f / 64.0f * exactSPL);
     m_burstEndSample   = static_cast<int>(7.85f / 64.0f * exactSPL);
-
-    qDebug() << "  Burst PLL: window" << m_burstStartSample << "-" << m_burstEndSample
-             << "samples (" << (m_burstEndSample - m_burstStartSample) << "samples,"
-             << (m_burstEndSample - m_burstStartSample) / (rate / COLOR_CARRIER_FREQ)
-             << "cycles at" << rate / 1e6f << "MHz)";
 }
 
 void PALDecoder::accumulateBurst(float sample)
@@ -564,7 +539,6 @@ void PALDecoder::setTuneFrequency(uint64_t freqHz)
 {
     m_tuneFrequency = freqHz;
     updateNCO();
-    qDebug() << "PALDecoder: Tune" << freqHz / 1e6 << "MHz, offset" << m_videoCarrierOffsetHz / 1e6f << "MHz";
 }
 
 void PALDecoder::updateNCO()
@@ -589,8 +563,6 @@ void PALDecoder::updateNCO()
     m_ncoPhaseIncrement = -2.0 * M_PI * static_cast<double>(m_videoCarrierOffsetHz)
                           / static_cast<double>(m_sampleRate);
     m_ncoPhase = 0.0;
-    qDebug() << "PALDecoder::updateNCO: tune=" << tuneMHz << "MHz, vc=" << videoCarrierMHz
-             << "MHz, offset=" << m_videoCarrierOffsetHz << "Hz";
 }
 
 // ============================================================
@@ -698,12 +670,17 @@ float PALDecoder::normalizeAndAGC(float sample)
     m_amSampleIndex++;
 
     // Update AGC every half frame (~312 lines) for faster convergence.
-    // Previously 2 full frames (1250 lines) - too slow for initial lock.
     if (m_amSampleIndex >= m_samplesPerLine * NB_LINES / 2) {
-        m_ampMax = m_effMax;
-        m_ampMin = m_effMin;
+        // Use 95th percentile for max and 5th percentile for min
+        // to reject noise spikes. But since we don't track histograms,
+        // use a simple approach: shrink the range by 5% on each side
+        // to approximate percentile-based AGC.
+        float rawRange = m_effMax - m_effMin;
+        m_ampMax = m_effMax - rawRange * 0.02f;
+        m_ampMin = m_effMin + rawRange * 0.02f;
         m_ampDelta = m_ampMax - m_ampMin;
         if (m_ampDelta <= 0.001f) m_ampDelta = 1.0f;
+
         m_effMin = 20.0f;
         m_effMax = -20.0f;
         m_amSampleIndex = 0;
@@ -882,7 +859,7 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         }
 
         // Collect pixels after blanking
-        if (m_sampleOffset > m_numberSamplesPerHSync) {
+        if (m_sampleOffset > m_numberSamplesActiveStart) {
             m_lineBuffer.push_back(luma);
             m_lineBufferU.push_back(u);
             m_lineBufferV.push_back(v);
@@ -952,9 +929,8 @@ void PALDecoder::processSample(float sample)
                         m_syncErrorAccum += static_cast<double>(std::fabs(hSyncShift));
                     } else {
                         // Good sync: apply correction.
-                        // Use stronger correction (0.5) for faster lock.
-                        // The flywheel will converge in 2-3 lines instead of 5+.
-                        m_hSyncShift = hSyncShift * 0.5f;
+                        // Use strong correction (0.7) for fast lock.
+                        m_hSyncShift = hSyncShift * 0.7f;
                         m_hSyncErrorCount = 0;
                         m_syncErrorAccum += static_cast<double>(std::fabs(hSyncShift));
                     }

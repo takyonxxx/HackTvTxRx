@@ -51,7 +51,7 @@ private:
     // Timing fractions (ITU-R BT.1700)
     static constexpr float SYNC_PULSE_FRAC    = 4.7f / 64.0f;
     static constexpr float BLANKING_FRAC      = 12.0f / 64.0f;
-    static constexpr float HSYNC_FRAC         = 10.5f / 64.0f;
+    static constexpr float ACTIVE_VIDEO_START_FRAC = 12.05f / 64.0f;  // sync + back porch + guard
     static constexpr float HSYNC_CROP_FRAC    = 0.085f;
     static constexpr float FIELD_DETECT_START = 2.35f / 64.0f;
     static constexpr float FIELD_DETECT_END   = 27.3f / 64.0f;
@@ -91,7 +91,7 @@ private:
     float m_prevSample;
 
     int m_numberSamplesPerHTop;
-    int m_numberSamplesPerHSync;
+    int m_numberSamplesActiveStart;   // sample offset where active video begins
     int m_numberSamplesPerLineSignals;
     int m_numberSamplesHSyncCrop;
 

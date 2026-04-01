@@ -333,18 +333,27 @@ void MainWindow::setupUI()
     m_sampleRateComboBox = new QComboBox(this);
     m_sampleRateComboBox->setStyleSheet("QComboBox { font-weight: bold; }");
 
-    // Add sample rates (min 12.5 MHz - below this audio carrier exceeds Nyquist)
-    std::map<int, QString> sortedSampleRates {
+    // HackRF One supported sample rates: 2-20 MHz
+    struct SampleRateEntry { int rate; QString text; };
+    std::vector<SampleRateEntry> sampleRates = {
+        {2000000,  "2"},
+        {4000000,  "4"},
+        {6000000,  "6"},
+        {8000000,  "8"},
+        {10000000, "10"},
+        {12000000, "12"},
         {12500000, "12.5"},
+        {14000000, "14"},
         {16000000, "16"},
+        {18000000, "18"},
         {20000000, "20"}
     };
 
     int defaultIndex = 0;
     int currentIndex = 0;
-    for (const auto& [rate, displayText] : sortedSampleRates) {
-        m_sampleRateComboBox->addItem(displayText + " MHz", rate);
-        if (rate == 16000000) {
+    for (const auto& entry : sampleRates) {
+        m_sampleRateComboBox->addItem(entry.text + " MHz", entry.rate);
+        if (entry.rate == 16000000) {
             defaultIndex = currentIndex;
         }
         currentIndex++;
