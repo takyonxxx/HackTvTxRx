@@ -2194,3 +2194,53 @@ bool HackTvLib::start()
         return false;
     }
 }
+
+// ============================================================
+// External Audio Ring Buffer - for TCP radio TX
+// ============================================================
+
+void HackTvLib::enableExternalAudioRing()
+{
+    if (!hackRfDevice) {
+        fprintf(stderr, "enableExternalAudioRing: hackRfDevice is null\n");
+        fflush(stderr);
+        return;
+    }
+
+    // Stop PortAudio mic if running
+    hackRfDevice->setMicEnabled(false);
+
+    // Enable ring buffer path without any audio source
+    hackRfDevice->ringReset();
+    hackRfDevice->m_useAudioFileRing.store(true);
+
+    fprintf(stderr, "External audio ring enabled\n");
+    fflush(stderr);
+}
+
+void HackTvLib::writeExternalAudio(const float* data, size_t count)
+{
+    if (!hackRfDevice || count == 0 || !data) return;
+    if (!hackRfDevice->m_useAudioFileRing.load()) return;
+
+    // Input: MONO float at 44100 Hz
+    // Ring buffer expects: STEREO interleaved (L,R,L,R) at 44100 Hz
+    size_t stereoCount = count * 2;
+
+    // Convert mono->stereo and write via existing ringWrite API
+    if (stereoCount <= 4096) {
+        float stereo[4096];
+        for (size_t i = 0; i < count; i++) {
+            stereo[i * 2]     = data[i];
+            stereo[i * 2 + 1] = data[i];
+        }
+        hackRfDevice->ringWrite(stereo, stereoCount);
+    } else {
+        std::vector<float> stereo(stereoCount);
+        for (size_t i = 0; i < count; i++) {
+            stereo[i * 2]     = data[i];
+            stereo[i * 2 + 1] = data[i];
+        }
+        hackRfDevice->ringWrite(stereo.data(), stereoCount);
+    }
+}

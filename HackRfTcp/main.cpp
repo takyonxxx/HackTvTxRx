@@ -22,8 +22,8 @@ QString getLocalIPAddress()
 int main(int argc, char *argv[])
 {
     QCoreApplication a(argc, argv);
-    a.setApplicationName("HackRF TCP IQ Server");
-    a.setApplicationVersion("2.0");
+    a.setApplicationName("HackRF TCP Radio Server");
+    a.setApplicationVersion("3.0");
 
     SdrDevice hackrf;
 
@@ -55,73 +55,62 @@ int main(int argc, char *argv[])
         qDebug() << ">>> Parameter changed:" << param << "=" << value;
     });
 
-    QObject::connect(&hackrf, &SdrDevice::dataTransferred, [](quint64 bytes) {
-        qDebug() << "Total data transferred:" << bytes / (1024.0 * 1024.0) << "MB";
-    });
-
     QCommandLineParser parser;
-    parser.setApplicationDescription("HackRF TCP IQ Server - Stream raw IQ samples via TCP");
+    parser.setApplicationDescription("HackRF TCP Radio Server - FM/AM Transceiver via TCP");
     parser.addHelpOption();
     parser.addVersionOption();
 
     QCommandLineOption dataPortOption(QStringList() << "d" << "data-port",
-                                      "Data streaming port", "port", "5000");
+                                      "Data streaming port (IQ output)", "port", "5000");
     parser.addOption(dataPortOption);
 
     QCommandLineOption controlPortOption(QStringList() << "c" << "control-port",
                                          "Control interface port", "port", "5001");
     parser.addOption(controlPortOption);
 
-    QCommandLineOption vgaGainOption(QStringList() << "vga-gain",
-                                     "Initial VGA gain (0-62)", "gain", "40");
-    parser.addOption(vgaGainOption);
-
-    QCommandLineOption lnaGainOption(QStringList() << "lna-gain",
-                                     "Initial LNA gain (0-40)", "gain", "40");
-    parser.addOption(lnaGainOption);
-
-    QCommandLineOption rxAmpGainOption(QStringList() << "rx-amp-gain",
-                                       "Initial RX amp gain (0-14)", "gain", "14");
-    parser.addOption(rxAmpGainOption);
+    QCommandLineOption audioPortOption(QStringList() << "a" << "audio-port",
+                                       "Audio input port (TX audio)", "port", "5002");
+    parser.addOption(audioPortOption);
 
     QCommandLineOption sampleRateOption(QStringList() << "sample-rate" << "sr",
-                                        "Initial sample rate in Hz", "rate", "16000000");
+                                        "Initial sample rate in Hz", "rate", "2000000");
     parser.addOption(sampleRateOption);
 
     QCommandLineOption frequencyOption(QStringList() << "f" << "frequency",
-                                       "Initial frequency in Hz", "freq", "100000000");
+                                       "Initial frequency in Hz", "freq", "145000000");
     parser.addOption(frequencyOption);
+
+    QCommandLineOption modeOption(QStringList() << "m" << "mode",
+                                   "Initial mode (rx or tx)", "mode", "rx");
+    parser.addOption(modeOption);
 
     parser.process(a);
 
     quint16 dataPort = parser.value(dataPortOption).toUShort();
     quint16 controlPort = parser.value(controlPortOption).toUShort();
-    unsigned int vgaGain = parser.value(vgaGainOption).toUInt();
-    unsigned int lnaGain = parser.value(lnaGainOption).toUInt();
-    unsigned int rxAmpGain = parser.value(rxAmpGainOption).toUInt();
+    quint16 audioPort = parser.value(audioPortOption).toUShort();
     uint32_t sampleRate = parser.value(sampleRateOption).toUInt();
     uint64_t frequency = parser.value(frequencyOption).toULongLong();
+    QString mode = parser.value(modeOption).toLower();
 
-    // HackRF RX mode only
     std::vector<std::string> hacktvArgs = {
         "-o", "hackrf",
-        "--rx-tx-mode", "rx"
+        "--rx-tx-mode", mode.toStdString()
     };
 
     qDebug() << "\n========================================";
-    qDebug() << "   HackRF TCP IQ Server v2.0";
+    qDebug() << "   HackRF TCP Radio Server v3.0";
     qDebug() << "========================================\n";
 
     qDebug() << "Configuration:";
     qDebug() << "  Data Port:      " << dataPort;
     qDebug() << "  Control Port:   " << controlPort;
+    qDebug() << "  Audio Port:     " << audioPort;
     qDebug() << "  Sample Rate:    " << sampleRate << "Hz (" << sampleRate/1000000.0 << "MHz)";
     qDebug() << "  Frequency:      " << frequency << "Hz (" << frequency/1000000.0 << "MHz)";
-    qDebug() << "  VGA Gain:       " << vgaGain;
-    qDebug() << "  LNA Gain:       " << lnaGain;
-    qDebug() << "  RX Amp Gain:    " << rxAmpGain;
+    qDebug() << "  Mode:           " << mode;
 
-    if (!hackrf.startTcpServer(dataPort, controlPort)) {
+    if (!hackrf.startTcpServer(dataPort, controlPort, audioPort)) {
         qDebug() << "\nFailed to start TCP servers";
         return 1;
     }
@@ -132,9 +121,6 @@ int main(int argc, char *argv[])
     }
 
     hackrf.setSampleRate(sampleRate);
-    hackrf.setVgaGain(vgaGain);
-    hackrf.setLnaGain(lnaGain);
-    hackrf.setRxAmpGain(rxAmpGain);
     hackrf.setFrequency(frequency);
 
     QThread::msleep(100);
@@ -147,15 +133,16 @@ int main(int argc, char *argv[])
     QString localIP = getLocalIPAddress();
 
     qDebug() << "\n========================================";
-    qDebug() << "   HackRF Started Successfully!";
+    qDebug() << "   HackRF Radio Server Started!";
     qDebug() << "========================================";
     qDebug() << "";
     qDebug() << "Server is running on IP:" << localIP;
-    qDebug() << "  Data Stream:    " << localIP << ":" << dataPort;
+    qDebug() << "  IQ Data Stream: " << localIP << ":" << dataPort;
     qDebug() << "  Control:        " << localIP << ":" << controlPort;
+    qDebug() << "  TX Audio In:    " << localIP << ":" << audioPort;
     qDebug() << "";
-    qDebug() << "Data format: int8 I/Q interleaved (I0,Q0,I1,Q1,...)";
-    qDebug() << "Bandwidth = Sample Rate =" << sampleRate/1000000.0 << "MHz";
+    qDebug() << "Control commands: SWITCH_RX, SWITCH_TX, SET_FREQ:<Hz>, etc.";
+    qDebug() << "Audio format: float32 PCM, mono, 44100 Hz";
     qDebug() << "\n========================================";
     qDebug() << "  Server Ready - Press Ctrl+C to stop";
     qDebug() << "========================================\n";

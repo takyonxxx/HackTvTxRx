@@ -140,6 +140,12 @@ public:
     void setDirectSampling(int mode);
     void setOffsetTuning(bool enable);
 
+    // External audio ring buffer for TCP TX
+    // Call enableExternalAudioRing() AFTER start() in TX mode
+    // Then feed mono 44100Hz float audio via writeExternalAudio()
+    void enableExternalAudioRing();
+    void writeExternalAudio(const float* data, size_t count);
+
     bool isInitialized() const {
         return (s != nullptr);
     }

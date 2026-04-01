@@ -65,6 +65,10 @@ public:
     void setDirectSampling(int mode);
     void setOffsetTuning(bool enable);
 
+    // External audio ring buffer for TCP TX
+    void enableExternalAudioRing();
+    void writeExternalAudio(const float* data, size_t count);
+
     bool isInitialized() const {
         return (s != nullptr);
     }

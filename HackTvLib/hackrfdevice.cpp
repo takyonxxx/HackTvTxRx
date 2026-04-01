@@ -673,18 +673,17 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
             // upsample_ratio = m_sampleRate / 44100
 
             float upsampleRatio = static_cast<float>(m_sampleRate) / 44100.0f;
-            size_t audio_frames_needed = static_cast<size_t>(output_iq_needed / upsampleRatio) + 8;
+            size_t audio_frames_needed = static_cast<size_t>(output_iq_needed / upsampleRatio) + 2;
             size_t stereo_floats_needed = audio_frames_needed * 2;
 
             std::vector<float> stereo_buffer(stereo_floats_needed, 0.0f);
             size_t got = ringRead(stereo_buffer.data(), stereo_floats_needed);
 
-            if (got < 128) {
+            if (got < 2) {
                 std::memset(buffer, 0, length);
                 return 0;
             }
             got = got & ~1;
-            stereo_buffer.resize(got);
 
             // Generate MPX directly at TX sample rate
             static StereoMPXGenerator* s_mpxGen = nullptr;
@@ -694,7 +693,7 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
                 s_mpxGen = new StereoMPXGenerator(44100.0f, static_cast<float>(m_sampleRate), 75e-6f);
                 s_lastMpxSampleRate = m_sampleRate;
             }
-            std::vector<float> mpx_signal = s_mpxGen->process(stereo_buffer.data(), got);
+            std::vector<float> mpx_signal = s_mpxGen->process(stereo_buffer.data(), (got > 0 ? got : stereo_floats_needed));
 
             if (mpx_signal.empty()) {
                 std::memset(buffer, 0, length);
