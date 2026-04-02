@@ -308,9 +308,23 @@ std::vector<float> FMDemodulator::applyFIR(const std::vector<float>& in, const s
 std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>& signal, double rate)
 {
     if (signal.empty()) return {};
-    (void)rate;
 
     std::vector<float> out(signal.size());
+
+    // FM demodulation: instantaneous frequency from phase derivative
+    // delta_phase = phase[n] - phase[n-1]  (radians per sample)
+    // freq_deviation_hz = delta_phase * sampleRate / (2*pi)
+    // Normalized audio = freq_deviation / max_deviation
+    //
+    // For NFM: max_deviation ~ 5 kHz
+    // For WFM: max_deviation ~ 75 kHz
+    // We use outputGain and rxModIndex to scale:
+    //   outputGain controls overall volume
+    //   rxModIndex controls FM sensitivity
+
+    // Rate-normalized gain: compensate for sample rate so output level
+    // is consistent regardless of decimation
+    float rateNorm = static_cast<float>(rate) / (2.0f * static_cast<float>(M_PI));
 
     float prev = m_lastPhase;
     for (size_t i = 0; i < signal.size(); i++) {
@@ -318,7 +332,15 @@ std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>
         float delta = phase - prev;
         if (delta > static_cast<float>(M_PI)) delta -= 2.0f * static_cast<float>(M_PI);
         if (delta < -static_cast<float>(M_PI)) delta += 2.0f * static_cast<float>(M_PI);
-        out[i] = delta * m_outputGain * m_rxModIndex;
+
+        // Convert phase delta to frequency deviation, then apply gain
+        // delta * rateNorm = frequency deviation in Hz
+        // Divide by reference deviation (5000 Hz for NFM) to normalize
+        float deviation_hz = delta * rateNorm;
+        float refDeviation = (m_bandwidth <= 25000.0) ? 5000.0f : 75000.0f;
+        float normalized = deviation_hz / refDeviation;
+
+        out[i] = normalized * m_outputGain * m_rxModIndex;
         prev = phase;
     }
     m_lastPhase = prev;
