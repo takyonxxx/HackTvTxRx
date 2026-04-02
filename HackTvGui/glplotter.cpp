@@ -191,13 +191,14 @@ void CPlotter::drawGrid(QPainter &painter, int w, int h)
     QColor gridCol = PLOTTER_GRID_COLOR;
 
     // Horizontal grid (dB) — draw as filled rects for reliable OpenGL rendering
-    float pixPerDb = (float)plotH / fabs(m_PandMaxdB - m_PandMindB);
+    const int topMargin = 10; // prevent top label clipping
+    float pixPerDb = (float)(plotH - topMargin) / fabs(m_PandMaxdB - m_PandMindB);
     float dbStep = 10.0f;
     if (pixPerDb * dbStep < 20) dbStep = 20.0f;
     if (pixPerDb * dbStep < 20) dbStep = 40.0f;
 
     for (float db = ceil(m_PandMindB / dbStep) * dbStep; db <= m_PandMaxdB; db += dbStep) {
-        int y = (int)((m_PandMaxdB - db) * pixPerDb);
+        int y = topMargin + (int)((m_PandMaxdB - db) * pixPerDb);
         if (y < 0 || y >= plotH) continue;
         painter.fillRect(m_YAxisWidth, y, plotW, 1, gridCol);
         painter.setPen(PLOTTER_TEXT_COLOR);
@@ -578,17 +579,16 @@ void CPlotter::drawFreqLabels(QPainter &painter, int w, int specH)
     painter.setPen(PLOTTER_TEXT_COLOR);
     painter.setFont(m_Font);
 
-    // Calculate how many labels can fit without overlapping
-    int labelWidth = FONT_WIDTH(metrics, "100999.999") + 10; // typical label + padding
-    int maxLabels = qMax(2, plotW / labelWidth);
-    int step = qMax(1, (m_HorDivs + maxLabels - 1) / maxLabels);
-
-    for (int i = 0; i <= m_HorDivs; i += step) {
+    for (int i = 0; i <= m_HorDivs; i++) {
         int x = m_YAxisWidth + (i * plotW / m_HorDivs);
         QRect textRect(x - 40, specH - metrics.height() - 2, 80, metrics.height());
         if (i < HORZ_DIVS_MAX + 1)
             painter.drawText(textRect, Qt::AlignHCenter | Qt::AlignBottom, m_HDivText[i]);
     }
+
+    // "MHz" label at right edge
+    QRect unitRect(w - 35, specH - metrics.height() - 2, 35, metrics.height());
+    painter.drawText(unitRect, Qt::AlignRight | Qt::AlignBottom, tr("MHz"));
 }
 
 // ============================================================================

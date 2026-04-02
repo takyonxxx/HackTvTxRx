@@ -695,8 +695,8 @@ void MainWindow::addRxGroup()
     freqCtrl->setDigitColor(QColor("#FFC300"));
     freqCtrl->setFrequency(DEFAULT_FREQUENCY);
     connect(freqCtrl, &CFreqCtrl::newFrequency, this, &MainWindow::onFreqCtrl_setFrequency);
-    freqCtrl->setMinimumHeight(50);
-    freqCtrl->setMaximumHeight(65);
+    freqCtrl->setMinimumHeight(58);
+    freqCtrl->setMaximumHeight(75);
     freqCtrl->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
     cPlotter = new CPlotter(this);
@@ -751,8 +751,8 @@ void MainWindow::addRxGroup()
     });
 
     cMeter = new CMeter(this);
-    cMeter->setMinimumHeight(50);
-    cMeter->setMaximumHeight(65);
+    cMeter->setMinimumHeight(58);
+    cMeter->setMaximumHeight(75);
     cMeter->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
     rxGroup = new QGroupBox("Receiver", this);
