@@ -11,8 +11,9 @@ class SignalMeter : public QWidget
 public:
     explicit SignalMeter(QWidget *parent = nullptr);
 
-    // RX mode: set signal level 0.0 - 1.0 (from IQ RMS)
+    // RX mode: set signal level 0.0 - 1.0 and dBm value
     void setLevel(float level);
+    void setRxDbm(float dbm) { m_rxDbm = dbm; }
     float level() const { return m_level; }
 
     // TX mode: set estimated TX power in dBm
@@ -32,6 +33,7 @@ private:
     float m_peak = 0.0f;
     bool m_txMode = false;
     float m_txDbm = -40.0f;
+    float m_rxDbm = -120.0f;
     QTimer* m_animTimer;
 };
 

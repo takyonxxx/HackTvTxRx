@@ -1,16 +1,17 @@
 #include "gainsettingsdialog.h"
 #include "tcpclient.h"
 #include "fmdemodulator.h"
+#include "amdemodulator.h"
 #include <QVBoxLayout>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QPushButton>
-#include <QScroller>
 
-GainSettingsDialog::GainSettingsDialog(TcpClient* tcpClient, FMDemodulator* fmDemod, QWidget *parent)
+GainSettingsDialog::GainSettingsDialog(TcpClient* tcpClient, FMDemodulator* fmDemod, AMDemodulator* amDemod, QWidget *parent)
     : QDialog(parent)
     , m_tcpClient(tcpClient)
     , m_fmDemod(fmDemod)
+    , m_amDemod(amDemod)
 {
     setWindowTitle("Gain & TX Parameters");
     setModal(false);
@@ -23,12 +24,10 @@ void GainSettingsDialog::setupUi()
     mainLayout->setSpacing(12);
     mainLayout->setContentsMargins(16, 16, 16, 16);
 
-    // Apply dark style matching main window
     setStyleSheet(R"(
         QDialog { background-color: #1A1A2E; }
         QGroupBox { color: #AABBCC; font-weight: bold; border: 1px solid #334455;
-            border-radius: 8px; margin-top: 10px; padding-top: 16px;
-            font-size: 14px; }
+            border-radius: 8px; margin-top: 10px; padding-top: 16px; font-size: 14px; }
         QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }
         QLabel { color: #CCDDEE; font-size: 13px; }
         QSlider::groove:horizontal { border: 1px solid #445566; height: 8px;
@@ -38,9 +37,13 @@ void GainSettingsDialog::setupUi()
         QPushButton { background-color: #334466; color: #EEEEFF; border: 1px solid #556688;
             border-radius: 8px; padding: 12px 20px; font-weight: bold; font-size: 14px; }
         QPushButton:pressed { background-color: #556688; }
+        QCheckBox { color: #CCDDEE; font-size: 13px; spacing: 8px; }
+        QCheckBox::indicator { width: 28px; height: 28px; border-radius: 6px;
+            border: 2px solid #556688; background: #2A2A3E; }
+        QCheckBox::indicator:checked { background: #CC4422; border-color: #FF6644; }
     )");
 
-    // === RX Gain Group ===
+    // === RX Parameters ===
     QGroupBox* rxGroup = new QGroupBox("RX Parameters");
     QGridLayout* rxGrid = new QGridLayout(rxGroup);
     rxGrid->setVerticalSpacing(14);
@@ -72,6 +75,35 @@ void GainSettingsDialog::setupUi()
     });
     rxGrid->addWidget(new QLabel("RX Gain:"), row, 0); rxGrid->addWidget(m_rxGainSlider, row, 1); rxGrid->addWidget(m_rxGainLabel, row, 2); row++;
 
+    // IF Bandwidth slider: 1 kHz - 200 kHz
+    m_ifBwSlider = new QSlider(Qt::Horizontal); m_ifBwSlider->setRange(1, 200); m_ifBwSlider->setValue(12);
+    m_ifBwLabel = new QLabel("12.5 kHz");
+    connect(m_ifBwSlider, &QSlider::valueChanged, [this](int v) {
+        float bw;
+        if (v <= 25) {
+            bw = v * 500.0f;  // 500 Hz steps: 500 - 12500 Hz
+        } else {
+            bw = 12500.0f + (v - 25) * 1000.0f;  // 1 kHz steps above 12.5 kHz
+        }
+        if (bw >= 1000.0f)
+            m_ifBwLabel->setText(QString("%1 kHz").arg(bw / 1000.0f, 0, 'f', 1));
+        else
+            m_ifBwLabel->setText(QString("%1 Hz").arg(static_cast<int>(bw)));
+        m_fmDemod->setBandwidth(bw);
+        m_amDemod->setBandwidth(bw);
+    });
+    rxGrid->addWidget(new QLabel("IF BW:"), row, 0); rxGrid->addWidget(m_ifBwSlider, row, 1); rxGrid->addWidget(m_ifBwLabel, row, 2); row++;
+
+    // RX Modulation Index slider: 0.1 - 5.0 (slider 1-50, /10)
+    m_rxModIdxSlider = new QSlider(Qt::Horizontal); m_rxModIdxSlider->setRange(1, 50); m_rxModIdxSlider->setValue(10);
+    m_rxModIdxLabel = new QLabel("1.0");
+    connect(m_rxModIdxSlider, &QSlider::valueChanged, [this](int v) {
+        float idx = v / 10.0f;
+        m_rxModIdxLabel->setText(QString::number(idx, 'f', 1));
+        m_fmDemod->setRxModIndex(idx);
+    });
+    rxGrid->addWidget(new QLabel("RX ModIdx:"), row, 0); rxGrid->addWidget(m_rxModIdxSlider, row, 1); rxGrid->addWidget(m_rxModIdxLabel, row, 2); row++;
+
     m_deemphSlider = new QSlider(Qt::Horizontal); m_deemphSlider->setRange(0, 1000); m_deemphSlider->setValue(750);
     m_deemphLabel = new QLabel("750us");
     connect(m_deemphSlider, &QSlider::valueChanged, [this](int v) {
@@ -86,7 +118,7 @@ void GainSettingsDialog::setupUi()
     rxGrid->setColumnStretch(1, 1);
     mainLayout->addWidget(rxGroup);
 
-    // === TX Gain Group ===
+    // === TX Parameters ===
     QGroupBox* txGroup = new QGroupBox("TX Parameters");
     QGridLayout* txGrid = new QGridLayout(txGroup);
     txGrid->setVerticalSpacing(14);
@@ -119,14 +151,8 @@ void GainSettingsDialog::setupUi()
     });
     txGrid->addWidget(new QLabel("Mod Idx:"), row, 0); txGrid->addWidget(m_modIndexSlider, row, 1); txGrid->addWidget(m_modIndexLabel, row, 2); row++;
 
-    // RF Amp Enable checkbox
     m_ampEnableCheck = new QCheckBox("RF Amp Enable (+14 dB)");
     m_ampEnableCheck->setChecked(false);
-    m_ampEnableCheck->setStyleSheet(
-        "QCheckBox { color: #CCDDEE; font-size: 13px; spacing: 8px; }"
-        "QCheckBox::indicator { width: 28px; height: 28px; border-radius: 6px; "
-        "  border: 2px solid #556688; background: #2A2A3E; }"
-        "QCheckBox::indicator:checked { background: #CC4422; border-color: #FF6644; }");
     connect(m_ampEnableCheck, &QCheckBox::toggled, [this](bool checked) {
         if (m_tcpClient->isConnected()) m_tcpClient->setAmpEnable(checked);
         emit ampEnableChanged(checked);
@@ -156,6 +182,8 @@ int GainSettingsDialog::amplitude() const { return m_amplitudeSlider->value(); }
 int GainSettingsDialog::modIndex() const { return m_modIndexSlider->value(); }
 int GainSettingsDialog::rxGain() const { return m_rxGainSlider->value(); }
 int GainSettingsDialog::deemph() const { return m_deemphSlider->value(); }
+int GainSettingsDialog::ifBandwidth() const { return m_ifBwSlider->value(); }
+int GainSettingsDialog::rxModIndex() const { return m_rxModIdxSlider->value(); }
 bool GainSettingsDialog::ampEnabled() const { return m_ampEnableCheck->isChecked(); }
 
 void GainSettingsDialog::setVgaGain(int v) { m_vgaGainSlider->setValue(v); }
@@ -165,6 +193,8 @@ void GainSettingsDialog::setAmplitude(int v) { m_amplitudeSlider->setValue(v); }
 void GainSettingsDialog::setModIndex(int v) { m_modIndexSlider->setValue(v); }
 void GainSettingsDialog::setRxGain(int v) { m_rxGainSlider->setValue(v); }
 void GainSettingsDialog::setDeemph(int v) { m_deemphSlider->setValue(v); }
+void GainSettingsDialog::setIfBandwidth(int v) { m_ifBwSlider->setValue(v); }
+void GainSettingsDialog::setRxModIndex(int v) { m_rxModIdxSlider->setValue(v); }
 void GainSettingsDialog::setAmpEnabled(bool en) {
     m_ampEnableCheck->blockSignals(true);
     m_ampEnableCheck->setChecked(en);

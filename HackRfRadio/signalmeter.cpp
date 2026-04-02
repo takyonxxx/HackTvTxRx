@@ -287,14 +287,12 @@ void SignalMeter::paintEvent(QPaintEvent *event)
     // Value in circle
     QString dbVal;
     if (m_txMode) {
-        // TX: show estimated dBm directly
         int dbmInt = static_cast<int>(std::round(m_txDbm));
         dbVal = QString::number(dbmInt);
     } else {
-        // RX: show relative dB from signal level
-        float db = 20.0f * std::log10(std::max(m_displayLevel, 0.001f));
-        int dbInt = static_cast<int>(std::round(db));
-        dbVal = QString::number(dbInt);
+        // RX: show measured dBm from FFT
+        int dbmInt = static_cast<int>(std::round(m_rxDbm));
+        dbVal = QString::number(dbmInt);
     }
 
     int dbFontSize = static_cast<int>(pivR * 0.65f);

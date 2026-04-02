@@ -82,9 +82,10 @@ private:
     QComboBox* m_modulationCombo;
     QLabel* m_modeLabel;
 
-    // Volume & Squelch (kept on main screen)
+    // Volume & Squelch & IF BW (on main screen)
     QSlider* m_volumeSlider;    QLabel* m_volumeLabel;
     QSlider* m_squelchSlider;   QLabel* m_squelchLabel;
+    QSlider* m_mainIfBwSlider;  QLabel* m_mainIfBwLabel;
 
     // PTT
     QPushButton* m_pttButton;

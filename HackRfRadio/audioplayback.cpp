@@ -34,7 +34,7 @@ bool AudioPlayback::start()
     qDebug() << "Using audio output:" << outputDevice.description();
 
     m_audioSink = new QAudioSink(outputDevice, m_format, this);
-    m_audioSink->setBufferSize(9600); // 100ms buffer
+    m_audioSink->setBufferSize(48000); // 500ms buffer - prevents underruns
 
     m_ioDevice = m_audioSink->start();
     if (!m_ioDevice) {
@@ -49,7 +49,7 @@ bool AudioPlayback::start()
     // Timer to write audio data periodically
     m_writeTimer = new QTimer(this);
     connect(m_writeTimer, &QTimer::timeout, this, &AudioPlayback::processAudioQueue);
-    m_writeTimer->start(20); // 20ms intervals
+    m_writeTimer->start(10); // 10ms intervals for smoother feeding
 
     qDebug() << "Audio playback started at 48000 Hz";
     return true;
@@ -80,6 +80,15 @@ void AudioPlayback::enqueueAudio(const std::vector<float>& samples)
     if (!m_running.load() || samples.empty()) return;
 
     size_t w = m_writePos.load(std::memory_order_relaxed);
+    size_t r = m_readPos.load(std::memory_order_acquire);
+
+    // Check available space (leave 1 sample gap to distinguish full vs empty)
+    size_t used = (w >= r) ? (w - r) : (RING_SIZE - r + w);
+    size_t free = RING_SIZE - used - 1;
+
+    // If buffer nearly full, skip to prevent overwriting unread data
+    if (samples.size() > free) return;
+
     for (size_t i = 0; i < samples.size(); i++) {
         m_ring[w] = samples[i];
         w = (w + 1) % RING_SIZE;
@@ -102,8 +111,14 @@ void AudioPlayback::processAudioQueue()
 
     if (available == 0) return;
 
-    // Write up to 960 samples (20ms at 48kHz)
-    size_t toWrite = std::min(available, size_t(960));
+    // Write up to 2400 samples (50ms at 48kHz) - feed ahead to prevent underrun
+    size_t toWrite = std::min(available, size_t(2400));
+
+    // Check how much space the audio sink has
+    size_t sinkFree = m_audioSink->bytesFree() / sizeof(int16_t);
+    if (sinkFree == 0) return;
+    toWrite = std::min(toWrite, sinkFree);
+
     float vol = m_volume.load();
 
     // Convert float to int16

@@ -28,6 +28,8 @@ public:
     float outputGain() const { return m_outputGain; }
     void setDeemphTau(float tauUs) { m_deemphTau = tauUs * 1e-6f; } // input in microseconds
     float deemphTauUs() const { return m_deemphTau * 1e6f; }
+    void setRxModIndex(float idx) { m_rxModIndex = idx; }
+    float rxModIndex() const { return m_rxModIndex; }
 
 private:
     struct DecimStage {
@@ -40,6 +42,7 @@ private:
     double m_bandwidth;
     float m_lastPhase;
     float m_outputGain;
+    float m_rxModIndex = 1.0f;  // RX modulation index (FM sensitivity multiplier)
     float m_deemphTau;    // de-emphasis time constant in seconds (0 = off)
     float m_deemphPrev;   // de-emphasis filter state
 

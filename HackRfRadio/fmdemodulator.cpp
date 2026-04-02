@@ -54,8 +54,8 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
     // 6. Final audio LPF
     audio = applyFIR(audio, m_audioFilterTaps);
 
-    // 7. De-emphasis for NFM (reduces high-frequency hiss)
-    if (m_bandwidth <= 25000.0 && m_deemphTau > 0.0f) {
+    // 7. De-emphasis (user-controlled via DeEmph slider, 0 = off)
+    if (m_deemphTau > 0.0f) {
         float dt = 1.0f / 48000.0f;
         float alpha = m_deemphTau / (m_deemphTau + dt);
         for (auto& s : audio) {
@@ -165,16 +165,18 @@ void FMDemodulator::rebuildChain()
         // Gain: FM demod phase delta is proportional to deviation
         // For +-5kHz deviation at 200kHz IF rate: delta_max = 2*pi*5000/200000 = 0.157 rad
         // We want ~0.7 output peak, so gain = 0.7/0.157 = ~4.5
-        m_outputGain = 4.5f;
-        // Default de-emphasis 750us (standard NFM, matching FT-60 pre-emphasis)
-        if (m_deemphTau <= 0.0f) {
-            m_deemphTau = 750e-6f;
+        // NOTE: Don't override m_outputGain here - user controls it via RX Gain slider
+        if (m_outputGain <= 0.0f) {
+            m_outputGain = 4.5f;  // only set default if not yet initialized
         }
+        // NOTE: Don't override m_deemphTau here - user controls it via DeEmph slider
     } else {
         // WBFM: 15 kHz audio bandwidth
         m_audioFilterTaps = designLPF(31, 15000.0f, 48000.0f);
-        m_outputGain = 0.5f;
-        m_deemphTau = 0.0f;  // WFM has its own de-emphasis in MPX
+        // NOTE: Don't override m_outputGain or m_deemphTau - user controls them
+        if (m_outputGain <= 0.0f) {
+            m_outputGain = 0.5f;
+        }
     }
 
     // IQ bandwidth filter at post-decimation rate
@@ -315,7 +317,7 @@ std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>
         float delta = phase - prev;
         if (delta > static_cast<float>(M_PI)) delta -= 2.0f * static_cast<float>(M_PI);
         if (delta < -static_cast<float>(M_PI)) delta += 2.0f * static_cast<float>(M_PI);
-        out[i] = delta * m_outputGain;
+        out[i] = delta * m_outputGain * m_rxModIndex;
         prev = phase;
     }
     m_lastPhase = prev;

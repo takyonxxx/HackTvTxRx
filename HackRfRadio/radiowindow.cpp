@@ -30,7 +30,7 @@ RadioWindow::RadioWindow(QWidget *parent)
     applyDarkStyle();
 
     // Create gain settings dialog (non-modal, reusable)
-    m_gainDialog = new GainSettingsDialog(m_tcpClient, m_fmDemod, this);
+    m_gainDialog = new GainSettingsDialog(m_tcpClient, m_fmDemod, m_amDemod, this);
 
     // Sync RF Amp: settings dialog -> main screen button
     connect(m_gainDialog, &GainSettingsDialog::ampEnableChanged, [this](bool enabled) {
@@ -95,6 +95,7 @@ void RadioWindow::saveSettings()
     s.setValue("amplitude", m_gainDialog->amplitude());
     s.setValue("modIndex", m_gainDialog->modIndex());
     s.setValue("rxGain", m_gainDialog->rxGain());
+    s.setValue("rxModIndex", m_gainDialog->rxModIndex());
     s.setValue("deemph", m_gainDialog->deemph());
     s.setValue("ampEnable", m_gainDialog->ampEnabled());
 
@@ -138,7 +139,11 @@ void RadioWindow::loadSettings()
     m_gainDialog->setAmplitude(s.value("amplitude", 10).toInt());
     m_gainDialog->setModIndex(s.value("modIndex", 40).toInt());
     m_gainDialog->setRxGain(s.value("rxGain", 45).toInt());
+    m_gainDialog->setRxModIndex(s.value("rxModIndex", 10).toInt());
     m_gainDialog->setDeemph(s.value("deemph", 750).toInt());
+    // NOTE: IF bandwidth is NOT restored from settings.
+    // The modulation combo (set above) already triggered onModulationChanged
+    // which sets the correct default IF BW for the selected mode.
     m_gainDialog->setAmpEnabled(s.value("ampEnable", false).toBool());
     m_rfAmpBtn->setChecked(s.value("ampEnable", false).toBool());
 
@@ -146,7 +151,17 @@ void RadioWindow::loadSettings()
     if (s.contains("geometry"))
         restoreGeometry(s.value("geometry").toByteArray());
 
-    qDebug() << "Settings loaded - freq:" << freq;
+    // Apply local demodulator parameters directly
+    // onModulationChanged (triggered by setCurrentIndex above) already set IF BW default.
+    // RX gain must be applied AFTER bandwidth since setBandwidth->rebuildChain resets gain.
+    float rxGain = m_gainDialog->rxGain() / 10.0f;
+    m_fmDemod->setOutputGain(rxGain);
+    m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
+    m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
+
+    qDebug() << "Settings applied - freq:" << freq << "rxGain:" << rxGain
+             << "rxModIdx:" << m_gainDialog->rxModIndex() / 10.0f
+             << "deemph:" << m_gainDialog->deemph();
 }
 
 // ============================================================
@@ -262,7 +277,7 @@ void RadioWindow::setupUi()
     mainLayout->addWidget(m_signalMeter);
 
     // ──────────────────────────────────────────────
-    // Spacer - pushes everything below to bottom
+    // Spacer above sliders
     // ──────────────────────────────────────────────
     mainLayout->addStretch(1);
 
@@ -304,10 +319,40 @@ void RadioWindow::setupUi()
     sliderGrid->addWidget(m_squelchSlider, 1, 1);
     sliderGrid->addWidget(m_squelchLabel, 1, 2);
 
+    // IF Bandwidth (main screen)
+    QLabel* bwIcon = new QLabel("BW");
+    bwIcon->setObjectName("sliderIcon");
+    m_mainIfBwSlider = new QSlider(Qt::Horizontal);
+    m_mainIfBwSlider->setRange(1, 200);
+    m_mainIfBwSlider->setValue(25);  // 12.5 kHz default
+    m_mainIfBwSlider->setMinimumHeight(36);
+    m_mainIfBwLabel = new QLabel("12.5 kHz");
+    m_mainIfBwLabel->setMinimumWidth(60);
+    m_mainIfBwLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    connect(m_mainIfBwSlider, &QSlider::valueChanged, [this](int v) {
+        float bw;
+        if (v <= 25) bw = v * 500.0f;
+        else bw = 12500.0f + (v - 25) * 1000.0f;
+        if (bw >= 1000.0f)
+            m_mainIfBwLabel->setText(QString("%1 kHz").arg(bw / 1000.0f, 0, 'f', 1));
+        else
+            m_mainIfBwLabel->setText(QString("%1 Hz").arg(static_cast<int>(bw)));
+        m_fmDemod->setBandwidth(bw);
+        m_amDemod->setBandwidth(bw);
+        // Sync settings dialog slider
+        m_gainDialog->setIfBandwidth(v);
+    });
+    sliderGrid->addWidget(bwIcon, 2, 0);
+    sliderGrid->addWidget(m_mainIfBwSlider, 2, 1);
+    sliderGrid->addWidget(m_mainIfBwLabel, 2, 2);
+
     sliderGrid->setColumnStretch(1, 1);
     mainLayout->addLayout(sliderGrid);
 
-    mainLayout->addSpacing(12);
+    // ──────────────────────────────────────────────
+    // Spacer below sliders
+    // ──────────────────────────────────────────────
+    mainLayout->addStretch(1);
 
     // ──────────────────────────────────────────────
     // TX/RX STATUS INDICATOR
@@ -474,6 +519,20 @@ void RadioWindow::onConnected()
     m_tcpClient->setModulationIndex(m_gainDialog->modIndex() / 100.0f);
     m_tcpClient->setAmpEnable(m_gainDialog->ampEnabled());
     m_tcpClient->switchToRx();
+
+    // Apply IF bandwidth from slider
+    int bwVal = m_gainDialog->ifBandwidth();
+    float bw;
+    if (bwVal <= 25) bw = bwVal * 500.0f;
+    else bw = 12500.0f + (bwVal - 25) * 1000.0f;
+    m_fmDemod->setBandwidth(bw);
+    m_amDemod->setBandwidth(bw);
+
+    // Apply RX gain AFTER bandwidth (setBandwidth->rebuildChain may reset gain)
+    float rxGain = m_gainDialog->rxGain() / 10.0f;
+    m_fmDemod->setOutputGain(rxGain);
+    m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
+    m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
 }
 
 void RadioWindow::onDisconnected()
@@ -512,8 +571,84 @@ void RadioWindow::processIqBuffer()
     const int8_t* iq = reinterpret_cast<const int8_t*>(chunk.constData());
     size_t n = chunk.size() / 2;
     std::vector<std::complex<float>> samples(n);
-    for (size_t i = 0; i < n; i++)
+
+    for (size_t i = 0; i < n; i++) {
         samples[i] = std::complex<float>(iq[i*2] / 128.0f, iq[i*2+1] / 128.0f);
+    }
+
+    // ── FFT-based signal power measurement ──
+    // Use a subset of samples for FFT (power of 2)
+    size_t fftSize = 4096;
+    if (n >= fftSize) {
+        // Simple DFT on center portion (or use full FFT if available)
+        // Compute magnitude squared of FFT bins, find peak and total power
+        std::vector<std::complex<float>> fftIn(fftSize);
+        size_t offset = (n - fftSize) / 2;
+        for (size_t i = 0; i < fftSize; i++) {
+            // Apply Hanning window to reduce spectral leakage
+            float window = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(M_PI) * i / (fftSize - 1)));
+            fftIn[i] = samples[offset + i] * window;
+        }
+
+        // In-place Cooley-Tukey FFT (radix-2 DIT)
+        // Bit-reversal permutation
+        for (size_t i = 1, j = 0; i < fftSize; i++) {
+            size_t bit = fftSize >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) std::swap(fftIn[i], fftIn[j]);
+        }
+        // FFT butterfly
+        for (size_t len = 2; len <= fftSize; len <<= 1) {
+            float angle = -2.0f * static_cast<float>(M_PI) / len;
+            std::complex<float> wlen(std::cos(angle), std::sin(angle));
+            for (size_t i = 0; i < fftSize; i += len) {
+                std::complex<float> w(1.0f, 0.0f);
+                for (size_t j = 0; j < len / 2; j++) {
+                    std::complex<float> u = fftIn[i + j];
+                    std::complex<float> v = fftIn[i + j + len/2] * w;
+                    fftIn[i + j] = u + v;
+                    fftIn[i + j + len/2] = u - v;
+                    w *= wlen;
+                }
+            }
+        }
+
+        // Calculate power spectral density
+        // Peak power and total power in band
+        float peakMagSq = 0.0f;
+        float totalMagSq = 0.0f;
+        for (size_t i = 0; i < fftSize; i++) {
+            float magSq = std::norm(fftIn[i]);  // |X[k]|^2
+            totalMagSq += magSq;
+            if (magSq > peakMagSq) peakMagSq = magSq;
+        }
+
+        // Normalize by FFT size squared (Parseval's theorem)
+        float fftSizeF = static_cast<float>(fftSize);
+        float peakPowerDb = 10.0f * std::log10(std::max(peakMagSq / (fftSizeF * fftSizeF), 1e-12f));
+        float avgPowerDb = 10.0f * std::log10(std::max(totalMagSq / (fftSizeF * fftSizeF * fftSizeF), 1e-12f));
+
+        // IQ data from ADC already includes all gain stages.
+        // We just need dBFS to dBm conversion.
+        // HackRF 8-bit ADC: full scale (0 dBFS) ~ +10 dBm at antenna with 0 gain
+        // With gain applied, 0 dBFS corresponds to a weaker input signal.
+        // But since we measure the digitized output, we report relative power.
+        //
+        // Simple calibration: map dBFS range to realistic dBm range
+        // peakPowerDb is typically -30 to -60 dBFS for real signals
+        // Map to S-meter: -35 dBFS -> S9 (-73 dBm), -65 dBFS -> S0 (-127 dBm)
+        float signalDbm = peakPowerDb * 1.8f - 10.0f;  // linear mapping dBFS -> dBm
+
+        // Map dBm to 0.0-1.0 for S-meter
+        // S1 = -121 dBm, S9 = -73 dBm, S9+60 = -13 dBm
+        float minDbm = -130.0f;
+        float maxDbm = -10.0f;
+        float level = (signalDbm - minDbm) / (maxDbm - minDbm);
+        level = std::clamp(level, 0.0f, 1.0f);
+        m_signalMeter->setLevel(level);
+        m_signalMeter->setRxDbm(signalDbm);
+    }
 
     std::vector<float> audio;
     switch (m_currentModulation) {
@@ -522,13 +657,13 @@ void RadioWindow::processIqBuffer()
     }
 
     if (!audio.empty()) {
+        // Squelch: use audio RMS to gate playback
         float sumSq = 0.0f;
         for (const auto& s : audio) sumSq += s * s;
-        float rms = std::sqrt(sumSq / audio.size());
-        float level = std::min(rms * 5.0f, 1.0f);
-        m_signalMeter->setLevel(level);
+        float audioRms = std::sqrt(sumSq / audio.size());
 
-        if (level >= m_squelchLevel)
+        // Squelch threshold comparison (audio-based, independent of meter)
+        if (audioRms >= m_squelchLevel * 0.5f)
             m_audioPlayback->enqueueAudio(audio);
     }
 }
@@ -661,18 +796,33 @@ void RadioWindow::onModulationChanged(int index)
     case 0:
         m_currentModulation = FM_NB;
         m_fmDemod->setBandwidth(12500.0);
+        m_gainDialog->setIfBandwidth(25);
+        m_mainIfBwSlider->blockSignals(true);
+        m_mainIfBwSlider->setValue(25);
+        m_mainIfBwLabel->setText("12.5 kHz");
+        m_mainIfBwSlider->blockSignals(false);
         m_modeLabel->setText("NFM");
         m_modeLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #00FF66;");
         break;
     case 1:
         m_currentModulation = FM_WB;
         m_fmDemod->setBandwidth(150000.0);
+        m_gainDialog->setIfBandwidth(163);
+        m_mainIfBwSlider->blockSignals(true);
+        m_mainIfBwSlider->setValue(163);
+        m_mainIfBwLabel->setText("150.0 kHz");
+        m_mainIfBwSlider->blockSignals(false);
         m_modeLabel->setText("WFM");
         m_modeLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #FFAA00;");
         break;
     case 2:
         m_currentModulation = AM;
         m_amDemod->setBandwidth(10000.0);
+        m_gainDialog->setIfBandwidth(20);
+        m_mainIfBwSlider->blockSignals(true);
+        m_mainIfBwSlider->setValue(20);
+        m_mainIfBwLabel->setText("10.0 kHz");
+        m_mainIfBwSlider->blockSignals(false);
         m_modeLabel->setText("AM");
         m_modeLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #FF6666;");
         break;
@@ -681,6 +831,12 @@ void RadioWindow::onModulationChanged(int index)
     if (m_tcpClient->isConnected()) m_tcpClient->setSampleRate(m_sampleRate);
     m_fmDemod->setSampleRate(m_sampleRate);
     m_amDemod->setSampleRate(m_sampleRate);
+
+    // Re-apply RX gain after rebuildChain (setBandwidth/setSampleRate resets it)
+    float rxGain = m_gainDialog->rxGain() / 10.0f;
+    m_fmDemod->setOutputGain(rxGain);
+    m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
+    m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
 }
 
 // ============================================================
