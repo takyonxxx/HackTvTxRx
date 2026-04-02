@@ -133,14 +133,14 @@ void RadioWindow::loadSettings()
     m_squelchSlider->setValue(s.value("squelch", 10).toInt());
 
     // Gain & TX (to dialog)
-    m_gainDialog->setVgaGain(s.value("vgaGain", 40).toInt());
+    m_gainDialog->setVgaGain(s.value("vgaGain", 20).toInt());
     m_gainDialog->setLnaGain(s.value("lnaGain", 40).toInt());
     m_gainDialog->setTxGain(s.value("txGain", 47).toInt());
-    m_gainDialog->setAmplitude(s.value("amplitude", 10).toInt());
+    m_gainDialog->setAmplitude(s.value("amplitude", 50).toInt());
     m_gainDialog->setModIndex(s.value("modIndex", 40).toInt());
-    m_gainDialog->setRxGain(s.value("rxGain", 45).toInt());
+    m_gainDialog->setRxGain(s.value("rxGain", 20).toInt());
     m_gainDialog->setRxModIndex(s.value("rxModIndex", 10).toInt());
-    m_gainDialog->setDeemph(s.value("deemph", 750).toInt());
+    m_gainDialog->setDeemph(s.value("deemph", 0).toInt());
     // NOTE: IF bandwidth is NOT restored from settings.
     // The modulation combo (set above) already triggered onModulationChanged
     // which sets the correct default IF BW for the selected mode.

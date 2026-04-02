@@ -54,23 +54,40 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
     // 6. Final audio LPF
     audio = applyFIR(audio, m_audioFilterTaps);
 
-    // 7. De-emphasis (user-controlled via DeEmph slider, 0 = off)
+    // 7. High-pass filter at 250 Hz - removes low-freq rumble, improves voice clarity
+    {
+        // Single-pole HPF: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
+        static float hpfPrev = 0.0f;
+        static float hpfPrevIn = 0.0f;
+        float cutoff = 250.0f;
+        float rc = 1.0f / (2.0f * static_cast<float>(M_PI) * cutoff);
+        float dt = 1.0f / 48000.0f;
+        float alpha = rc / (rc + dt);
+        for (auto& s : audio) {
+            float filtered = alpha * (hpfPrev + s - hpfPrevIn);
+            hpfPrevIn = s;
+            hpfPrev = filtered;
+            s = filtered;
+        }
+    }
+
+    // 8. De-emphasis (user-controlled via DeEmph slider, 0 = off)
     if (m_deemphTau > 0.0f) {
         float dt = 1.0f / 48000.0f;
-        float alpha = m_deemphTau / (m_deemphTau + dt);
+        float alphaD = m_deemphTau / (m_deemphTau + dt);
         for (auto& s : audio) {
-            m_deemphPrev = alpha * m_deemphPrev + (1.0f - alpha) * s;
+            m_deemphPrev = alphaD * m_deemphPrev + (1.0f - alphaD) * s;
             s = m_deemphPrev;
         }
     }
 
-    // 8. DC removal
+    // 9. DC removal
     removeDC(audio);
 
-    // 9. Soft limiter - prevents clipping distortion on strong signals
+    // 10. Soft limiter - prevents clipping distortion
     for (auto& s : audio) {
-        if (s > 0.95f) s = 0.95f + 0.05f * std::tanh((s - 0.95f) * 10.0f);
-        else if (s < -0.95f) s = -0.95f + 0.05f * std::tanh((s + 0.95f) * 10.0f);
+        if (s > 0.9f) s = 0.9f + 0.1f * std::tanh((s - 0.9f) * 8.0f);
+        else if (s < -0.9f) s = -0.9f + 0.1f * std::tanh((s + 0.9f) * 8.0f);
     }
 
     return audio;
@@ -311,39 +328,32 @@ std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>
 
     std::vector<float> out(signal.size());
 
-    // FM demodulation: instantaneous frequency from phase derivative
-    // delta_phase = phase[n] - phase[n-1]  (radians per sample)
-    // freq_deviation_hz = delta_phase * sampleRate / (2*pi)
-    // Normalized audio = freq_deviation / max_deviation
-    //
-    // For NFM: max_deviation ~ 5 kHz
-    // For WFM: max_deviation ~ 75 kHz
-    // We use outputGain and rxModIndex to scale:
-    //   outputGain controls overall volume
-    //   rxModIndex controls FM sensitivity
+    // Conjugate multiply FM demodulation:
+    // y[n] = angle(x[n] * conj(x[n-1]))
+    // This is equivalent to phase difference but avoids atan2 discontinuities
+    // and produces cleaner output with less phase noise.
 
-    // Rate-normalized gain: compensate for sample rate so output level
-    // is consistent regardless of decimation
     float rateNorm = static_cast<float>(rate) / (2.0f * static_cast<float>(M_PI));
+    float refDeviation = (m_bandwidth <= 25000.0) ? 5000.0f : 75000.0f;
+    float scale = (rateNorm / refDeviation) * m_outputGain * m_rxModIndex;
 
-    float prev = m_lastPhase;
+    // First sample uses stored previous sample
+    std::complex<float> prevSample(std::cos(m_lastPhase), std::sin(m_lastPhase));
+
     for (size_t i = 0; i < signal.size(); i++) {
-        float phase = std::atan2(signal[i].imag(), signal[i].real());
-        float delta = phase - prev;
-        if (delta > static_cast<float>(M_PI)) delta -= 2.0f * static_cast<float>(M_PI);
-        if (delta < -static_cast<float>(M_PI)) delta += 2.0f * static_cast<float>(M_PI);
+        // Conjugate multiply: product = x[n] * conj(x[n-1])
+        std::complex<float> product = signal[i] * std::conj(prevSample);
 
-        // Convert phase delta to frequency deviation, then apply gain
-        // delta * rateNorm = frequency deviation in Hz
-        // Divide by reference deviation (5000 Hz for NFM) to normalize
-        float deviation_hz = delta * rateNorm;
-        float refDeviation = (m_bandwidth <= 25000.0) ? 5000.0f : 75000.0f;
-        float normalized = deviation_hz / refDeviation;
+        // Fast atan2 approximation for small angles (typical in FM demod)
+        // For better accuracy, use full atan2
+        float delta = std::atan2(product.imag(), product.real());
 
-        out[i] = normalized * m_outputGain * m_rxModIndex;
-        prev = phase;
+        out[i] = delta * scale;
+        prevSample = signal[i];
     }
-    m_lastPhase = prev;
+
+    // Store last phase for continuity
+    m_lastPhase = std::atan2(prevSample.imag(), prevSample.real());
 
     return out;
 }

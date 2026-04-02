@@ -50,8 +50,8 @@ void GainSettingsDialog::setupUi()
     rxGrid->setHorizontalSpacing(10);
     int row = 0;
 
-    m_vgaGainSlider = new QSlider(Qt::Horizontal); m_vgaGainSlider->setRange(0, 62); m_vgaGainSlider->setValue(40);
-    m_vgaGainLabel = new QLabel("40");
+    m_vgaGainSlider = new QSlider(Qt::Horizontal); m_vgaGainSlider->setRange(0, 62); m_vgaGainSlider->setValue(20);
+    m_vgaGainLabel = new QLabel("20");
     connect(m_vgaGainSlider, &QSlider::valueChanged, [this](int v) {
         m_vgaGainLabel->setText(QString::number(v));
         if (m_tcpClient->isConnected()) m_tcpClient->setVgaGain(v);
@@ -66,8 +66,8 @@ void GainSettingsDialog::setupUi()
     });
     rxGrid->addWidget(new QLabel("LNA (RX):"), row, 0); rxGrid->addWidget(m_lnaGainSlider, row, 1); rxGrid->addWidget(m_lnaGainLabel, row, 2); row++;
 
-    m_rxGainSlider = new QSlider(Qt::Horizontal); m_rxGainSlider->setRange(1, 100); m_rxGainSlider->setValue(45);
-    m_rxGainLabel = new QLabel("4.5");
+    m_rxGainSlider = new QSlider(Qt::Horizontal); m_rxGainSlider->setRange(1, 100); m_rxGainSlider->setValue(20);
+    m_rxGainLabel = new QLabel("2.0");
     connect(m_rxGainSlider, &QSlider::valueChanged, [this](int v) {
         float gain = v / 10.0f;
         m_rxGainLabel->setText(QString::number(gain, 'f', 1));
@@ -104,8 +104,8 @@ void GainSettingsDialog::setupUi()
     });
     rxGrid->addWidget(new QLabel("RX ModIdx:"), row, 0); rxGrid->addWidget(m_rxModIdxSlider, row, 1); rxGrid->addWidget(m_rxModIdxLabel, row, 2); row++;
 
-    m_deemphSlider = new QSlider(Qt::Horizontal); m_deemphSlider->setRange(0, 1000); m_deemphSlider->setValue(750);
-    m_deemphLabel = new QLabel("750us");
+    m_deemphSlider = new QSlider(Qt::Horizontal); m_deemphSlider->setRange(0, 1000); m_deemphSlider->setValue(0);
+    m_deemphLabel = new QLabel("OFF");
     connect(m_deemphSlider, &QSlider::valueChanged, [this](int v) {
         if (v == 0) m_deemphLabel->setText("OFF");
         else m_deemphLabel->setText(QString("%1us").arg(v));
@@ -133,8 +133,8 @@ void GainSettingsDialog::setupUi()
     });
     txGrid->addWidget(new QLabel("TX Power:"), row, 0); txGrid->addWidget(m_txGainSlider, row, 1); txGrid->addWidget(m_txGainLabel, row, 2); row++;
 
-    m_amplitudeSlider = new QSlider(Qt::Horizontal); m_amplitudeSlider->setRange(1, 100); m_amplitudeSlider->setValue(10);
-    m_amplitudeLabel = new QLabel("0.10");
+    m_amplitudeSlider = new QSlider(Qt::Horizontal); m_amplitudeSlider->setRange(1, 100); m_amplitudeSlider->setValue(50);
+    m_amplitudeLabel = new QLabel("0.50");
     connect(m_amplitudeSlider, &QSlider::valueChanged, [this](int v) {
         float amp = v / 100.0f;
         m_amplitudeLabel->setText(QString::number(amp, 'f', 2));
