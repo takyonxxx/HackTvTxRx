@@ -48,6 +48,7 @@ public:
 
 signals:
     void ampEnableChanged(bool enabled);
+    void settingsChanged();
 
 private:
     void setupUi();

@@ -40,6 +40,9 @@ RadioWindow::RadioWindow(QWidget *parent)
         m_rfAmpBtn->blockSignals(false);
     });
 
+    // Auto-save when any setting changes in dialog
+    connect(m_gainDialog, &GainSettingsDialog::settingsChanged, this, &RadioWindow::saveSettings);
+
     loadSettings();
 
     connect(m_tcpClient, &TcpClient::connected, this, &RadioWindow::onConnected);
@@ -102,8 +105,6 @@ void RadioWindow::saveSettings()
 
     // Window geometry
     s.setValue("geometry", saveGeometry());
-
-    qDebug() << "Settings saved";
 }
 
 void RadioWindow::loadSettings()
@@ -114,6 +115,14 @@ void RadioWindow::loadSettings()
         qDebug() << "No saved settings, using defaults";
         return;
     }
+
+    // Block settingsChanged during load to prevent save-during-load corruption
+    m_gainDialog->blockSignals(true);
+    m_bwCombo->blockSignals(true);
+    m_modulationCombo->blockSignals(true);
+    m_volumeSlider->blockSignals(true);
+    m_squelchSlider->blockSignals(true);
+    m_bandPreset->blockSignals(true);
 
     // Connection
     m_hostEdit->setText(s.value("host", "127.0.0.1").toString());
@@ -126,8 +135,9 @@ void RadioWindow::loadSettings()
     m_freqWidget->setFrequency(freq);
     m_bandPreset->setCurrentIndex(s.value("bandPreset", 0).toInt());
 
-    // Bandwidth (restore before modulation, so onModulationChanged uses correct rate)
+    // Bandwidth
     m_bwCombo->setCurrentIndex(s.value("bwIndex", 0).toInt());
+    m_sampleRate = m_bwCombo->currentData().toUInt();
 
     // Modulation
     m_modulationCombo->setCurrentIndex(s.value("modulation", 0).toInt());
@@ -137,35 +147,48 @@ void RadioWindow::loadSettings()
     m_squelchSlider->setValue(s.value("squelch", 10).toInt());
 
     // Gain & TX (to dialog)
-    m_gainDialog->setVgaGain(s.value("vgaGain", 20).toInt());
+    m_gainDialog->setVgaGain(s.value("vgaGain", 30).toInt());
     m_gainDialog->setLnaGain(s.value("lnaGain", 40).toInt());
     m_gainDialog->setTxGain(s.value("txGain", 47).toInt());
     m_gainDialog->setAmplitude(s.value("amplitude", 50).toInt());
     m_gainDialog->setModIndex(s.value("modIndex", 40).toInt());
-    m_gainDialog->setRxGain(s.value("rxGain", 20).toInt());
-    m_gainDialog->setRxModIndex(s.value("rxModIndex", 10).toInt());
+    m_gainDialog->setRxGain(s.value("rxGain", 10).toInt());
+    m_gainDialog->setRxModIndex(s.value("rxModIndex", 30).toInt());
     m_gainDialog->setDeemph(s.value("deemph", 0).toInt());
-    // NOTE: IF bandwidth is NOT restored from settings.
-    // The modulation combo (set above) already triggered onModulationChanged
-    // which sets the correct default IF BW for the selected mode.
     m_gainDialog->setAmpEnabled(s.value("ampEnable", false).toBool());
     m_rfAmpBtn->setChecked(s.value("ampEnable", false).toBool());
+
+    // Unblock signals
+    m_gainDialog->blockSignals(false);
+    m_bwCombo->blockSignals(false);
+    m_modulationCombo->blockSignals(false);
+    m_volumeSlider->blockSignals(false);
+    m_squelchSlider->blockSignals(false);
+    m_bandPreset->blockSignals(false);
 
     // Window geometry
     if (s.contains("geometry"))
         restoreGeometry(s.value("geometry").toByteArray());
 
-    // Apply local demodulator parameters directly
-    // onModulationChanged (triggered by setCurrentIndex above) already set IF BW default.
-    // RX gain must be applied AFTER bandwidth since setBandwidth->rebuildChain resets gain.
-    float rxGain = m_gainDialog->rxGain() / 10.0f;
-    m_fmDemod->setOutputGain(rxGain);
-    m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
-    m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
+    // Apply local demodulator parameters directly (signals were blocked, apply manually)
+    // Trigger modulation change to set correct IF BW and mode label
+    onModulationChanged(m_modulationCombo->currentIndex());
 
-    qDebug() << "Settings applied - freq:" << freq << "rxGain:" << rxGain
-             << "rxModIdx:" << m_gainDialog->rxModIndex() / 10.0f
-             << "deemph:" << m_gainDialog->deemph();
+    m_cPlotter->setSampleRate(m_sampleRate);
+    m_cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
+    m_cPlotter->setCenterFreq(static_cast<quint64>(freq));
+
+    // Apply volume and squelch
+    m_audioPlayback->setVolume(m_volumeSlider->value() / 100.0f);
+    m_volumeLabel->setText(QString("%1%").arg(m_volumeSlider->value()));
+    m_squelchLevel = m_squelchSlider->value() / 100.0f;
+    m_squelchLabel->setText(QString("%1%").arg(m_squelchSlider->value()));
+
+    qDebug() << "Settings applied - freq:" << freq
+             << "lna:" << m_gainDialog->lnaGain()
+             << "vga:" << m_gainDialog->vgaGain()
+             << "bw:" << m_sampleRate
+             << "mod:" << m_modulationCombo->currentIndex();
 }
 
 // ============================================================
