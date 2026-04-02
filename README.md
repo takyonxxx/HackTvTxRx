@@ -53,6 +53,24 @@ Based on [fsphil/hacktv](https://github.com/fsphil/hacktv) with significant modi
   <img src="palbdecoder_ios_radio.png" alt="PALBDecoderIOS Radio Mode" width="300"/>
 </p>
 
+### HackRfRadio - TCP Remote SDR Radio
+
+A standalone Qt 6.x radio client that connects to HackRfTcp over TCP/IP, enabling remote SDR operation from any device on the network. Designed for both desktop and touch-friendly mobile-style interfaces.
+
+- **FM Stereo Decode**: Real-time 19 kHz pilot tone detection via Goertzel algorithm, PLL-based 38 kHz subcarrier recovery, L/R channel separation — true stereo FM broadcast reception
+- **Stereo Indicator**: Live STEREO/MONO status display with click-to-toggle forced mono mode
+- **Multiple Modulations**: WFM (Wide FM), NFM (Narrow FM), AM demodulation
+- **Spectrum Analyzer**: Real-time FFT spectrum display (CPlotter) with SDRuno-style gradient fill, band overlay, adaptive frequency labels
+- **Signal Meter**: CMeter dBFS bar with real-time level tracking
+- **Remote Operation**: Connects to HackRfTcp server over WiFi/LAN — HackRF can run on a Raspberry Pi while the radio client runs on any PC
+- **Adjustable Parameters**: VGA, LNA, RX Gain, IF Bandwidth, Modulation Index, De-emphasis — all settings auto-saved and restored
+- **PTT Transmit**: Push-to-talk FM transmit via microphone with real-time audio streaming to server
+- **Bandwidth Selection**: 2, 4, 8, 10, 12.5, 16, 20 MHz sample rates
+- **Band Presets**: VHF/UHF amateur, FM broadcast, marine, PMR446, CB and custom frequencies
+- **Low-latency Audio**: Dedicated writer thread with stereo output, buffer priming, and QAudioSink volume control for instant response
+
+![HackRfRadio Screenshot](hackrfradio_screen.png)
+
 ## Architecture
 
 ### PAL-B/G Audio Demodulation Pipeline
@@ -186,6 +204,18 @@ HackTvRxTx/
 ├── HackRfTcp/             # HackRF TCP IQ Server (headless, runs on Raspberry Pi)
 │   ├── main.cpp           # Server entry point
 │   └── sdrdevice.cpp/h    # TCP streaming IQ server (data port + control port)
+├── HackRfRadio/           # TCP Remote SDR Radio Client
+│   ├── radiowindow.cpp/h  # Main radio GUI (spectrum, meter, PTT, controls)
+│   ├── fmdemodulator.cpp/h # FM demodulator with stereo decode (pilot PLL, 38kHz subcarrier)
+│   ├── amdemodulator.cpp/h # AM envelope demodulator
+│   ├── audioplayback.cpp/h # Stereo audio output (dedicated writer thread)
+│   ├── audiocapture.cpp/h # Microphone capture for PTT transmit
+│   ├── tcpclient.cpp/h    # TCP client (IQ data + control + audio channels)
+│   ├── frequencywidget.cpp/h # Touch-friendly frequency digit display
+│   ├── gainsettingsdialog.* # Gain & TX parameters dialog
+│   ├── glplotter.cpp/h    # OpenGL spectrum analyzer (from HackTvGui)
+│   ├── meter.cpp/h        # Signal level meter (from HackTvGui)
+│   └── constants.h        # FFT, frequency macros, gain limits
 ├── include/               # Shared headers
 └── lib/                   # Pre-built libraries (windows/macos/linux)
 ```
