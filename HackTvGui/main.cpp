@@ -43,7 +43,7 @@ int main(int argc, char *argv[])
         "QToolTip { color: #c8f0ff; background-color: #141828; border: 1px solid #00d4ff; padding: 3px; border-radius: 3px; }"
 
         // Group boxes with neon accent
-        "QGroupBox { border: 1px solid #0096c8; border-radius: 6px; margin-top: 1em; padding-top: 0.8em; background-color: rgba(0, 150, 200, 5); }"
+        "QGroupBox { border: 1px solid #0096c8; border-radius: 5px; margin-top: 0.6em; padding-top: 0.5em; background-color: rgba(0, 150, 200, 5); }"
         "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #00ffcc; font-weight: bold; text-transform: uppercase; font-size: 11px; }"
 
         // Buttons with cyber glow effect

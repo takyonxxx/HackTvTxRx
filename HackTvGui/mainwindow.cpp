@@ -173,8 +173,8 @@ void MainWindow::setupUi()
 
     QWidget *centralWidget = new QWidget(this);
     mainLayout = new QVBoxLayout(centralWidget);
-    mainLayout->setSpacing(4);
-    mainLayout->setContentsMargins(4, 4, 4, 4);
+    mainLayout->setSpacing(2);
+    mainLayout->setContentsMargins(4, 2, 4, 4);
 
     addOutputGroup();
     addRxGroup();
@@ -361,17 +361,11 @@ void MainWindow::addOutputGroup()
 {
     // Output device group - compact single-row layout
     outputGroup = new QGroupBox("Device Settings", this);
-    outputGroup->setStyleSheet(
-        "QGroupBox { border: 1px solid #0096c8; border-radius: 6px; margin-top: 1.2em; "
-        "padding-top: 1em; background-color: rgba(0, 40, 60, 30); }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 8px; "
-        "color: #00ffcc; font-weight: bold; text-transform: uppercase; font-size: 11px; }"
-    );
 
     QGridLayout *outputLayout = new QGridLayout(outputGroup);
-    outputLayout->setVerticalSpacing(8);
-    outputLayout->setHorizontalSpacing(10);
-    outputLayout->setContentsMargins(14, 24, 14, 10);
+    outputLayout->setVerticalSpacing(4);
+    outputLayout->setHorizontalSpacing(8);
+    outputLayout->setContentsMargins(10, 18, 10, 6);
 
     QString settingsLabelStyle = "QLabel { color: #90c8e0; font-size: 11px; font-weight: bold; }";
 
@@ -423,43 +417,42 @@ void MainWindow::addOutputGroup()
 
     // frequencyEdit removed — m_frequency is the authoritative source
 
-    // Single row: Device [___combo___] | Mode [_combo_] | BW [_combo_] | Amp | NoColor | Ch [_combo_]
+    // Single row: Device [___] Mode [___] | BW [___] Amp NoColor | Ch [___]
+    // Row 0: Device + Mode
     outputLayout->addWidget(outputLabel,     0, 0);
     outputLayout->addWidget(outputCombo,     0, 1);
     outputLayout->addWidget(rxtxLabel,       0, 2);
     outputLayout->addWidget(rxtxCombo,       0, 3);
-    outputLayout->addWidget(sampleRateLabel, 0, 4);
-    outputLayout->addWidget(sampleRateCombo, 0, 5);
-    outputLayout->addWidget(ampEnabled,      0, 6);
-    outputLayout->addWidget(colorDisabled,   0, 7);
-    outputLayout->addWidget(channelLabel,    0, 8);
-    outputLayout->addWidget(channelCombo,    0, 9);
+    outputLayout->addWidget(ampEnabled,      0, 4);
+    outputLayout->addWidget(colorDisabled,   0, 5);
+
+    // Row 1: BW + Ch
+    outputLayout->addWidget(sampleRateLabel, 1, 0);
+    outputLayout->addWidget(sampleRateCombo, 1, 1);
+    outputLayout->addWidget(channelLabel,    1, 2);
+    outputLayout->addWidget(channelCombo,    1, 3, 1, 3);
 
     // Column stretches
-    outputLayout->setColumnStretch(0, 0);  // Device label
-    outputLayout->setColumnStretch(1, 4);  // Device combo - widest
-    outputLayout->setColumnStretch(2, 0);  // Mode label
-    outputLayout->setColumnStretch(3, 2);  // Mode combo
-    outputLayout->setColumnStretch(4, 0);  // BW label
-    outputLayout->setColumnStretch(5, 2);  // BW combo
-    outputLayout->setColumnStretch(6, 0);  // Amp
-    outputLayout->setColumnStretch(7, 0);  // NoColor
-    outputLayout->setColumnStretch(8, 0);  // Ch label
-    outputLayout->setColumnStretch(9, 2);  // Ch combo
+    outputLayout->setColumnStretch(0, 0);  // labels
+    outputLayout->setColumnStretch(1, 4);  // Device/BW combo
+    outputLayout->setColumnStretch(2, 0);  // Mode/Ch label
+    outputLayout->setColumnStretch(3, 3);  // Mode/Ch combo
+    outputLayout->setColumnStretch(4, 0);  // Amp
+    outputLayout->setColumnStretch(5, 0);  // NoColor
 
-    int col = 10; // total columns for TX controls row span
+    int col = 6; // total columns for TX controls row span
 
     // TX Controls layout (hidden in RX mode)
     txControlsLayout = new QGridLayout();
-    txControlsLayout->setSpacing(6);
-    txControlsLayout->setContentsMargins(0, 4, 0, 0);
+    txControlsLayout->setSpacing(4);
+    txControlsLayout->setContentsMargins(0, 0, 0, 0);
 
     // TX Amplitude (same as HackRfRadio: range 1-100, /100 = 0.01-1.00, default 0.50)
     txAmplitudeSlider = new QSlider(Qt::Horizontal);
     txAmplitudeSlider->setRange(1, 100);
     txAmplitudeSlider->setValue(static_cast<int>(tx_amplitude * 100));
     txAmplitudeSpinBox = new QDoubleSpinBox();
-    txAmplitudeSpinBox->setMinimumWidth(60);
+    txAmplitudeSpinBox->setMinimumWidth(55);
     txAmplitudeSpinBox->setRange(0.01, 1.0);
     txAmplitudeSpinBox->setValue(tx_amplitude);
     txAmplitudeSpinBox->setSingleStep(0.01);
@@ -474,7 +467,7 @@ void MainWindow::addOutputGroup()
     txModulationIndexSlider->setRange(1, 500);
     txModulationIndexSlider->setValue(static_cast<int>(tx_modulation_index * 100));
     txModulationIndexSpinBox = new QDoubleSpinBox();
-    txModulationIndexSpinBox->setMinimumWidth(60);
+    txModulationIndexSpinBox->setMinimumWidth(55);
     txModulationIndexSpinBox->setRange(0.01, 5.0);
     txModulationIndexSpinBox->setValue(tx_modulation_index);
     txModulationIndexSpinBox->setSingleStep(0.01);
@@ -484,20 +477,20 @@ void MainWindow::addOutputGroup()
     txControlsLayout->addWidget(txModulationIndexSlider, 0, 4);
     txControlsLayout->addWidget(txModulationIndexSpinBox, 0, 5);
 
-    // Tx IF Gain (0-47, default 47)
+    // Tx IF Gain (0-47, default 47) — same row
     txAmpSlider = new QSlider(Qt::Horizontal);
     txAmpSlider->setRange(0, 47);
     txAmpSlider->setValue(m_txAmpGain);
     txAmpSpinBox = new QSpinBox();
-    txAmpSpinBox->setMinimumWidth(60);
+    txAmpSpinBox->setMinimumWidth(55);
     txAmpSpinBox->setRange(0, 47);
     txAmpSpinBox->setValue(m_txAmpGain);
     txAmpSpinBox->setSingleStep(1);
-    QLabel *txAmpLabel = new QLabel("TX Power:");
+    QLabel *txAmpLabel = new QLabel("Power:");
     txAmpLabel->setStyleSheet(labelStyle);
-    txControlsLayout->addWidget(txAmpLabel, 1, 0);
-    txControlsLayout->addWidget(txAmpSlider, 1, 1);
-    txControlsLayout->addWidget(txAmpSpinBox, 1, 2);
+    txControlsLayout->addWidget(txAmpLabel, 0, 6);
+    txControlsLayout->addWidget(txAmpSlider, 0, 7);
+    txControlsLayout->addWidget(txAmpSpinBox, 0, 8);
 
     // Hidden placeholders for Filter/Interp (kept for Video TX compatibility but never shown in FM TX)
     txFilterSizeSlider = new QSlider(Qt::Horizontal); txFilterSizeSlider->setVisible(false);
@@ -505,15 +498,16 @@ void MainWindow::addOutputGroup()
     txInterpolationSlider = new QSlider(Qt::Horizontal); txInterpolationSlider->setVisible(false);
     txInterpolationSpinBox = new QDoubleSpinBox(); txInterpolationSpinBox->setVisible(false);
 
-    // Stretch the slider columns
+    // Stretch the slider columns equally
     txControlsLayout->setColumnStretch(1, 1);
     txControlsLayout->setColumnStretch(4, 1);
+    txControlsLayout->setColumnStretch(7, 1);
 
     tx_line = new QFrame();
     tx_line->setFrameShape(QFrame::HLine);
     tx_line->setFrameShadow(QFrame::Sunken);
     tx_line->setStyleSheet("QFrame { color: #0078a0; }");
-    tx_line->setFixedHeight(2);
+    tx_line->setFixedHeight(1);
     outputLayout->addWidget(tx_line, 2, 0, 1, col);
     outputLayout->addLayout(txControlsLayout, 3, 0, 1, col);
     mainLayout->addWidget(outputGroup);
@@ -597,7 +591,7 @@ void MainWindow::addinputTypeGroup()
     inputTypeGroup = new QGroupBox("Input Type", this);
     QHBoxLayout *inputTypeLayout = new QHBoxLayout(inputTypeGroup);
     inputTypeLayout->setSpacing(6);
-    inputTypeLayout->setContentsMargins(8, 16, 8, 6);
+    inputTypeLayout->setContentsMargins(8, 14, 8, 6);
     inputTypeCombo = new QComboBox(this);
     inputTypeCombo->addItems({ "Fm Transmitter Mic", "Fm Transmitter File", "Video File", "Video Test Signal", "Video Rtsp Stream"});
     inputTypeLayout->addWidget(inputTypeCombo);
@@ -661,7 +655,7 @@ void MainWindow::addModeGroup()
 {
     modeGroup = new QGroupBox("Mode", this);
     QHBoxLayout *modeLayout = new QHBoxLayout(modeGroup);
-    modeLayout->setContentsMargins(8, 16, 8, 6);
+    modeLayout->setContentsMargins(8, 14, 8, 6);
     populateChannelCombo();
 
     modeCombo = new QComboBox(this);
@@ -762,12 +756,12 @@ void MainWindow::addRxGroup()
     cMeter->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
     rxGroup = new QGroupBox("Receiver", this);
-    rxGroup->setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #0096c8; border-radius: 5px; margin-top: 1ex; } "
+    rxGroup->setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #0096c8; border-radius: 5px; margin-top: 0.5ex; } "
                            "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top center; padding: 0 8px; color: #00ffcc; }");
 
     QVBoxLayout *rxLayout = new QVBoxLayout(rxGroup);
-    rxLayout->setSpacing(4);
-    rxLayout->setContentsMargins(6, 18, 6, 6);
+    rxLayout->setSpacing(2);
+    rxLayout->setContentsMargins(4, 14, 4, 4);
 
     // Top bar: Meter (30%) | FreqCtrl (70%)
     QHBoxLayout *topLayout = new QHBoxLayout();
@@ -1523,21 +1517,17 @@ void MainWindow::onInputTypeChanged(int index)
     txAmpSpinBox->setVisible(true);
     tx_line->setVisible(true);
 
-    // Show/hide labels in TX controls grid
-    for (int i = 0; i < txControlsLayout->rowCount(); ++i) {
-        for (int c : {0, 3}) {
-            QLayoutItem* item = txControlsLayout->itemAtPosition(i, c);
-            if (item && item->widget()) {
-                if (i == 1 && c == 0) {
-                    // Row 1 col 0 = TX Power label: always visible
-                    item->widget()->setVisible(true);
-                } else if (c == 3) {
-                    // Col 3 labels (ModIdx right side): only in FM
-                    item->widget()->setVisible(isFmAny);
-                } else {
-                    // Row 0 col 0 = Amplitude label: only FM
-                    item->widget()->setVisible(isFmAny);
-                }
+    // Show/hide labels in TX controls grid (all on row 0 now)
+    // Col 0 = TX Amp label, Col 3 = Mod Idx label, Col 6 = Power label
+    for (int c : {0, 3, 6}) {
+        QLayoutItem* item = txControlsLayout->itemAtPosition(0, c);
+        if (item && item->widget()) {
+            if (c == 6) {
+                // Power label: always visible in TX
+                item->widget()->setVisible(true);
+            } else {
+                // TX Amp (col 0) and Mod Idx (col 3): only in FM mode
+                item->widget()->setVisible(isFmAny);
             }
         }
     }
@@ -1574,9 +1564,9 @@ void MainWindow::onRxTxTypeChanged(int index)
         txAmpSpinBox->setVisible(false);
         tx_line->setVisible(false);
 
-        // Hide all TX control labels
+        // Hide all TX control labels (columns 0, 3, 6)
         for (int i = 0; i < txControlsLayout->rowCount(); ++i) {
-            for (int c : {0, 3}) {
+            for (int c : {0, 3, 6}) {
                 QLayoutItem* item = txControlsLayout->itemAtPosition(i, c);
                 if (item && item->widget()) {
                     item->widget()->setVisible(false);

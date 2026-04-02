@@ -823,6 +823,7 @@ void SdrDevice::setSampleRate(uint32_t sample_rate)
 
 void SdrDevice::setLnaGain(unsigned int gain)
 {
+    m_currentLnaGain = gain;
     if (m_hackTvLib) {
         m_hackTvLib->setLnaGain(gain);
         qDebug() << "LNA gain set to:" << gain;
@@ -831,6 +832,7 @@ void SdrDevice::setLnaGain(unsigned int gain)
 
 void SdrDevice::setVgaGain(unsigned int gain)
 {
+    m_currentVgaGain = gain;
     if (m_hackTvLib) {
         m_hackTvLib->setVgaGain(gain);
         qDebug() << "VGA gain set to:" << gain;
@@ -839,6 +841,7 @@ void SdrDevice::setVgaGain(unsigned int gain)
 
 void SdrDevice::setRxAmpGain(unsigned int gain)
 {
+    m_currentRxAmpGain = gain;
     if (m_hackTvLib) {
         m_hackTvLib->setRxAmpGain(gain);
         qDebug() << "RX amp gain set to:" << gain;
@@ -847,6 +850,7 @@ void SdrDevice::setRxAmpGain(unsigned int gain)
 
 void SdrDevice::setTxAmpGain(unsigned int gain)
 {
+    m_currentTxAmpGain = gain;
     if (m_hackTvLib) {
         m_hackTvLib->setTxAmpGain(gain);
         qDebug() << "TX amp gain set to:" << gain;
@@ -864,6 +868,7 @@ void SdrDevice::setAmpEnable(bool enable)
 
 void SdrDevice::setModulationIndex(float index)
 {
+    m_currentModulationIndex = index;
     if (m_hackTvLib) {
         m_hackTvLib->setModulation_index(index);
         qDebug() << "Modulation index set to:" << index;
@@ -872,6 +877,7 @@ void SdrDevice::setModulationIndex(float index)
 
 void SdrDevice::setAmplitude(float amp)
 {
+    m_currentAmplitude = amp;
     if (m_hackTvLib) {
         m_hackTvLib->setAmplitude(amp);
         qDebug() << "Amplitude set to:" << amp;
