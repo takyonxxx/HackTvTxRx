@@ -7,6 +7,9 @@
 #include <QCloseEvent>
 #include <QSettings>
 #include <QDebug>
+#include <QScrollArea>
+#include <QScroller>
+#include <QFrame>
 #include <cmath>
 
 RadioWindow::RadioWindow(QWidget *parent)
@@ -16,13 +19,27 @@ RadioWindow::RadioWindow(QWidget *parent)
     , m_audioPlayback(new AudioPlayback(this))
     , m_fmDemod(new FMDemodulator(2000000.0, 12500.0, this))
     , m_amDemod(new AMDemodulator(2000000.0, 10000.0, this))
+    , m_gainDialog(nullptr)
 {
-    setWindowTitle("HackRF Radio - Walkie Talkie");
-    setMinimumSize(520, 850);
-    resize(540, 900);
+    setWindowTitle("HackRF Radio");
+    // iPhone 16 Pro: 393 x 852 pt logical resolution
+    setMinimumSize(393, 750);
+    resize(393, 852);
 
     setupUi();
     applyDarkStyle();
+
+    // Create gain settings dialog (non-modal, reusable)
+    m_gainDialog = new GainSettingsDialog(m_tcpClient, m_fmDemod, this);
+
+    // Sync RF Amp: settings dialog -> main screen button
+    connect(m_gainDialog, &GainSettingsDialog::ampEnableChanged, [this](bool enabled) {
+        m_rfAmpBtn->blockSignals(true);
+        m_rfAmpBtn->setChecked(enabled);
+        m_rfAmpBtn->setText(enabled ? "RF AMP: ON (+14dB)" : "RF AMP: OFF");
+        m_rfAmpBtn->blockSignals(false);
+    });
+
     loadSettings();
 
     connect(m_tcpClient, &TcpClient::connected, this, &RadioWindow::onConnected);
@@ -67,16 +84,19 @@ void RadioWindow::saveSettings()
     // Modulation
     s.setValue("modulation", m_modulationCombo->currentIndex());
 
-    // Gain & TX
+    // Volume & Squelch
     s.setValue("volume", m_volumeSlider->value());
     s.setValue("squelch", m_squelchSlider->value());
-    s.setValue("vgaGain", m_vgaGainSlider->value());
-    s.setValue("lnaGain", m_lnaGainSlider->value());
-    s.setValue("txGain", m_txGainSlider->value());
-    s.setValue("amplitude", m_amplitudeSlider->value());
-    s.setValue("modIndex", m_modIndexSlider->value());
-    s.setValue("rxGain", m_rxGainSlider->value());
-    s.setValue("deemph", m_deemphSlider->value());
+
+    // Gain & TX (from dialog)
+    s.setValue("vgaGain", m_gainDialog->vgaGain());
+    s.setValue("lnaGain", m_gainDialog->lnaGain());
+    s.setValue("txGain", m_gainDialog->txGain());
+    s.setValue("amplitude", m_gainDialog->amplitude());
+    s.setValue("modIndex", m_gainDialog->modIndex());
+    s.setValue("rxGain", m_gainDialog->rxGain());
+    s.setValue("deemph", m_gainDialog->deemph());
+    s.setValue("ampEnable", m_gainDialog->ampEnabled());
 
     // Window geometry
     s.setValue("geometry", saveGeometry());
@@ -107,61 +127,87 @@ void RadioWindow::loadSettings()
     // Modulation
     m_modulationCombo->setCurrentIndex(s.value("modulation", 0).toInt());
 
-    // Gain & TX
+    // Volume & Squelch
     m_volumeSlider->setValue(s.value("volume", 50).toInt());
     m_squelchSlider->setValue(s.value("squelch", 10).toInt());
-    m_vgaGainSlider->setValue(s.value("vgaGain", 40).toInt());
-    m_lnaGainSlider->setValue(s.value("lnaGain", 40).toInt());
-    m_txGainSlider->setValue(s.value("txGain", 47).toInt());
-    m_amplitudeSlider->setValue(s.value("amplitude", 10).toInt());
-    m_modIndexSlider->setValue(s.value("modIndex", 40).toInt());
-    m_rxGainSlider->setValue(s.value("rxGain", 45).toInt());
-    m_deemphSlider->setValue(s.value("deemph", 750).toInt());
+
+    // Gain & TX (to dialog)
+    m_gainDialog->setVgaGain(s.value("vgaGain", 40).toInt());
+    m_gainDialog->setLnaGain(s.value("lnaGain", 40).toInt());
+    m_gainDialog->setTxGain(s.value("txGain", 47).toInt());
+    m_gainDialog->setAmplitude(s.value("amplitude", 10).toInt());
+    m_gainDialog->setModIndex(s.value("modIndex", 40).toInt());
+    m_gainDialog->setRxGain(s.value("rxGain", 45).toInt());
+    m_gainDialog->setDeemph(s.value("deemph", 750).toInt());
+    m_gainDialog->setAmpEnabled(s.value("ampEnable", false).toBool());
+    m_rfAmpBtn->setChecked(s.value("ampEnable", false).toBool());
 
     // Window geometry
     if (s.contains("geometry"))
         restoreGeometry(s.value("geometry").toByteArray());
 
-    qDebug() << "Settings loaded - freq:" << freq << "modIdx:" << m_modIndexSlider->value() / 100.0f;
+    qDebug() << "Settings loaded - freq:" << freq;
 }
 
 // ============================================================
-// UI Setup
+// UI Setup - Touch-friendly iPhone 16 Pro layout
 // ============================================================
 
 void RadioWindow::setupUi()
 {
     QWidget* central = new QWidget(this);
     QVBoxLayout* mainLayout = new QVBoxLayout(central);
-    mainLayout->setSpacing(6);
-    mainLayout->setContentsMargins(8, 8, 8, 8);
+    mainLayout->setSpacing(4);
+    mainLayout->setContentsMargins(10, 4, 10, 8);
 
-    // === Connection ===
-    QGroupBox* connGroup = new QGroupBox("Server Connection");
-    QGridLayout* connGrid = new QGridLayout(connGroup);
+    // ──────────────────────────────────────────────
+    // TOP BAR: Connection status + Settings button
+    // ──────────────────────────────────────────────
+    QHBoxLayout* topBar = new QHBoxLayout();
+    topBar->setSpacing(8);
 
-    m_hostEdit = new QLineEdit("127.0.0.1");
-    m_dataPortSpin = new QSpinBox(); m_dataPortSpin->setRange(1, 65535); m_dataPortSpin->setValue(5000);
-    m_controlPortSpin = new QSpinBox(); m_controlPortSpin->setRange(1, 65535); m_controlPortSpin->setValue(5001);
-    m_audioPortSpin = new QSpinBox(); m_audioPortSpin->setRange(1, 65535); m_audioPortSpin->setValue(5002);
     m_connectBtn = new QPushButton("Connect");
+    m_connectBtn->setObjectName("connectBtn");
+    m_connectBtn->setMinimumHeight(38);
     connect(m_connectBtn, &QPushButton::clicked, this, &RadioWindow::onConnectClicked);
+
     m_connectionStatus = new QLabel("Disconnected");
-    m_connectionStatus->setStyleSheet("color: #FF4444; font-weight: bold;");
+    m_connectionStatus->setObjectName("connStatus");
+    m_connectionStatus->setAlignment(Qt::AlignCenter);
+    m_connectionStatus->setStyleSheet("color: #FF4444; font-weight: bold; font-size: 13px;");
 
-    connGrid->addWidget(new QLabel("Host:"), 0, 0); connGrid->addWidget(m_hostEdit, 0, 1);
-    connGrid->addWidget(new QLabel("Data:"), 0, 2); connGrid->addWidget(m_dataPortSpin, 0, 3);
-    connGrid->addWidget(new QLabel("Ctrl:"), 1, 0); connGrid->addWidget(m_controlPortSpin, 1, 1);
-    connGrid->addWidget(new QLabel("Audio:"), 1, 2); connGrid->addWidget(m_audioPortSpin, 1, 3);
-    connGrid->addWidget(m_connectBtn, 2, 0, 1, 2); connGrid->addWidget(m_connectionStatus, 2, 2, 1, 2);
-    mainLayout->addWidget(connGroup);
+    m_settingsBtn = new QPushButton("Settings");
+    m_settingsBtn->setObjectName("settingsBtn");
+    m_settingsBtn->setMinimumHeight(38);
+    connect(m_settingsBtn, &QPushButton::clicked, this, &RadioWindow::onSettingsClicked);
 
-    // === Frequency ===
-    QGroupBox* freqGroup = new QGroupBox("Frequency");
-    QVBoxLayout* freqLayout = new QVBoxLayout(freqGroup);
+    topBar->addWidget(m_connectBtn, 1);
+    topBar->addWidget(m_connectionStatus, 1);
+    topBar->addWidget(m_settingsBtn, 1);
+    mainLayout->addLayout(topBar);
+
+    // Hidden connection fields (shown in settings or auto-used)
+    // Keep them in the widget tree but not displayed
+    m_hostEdit = new QLineEdit("127.0.0.1");
+    m_hostEdit->setVisible(false);
+    m_dataPortSpin = new QSpinBox(); m_dataPortSpin->setRange(1, 65535); m_dataPortSpin->setValue(5000);
+    m_dataPortSpin->setVisible(false);
+    m_controlPortSpin = new QSpinBox(); m_controlPortSpin->setRange(1, 65535); m_controlPortSpin->setValue(5001);
+    m_controlPortSpin->setVisible(false);
+    m_audioPortSpin = new QSpinBox(); m_audioPortSpin->setRange(1, 65535); m_audioPortSpin->setValue(5002);
+    m_audioPortSpin->setVisible(false);
+
+    // ──────────────────────────────────────────────
+    // FREQUENCY DISPLAY - Large, prominent
+    // ──────────────────────────────────────────────
     m_freqWidget = new FrequencyWidget();
+    m_freqWidget->setMinimumHeight(130);
     connect(m_freqWidget, &FrequencyWidget::frequencyChanged, this, &RadioWindow::onFrequencyChanged);
+    mainLayout->addWidget(m_freqWidget);
+
+    // Band preset selector - touch-friendly
     m_bandPreset = new QComboBox();
+    m_bandPreset->setMinimumHeight(44);
     m_bandPreset->addItem("VHF - 2m Amateur (144-148 MHz)", QVariant::fromValue(145000000ULL));
     m_bandPreset->addItem("VHF - Marine Ch16 (156.800 MHz)", QVariant::fromValue(156800000ULL));
     m_bandPreset->addItem("VHF - FM Broadcast (88-108 MHz)", QVariant::fromValue(100000000ULL));
@@ -172,130 +218,119 @@ void RadioWindow::setupUi()
     m_bandPreset->addItem("HF - CB 27 MHz", QVariant::fromValue(27005000ULL));
     m_bandPreset->addItem("Custom", QVariant::fromValue(0ULL));
     connect(m_bandPreset, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &RadioWindow::onBandPresetChanged);
-    freqLayout->addWidget(m_freqWidget);
-    QHBoxLayout* bandRow = new QHBoxLayout();
-    bandRow->addWidget(new QLabel("Band:")); bandRow->addWidget(m_bandPreset, 1);
-    freqLayout->addLayout(bandRow);
-    mainLayout->addWidget(freqGroup);
+    mainLayout->addWidget(m_bandPreset);
 
-    // === Modulation ===
-    QGroupBox* modeGroup = new QGroupBox("Modulation");
-    QHBoxLayout* modeLayout = new QHBoxLayout(modeGroup);
+    // ──────────────────────────────────────────────
+    // MODE selector row
+    // ──────────────────────────────────────────────
+    QHBoxLayout* modeRow = new QHBoxLayout();
+    modeRow->setSpacing(10);
     m_modulationCombo = new QComboBox();
+    m_modulationCombo->setMinimumHeight(44);
     m_modulationCombo->addItem("NFM (Narrow FM - 12.5 kHz)");
     m_modulationCombo->addItem("WFM (Wide FM - 150 kHz)");
     m_modulationCombo->addItem("AM (Amplitude Mod)");
     connect(m_modulationCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &RadioWindow::onModulationChanged);
     m_modeLabel = new QLabel("NFM");
-    m_modeLabel->setStyleSheet("font-weight: bold; font-size: 14px; color: #00FF66;");
-    modeLayout->addWidget(new QLabel("Mode:")); modeLayout->addWidget(m_modulationCombo, 1); modeLayout->addWidget(m_modeLabel);
-    mainLayout->addWidget(modeGroup);
+    m_modeLabel->setObjectName("modeLabel");
+    m_modeLabel->setAlignment(Qt::AlignCenter);
+    m_modeLabel->setMinimumWidth(60);
+    m_modeLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #00FF66;");
+    modeRow->addWidget(m_modulationCombo, 1);
+    modeRow->addWidget(m_modeLabel);
 
-    // === Signal ===
-    QGroupBox* sigGroup = new QGroupBox("Signal");
-    QVBoxLayout* sigLayout = new QVBoxLayout(sigGroup);
+    // RF Amp toggle button
+    m_rfAmpBtn = new QPushButton("RF AMP: OFF");
+    m_rfAmpBtn->setObjectName("rfAmpBtn");
+    m_rfAmpBtn->setCheckable(true);
+    m_rfAmpBtn->setChecked(false);
+    m_rfAmpBtn->setMinimumHeight(38);
+    connect(m_rfAmpBtn, &QPushButton::toggled, [this](bool checked) {
+        m_rfAmpBtn->setText(checked ? "RF AMP: ON (+14dB)" : "RF AMP: OFF");
+        m_gainDialog->setAmpEnabled(checked);
+        if (m_tcpClient->isConnected()) m_tcpClient->setAmpEnable(checked);
+    });
+    modeRow->addWidget(m_rfAmpBtn);
+
+    mainLayout->addLayout(modeRow);
+
+    // ──────────────────────────────────────────────
+    // SIGNAL METER
+    // ──────────────────────────────────────────────
     m_signalMeter = new SignalMeter();
-    sigLayout->addWidget(m_signalMeter);
-    mainLayout->addWidget(sigGroup);
+    m_signalMeter->setMinimumHeight(280);
+    mainLayout->addWidget(m_signalMeter);
 
-    // === Gain & TX Params ===
-    QGroupBox* gainGroup = new QGroupBox("Gain & TX Parameters");
-    QGridLayout* g = new QGridLayout(gainGroup);
-    int row = 0;
+    // ──────────────────────────────────────────────
+    // Spacer - pushes everything below to bottom
+    // ──────────────────────────────────────────────
+    mainLayout->addStretch(1);
 
-    m_volumeSlider = new QSlider(Qt::Horizontal); m_volumeSlider->setRange(0, 100); m_volumeSlider->setValue(50);
+    // ──────────────────────────────────────────────
+    // VOLUME & SQUELCH - near PTT for quick access
+    // ──────────────────────────────────────────────
+    QGridLayout* sliderGrid = new QGridLayout();
+    sliderGrid->setVerticalSpacing(4);
+    sliderGrid->setHorizontalSpacing(8);
+
+    // Volume
+    QLabel* volIcon = new QLabel("VOL");
+    volIcon->setObjectName("sliderIcon");
+    m_volumeSlider = new QSlider(Qt::Horizontal);
+    m_volumeSlider->setRange(0, 100);
+    m_volumeSlider->setValue(50);
+    m_volumeSlider->setMinimumHeight(36);
     m_volumeLabel = new QLabel("50%");
+    m_volumeLabel->setMinimumWidth(42);
+    m_volumeLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     connect(m_volumeSlider, &QSlider::valueChanged, this, &RadioWindow::onVolumeChanged);
-    g->addWidget(new QLabel("Volume:"), row, 0); g->addWidget(m_volumeSlider, row, 1); g->addWidget(m_volumeLabel, row, 2); row++;
+    sliderGrid->addWidget(volIcon, 0, 0);
+    sliderGrid->addWidget(m_volumeSlider, 0, 1);
+    sliderGrid->addWidget(m_volumeLabel, 0, 2);
 
-    m_squelchSlider = new QSlider(Qt::Horizontal); m_squelchSlider->setRange(0, 100); m_squelchSlider->setValue(10);
-    m_squelchLabel = new QLabel("10%"); m_squelchLevel = 0.10f;
+    // Squelch
+    QLabel* sqIcon = new QLabel("SQ");
+    sqIcon->setObjectName("sliderIcon");
+    m_squelchSlider = new QSlider(Qt::Horizontal);
+    m_squelchSlider->setRange(0, 100);
+    m_squelchSlider->setValue(10);
+    m_squelchSlider->setMinimumHeight(36);
+    m_squelchLabel = new QLabel("10%");
+    m_squelchLabel->setMinimumWidth(42);
+    m_squelchLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_squelchLevel = 0.10f;
     connect(m_squelchSlider, &QSlider::valueChanged, this, &RadioWindow::onSquelchChanged);
-    g->addWidget(new QLabel("Squelch:"), row, 0); g->addWidget(m_squelchSlider, row, 1); g->addWidget(m_squelchLabel, row, 2); row++;
+    sliderGrid->addWidget(sqIcon, 1, 0);
+    sliderGrid->addWidget(m_squelchSlider, 1, 1);
+    sliderGrid->addWidget(m_squelchLabel, 1, 2);
 
-    m_vgaGainSlider = new QSlider(Qt::Horizontal); m_vgaGainSlider->setRange(0, 62); m_vgaGainSlider->setValue(40);
-    m_vgaGainLabel = new QLabel("40");
-    connect(m_vgaGainSlider, &QSlider::valueChanged, [this](int v) {
-        m_vgaGainLabel->setText(QString::number(v));
-        if (m_tcpClient->isConnected()) m_tcpClient->setVgaGain(v);
-    });
-    g->addWidget(new QLabel("VGA (RX):"), row, 0); g->addWidget(m_vgaGainSlider, row, 1); g->addWidget(m_vgaGainLabel, row, 2); row++;
+    sliderGrid->setColumnStretch(1, 1);
+    mainLayout->addLayout(sliderGrid);
 
-    m_lnaGainSlider = new QSlider(Qt::Horizontal); m_lnaGainSlider->setRange(0, 40); m_lnaGainSlider->setValue(40);
-    m_lnaGainLabel = new QLabel("40");
-    connect(m_lnaGainSlider, &QSlider::valueChanged, [this](int v) {
-        m_lnaGainLabel->setText(QString::number(v));
-        if (m_tcpClient->isConnected()) m_tcpClient->setLnaGain(v);
-    });
-    g->addWidget(new QLabel("LNA (RX):"), row, 0); g->addWidget(m_lnaGainSlider, row, 1); g->addWidget(m_lnaGainLabel, row, 2); row++;
+    mainLayout->addSpacing(12);
 
-    m_txGainSlider = new QSlider(Qt::Horizontal); m_txGainSlider->setRange(0, 47); m_txGainSlider->setValue(47);
-    m_txGainLabel = new QLabel("47");
-    connect(m_txGainSlider, &QSlider::valueChanged, [this](int v) {
-        m_txGainLabel->setText(QString::number(v));
-        if (m_tcpClient->isConnected()) m_tcpClient->setTxAmpGain(v);
-    });
-    g->addWidget(new QLabel("TX Power:"), row, 0); g->addWidget(m_txGainSlider, row, 1); g->addWidget(m_txGainLabel, row, 2); row++;
-
-    m_amplitudeSlider = new QSlider(Qt::Horizontal); m_amplitudeSlider->setRange(1, 100); m_amplitudeSlider->setValue(10);
-    m_amplitudeLabel = new QLabel("0.10");
-    connect(m_amplitudeSlider, &QSlider::valueChanged, [this](int v) {
-        float amp = v / 100.0f;
-        m_amplitudeLabel->setText(QString::number(amp, 'f', 2));
-        if (m_tcpClient->isConnected()) m_tcpClient->setAmplitude(amp);
-    });
-    g->addWidget(new QLabel("TX Amp:"), row, 0); g->addWidget(m_amplitudeSlider, row, 1); g->addWidget(m_amplitudeLabel, row, 2); row++;
-
-    m_modIndexSlider = new QSlider(Qt::Horizontal); m_modIndexSlider->setRange(1, 500); m_modIndexSlider->setValue(40);
-    m_modIndexLabel = new QLabel("0.40");
-    connect(m_modIndexSlider, &QSlider::valueChanged, [this](int v) {
-        float idx = v / 100.0f;
-        m_modIndexLabel->setText(QString::number(idx, 'f', 2));
-        if (m_tcpClient->isConnected()) m_tcpClient->setModulationIndex(idx);
-    });
-    g->addWidget(new QLabel("Mod Idx:"), row, 0); g->addWidget(m_modIndexSlider, row, 1); g->addWidget(m_modIndexLabel, row, 2); row++;
-
-    // RX audio gain (0.1 - 10.0, slider 1-100, display /10)
-    m_rxGainSlider = new QSlider(Qt::Horizontal); m_rxGainSlider->setRange(1, 100); m_rxGainSlider->setValue(45);
-    m_rxGainLabel = new QLabel("4.5");
-    connect(m_rxGainSlider, &QSlider::valueChanged, [this](int v) {
-        float gain = v / 10.0f;
-        m_rxGainLabel->setText(QString::number(gain, 'f', 1));
-        m_fmDemod->setOutputGain(gain);
-    });
-    g->addWidget(new QLabel("RX Gain:"), row, 0); g->addWidget(m_rxGainSlider, row, 1); g->addWidget(m_rxGainLabel, row, 2); row++;
-
-    // De-emphasis tau (0 - 1000 us, slider 0-1000, 0=off)
-    m_deemphSlider = new QSlider(Qt::Horizontal); m_deemphSlider->setRange(0, 1000); m_deemphSlider->setValue(750);
-    m_deemphLabel = new QLabel("750us");
-    connect(m_deemphSlider, &QSlider::valueChanged, [this](int v) {
-        if (v == 0) m_deemphLabel->setText("OFF");
-        else m_deemphLabel->setText(QString("%1us").arg(v));
-        m_fmDemod->setDeemphTau(static_cast<float>(v));
-    });
-    g->addWidget(new QLabel("DeEmph:"), row, 0); g->addWidget(m_deemphSlider, row, 1); g->addWidget(m_deemphLabel, row, 2); row++;
-
-    mainLayout->addWidget(gainGroup);
-
-    // === PTT ===
-    QGroupBox* pttGroup = new QGroupBox("Push To Talk");
-    QVBoxLayout* pttLayout = new QVBoxLayout(pttGroup);
+    // ──────────────────────────────────────────────
+    // TX/RX STATUS INDICATOR
+    // ──────────────────────────────────────────────
     m_txRxIndicator = new QLabel("RX - Listening");
+    m_txRxIndicator->setObjectName("txRxIndicator");
     m_txRxIndicator->setAlignment(Qt::AlignCenter);
+    m_txRxIndicator->setMinimumHeight(44);
     m_txRxIndicator->setStyleSheet(
         "font-size: 18px; font-weight: bold; color: #00FF66; "
-        "background-color: #1A3A1A; border: 2px solid #00FF66; border-radius: 5px; padding: 8px;");
-    m_pttButton = new QPushButton("PTT\n(Hold Space or Click)");
-    m_pttButton->setMinimumHeight(80);
-    m_pttButton->setStyleSheet(
-        "QPushButton { background-color: #2A5A2A; color: white; font-size: 16px; "
-        "font-weight: bold; border: 3px solid #3A7A3A; border-radius: 10px; }"
-        "QPushButton:pressed { background-color: #CC3333; border-color: #FF4444; }");
+        "background-color: #1A3A1A; border: 2px solid #00FF66; border-radius: 10px; padding: 8px;");
+    mainLayout->addWidget(m_txRxIndicator);
+
+    // ──────────────────────────────────────────────
+    // PTT BUTTON - Large, dominant, bottom of screen
+    // ──────────────────────────────────────────────
+    m_pttButton = new QPushButton("PTT\nHold to Talk");
+    m_pttButton->setObjectName("pttButton");
+    m_pttButton->setMinimumHeight(110);
+    m_pttButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     connect(m_pttButton, &QPushButton::pressed, this, &RadioWindow::onPttPressed);
     connect(m_pttButton, &QPushButton::released, this, &RadioWindow::onPttReleased);
-    pttLayout->addWidget(m_txRxIndicator);
-    pttLayout->addWidget(m_pttButton);
-    mainLayout->addWidget(pttGroup);
+    mainLayout->addWidget(m_pttButton);
 
     setCentralWidget(central);
 }
@@ -303,22 +338,103 @@ void RadioWindow::setupUi()
 void RadioWindow::applyDarkStyle()
 {
     setStyleSheet(R"(
-        QMainWindow { background-color: #1A1A2E; }
-        QGroupBox { color: #AABBCC; font-weight: bold; border: 1px solid #334455;
-            border-radius: 5px; margin-top: 8px; padding-top: 14px; }
-        QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
-        QLabel { color: #CCDDEE; }
-        QLineEdit, QSpinBox, QComboBox { background-color: #2A2A3E; color: #EEEEFF;
-            border: 1px solid #445566; border-radius: 3px; padding: 3px 5px; }
-        QSlider::groove:horizontal { border: 1px solid #445566; height: 6px;
-            background: #2A2A3E; border-radius: 3px; }
-        QSlider::handle:horizontal { background: #5599FF; width: 16px; margin: -5px 0; border-radius: 8px; }
-        QPushButton { background-color: #334466; color: #EEEEFF; border: 1px solid #556688;
-            border-radius: 4px; padding: 6px 12px; font-weight: bold; }
-        QPushButton:hover { background-color: #445577; }
-        QPushButton:pressed { background-color: #556688; }
-        QTextEdit { background-color: #0A0A15; color: #88AACC; border: 1px solid #334455; }
+        QMainWindow { background-color: #0D0D1A; }
+
+        QLabel { color: #CCDDEE; font-size: 13px; }
+
+        QLabel#sliderIcon {
+            color: #7799BB; font-weight: bold; font-size: 13px;
+            min-width: 32px;
+        }
+
+        QLabel#txRxIndicator {
+            font-size: 20px; font-weight: bold;
+            border-radius: 10px; padding: 10px;
+        }
+
+        QComboBox {
+            background-color: #1A1A2E; color: #EEEEFF;
+            border: 1px solid #334455; border-radius: 8px;
+            padding: 8px 12px; font-size: 13px;
+        }
+        QComboBox::drop-down {
+            border: none; width: 30px;
+        }
+        QComboBox QAbstractItemView {
+            background-color: #1A1A2E; color: #EEEEFF;
+            selection-background-color: #334466;
+            border: 1px solid #445566;
+        }
+
+        QLineEdit, QSpinBox {
+            background-color: #1A1A2E; color: #EEEEFF;
+            border: 1px solid #334455; border-radius: 6px;
+            padding: 6px 8px; font-size: 13px;
+        }
+
+        QSlider::groove:horizontal {
+            border: none; height: 8px;
+            background: #1A1A2E; border-radius: 4px;
+        }
+        QSlider::handle:horizontal {
+            background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
+                fx:0.4, fy:0.4, stop:0 #88BBFF, stop:1 #4488DD);
+            width: 32px; height: 32px;
+            margin: -12px 0; border-radius: 16px;
+            border: 2px solid #335588;
+        }
+        QSlider::sub-page:horizontal {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #224466, stop:1 #3366AA);
+            border-radius: 4px;
+        }
+
+        QPushButton#connectBtn {
+            background-color: #1A3322; color: #44DD66;
+            border: 1px solid #2A5533; border-radius: 8px;
+            font-weight: bold; font-size: 13px; padding: 8px;
+        }
+        QPushButton#connectBtn:pressed { background-color: #2A5533; }
+
+        QPushButton#settingsBtn {
+            background-color: #1A1A33; color: #8899CC;
+            border: 1px solid #333355; border-radius: 8px;
+            font-weight: bold; font-size: 13px; padding: 8px;
+        }
+        QPushButton#settingsBtn:pressed { background-color: #2A2A44; }
+
+        QPushButton#rfAmpBtn {
+            background-color: #1A1A2A; color: #667788;
+            border: 1px solid #333355; border-radius: 8px;
+            font-weight: bold; font-size: 11px; padding: 6px 10px;
+        }
+        QPushButton#rfAmpBtn:checked {
+            background-color: #3A1A0A; color: #FF8844;
+            border: 1px solid #CC5522;
+        }
+        QPushButton#rfAmpBtn:pressed { background-color: #2A2A44; }
+
+        QPushButton#pttButton {
+            background-color: #1A3A1A;
+            color: #FFFFFF;
+            font-size: 22px; font-weight: bold;
+            border: 3px solid #2A6A2A;
+            border-radius: 16px;
+        }
+        QPushButton#pttButton:pressed {
+            background-color: #882222;
+            border-color: #CC3333;
+            color: #FFCCCC;
+        }
     )");
+}
+
+void RadioWindow::onSettingsClicked()
+{
+    m_gainDialog->resize(380, 500);
+    m_gainDialog->show();
+    m_gainDialog->raise();
+    m_gainDialog->activateWindow();
 }
 
 // ============================================================
@@ -339,7 +455,7 @@ void RadioWindow::onConnectClicked()
 void RadioWindow::onConnected()
 {
     m_connectionStatus->setText("Connected");
-    m_connectionStatus->setStyleSheet("color: #44FF44; font-weight: bold;");
+    m_connectionStatus->setStyleSheet("color: #44FF44; font-weight: bold; font-size: 13px;");
     m_connectBtn->setText("Disconnect");
     logMessage("Connected to server");
 
@@ -351,18 +467,19 @@ void RadioWindow::onConnected()
     // Send all current settings to server
     m_tcpClient->setFrequency(m_freqWidget->frequency());
     m_tcpClient->setSampleRate(m_sampleRate);
-    m_tcpClient->setVgaGain(m_vgaGainSlider->value());
-    m_tcpClient->setLnaGain(m_lnaGainSlider->value());
-    m_tcpClient->setTxAmpGain(m_txGainSlider->value());
-    m_tcpClient->setAmplitude(m_amplitudeSlider->value() / 100.0f);
-    m_tcpClient->setModulationIndex(m_modIndexSlider->value() / 100.0f);
+    m_tcpClient->setVgaGain(m_gainDialog->vgaGain());
+    m_tcpClient->setLnaGain(m_gainDialog->lnaGain());
+    m_tcpClient->setTxAmpGain(m_gainDialog->txGain());
+    m_tcpClient->setAmplitude(m_gainDialog->amplitude() / 100.0f);
+    m_tcpClient->setModulationIndex(m_gainDialog->modIndex() / 100.0f);
+    m_tcpClient->setAmpEnable(m_gainDialog->ampEnabled());
     m_tcpClient->switchToRx();
 }
 
 void RadioWindow::onDisconnected()
 {
     m_connectionStatus->setText("Disconnected");
-    m_connectionStatus->setStyleSheet("color: #FF4444; font-weight: bold;");
+    m_connectionStatus->setStyleSheet("color: #FF4444; font-weight: bold; font-size: 13px;");
     m_connectBtn->setText("Connect");
     m_audioPlayback->stop();
     m_audioCapture->stop();
@@ -435,19 +552,32 @@ void RadioWindow::onPttPressed()
 
     m_tcpClient->switchToTx();
 
-    // Send current slider values
-    float amp = m_amplitudeSlider->value() / 100.0f;
-    float modIdx = m_modIndexSlider->value() / 100.0f;
-    m_tcpClient->setAmplitude(amp);
-    m_tcpClient->setModulationIndex(modIdx);
-    m_tcpClient->setTxAmpGain(m_txGainSlider->value());
+    // Send current TX params from dialog
+    m_gainDialog->sendTxParams();
 
-    qDebug() << "TX params: amp=" << amp << "modIdx=" << modIdx << "txGain=" << m_txGainSlider->value();
+    // Calculate estimated TX power in dBm and show on meter
+    // HackRF TX chain:
+    //   Base output (0 gain, full amplitude): ~-40 dBm
+    //   IF amplifier adds 0-47 dB
+    //   Baseband amplitude scales signal: 20*log10(amplitude)
+    //   Formula: txPower = -40 + IF_gain + 20*log10(amplitude)
+    float ifGain = static_cast<float>(m_gainDialog->txGain());          // 0-47
+    float amplitude = m_gainDialog->amplitude() / 100.0f;               // 0.01-1.0
+    float ampDb = 20.0f * std::log10(std::max(amplitude, 0.01f));       // -40 to 0 dB
+    float rfAmpDb = m_gainDialog->ampEnabled() ? 14.0f : 0.0f;         // RF amp: +14 dB
+    float estimatedDbm = -40.0f + ifGain + ampDb + rfAmpDb;
+    // Clamp to realistic HackRF range
+    estimatedDbm = std::clamp(estimatedDbm, -60.0f, 15.0f);
+
+    m_signalMeter->setTxMode(true);
+    m_signalMeter->setTxPowerDbm(estimatedDbm);
+
+    qDebug() << "TX estimated power:" << estimatedDbm << "dBm (IF=" << ifGain << "amp=" << amplitude << ")";
 
     m_txRxIndicator->setText("TX - Transmitting");
     m_txRxIndicator->setStyleSheet(
         "font-size: 18px; font-weight: bold; color: #FF4444; "
-        "background-color: #3A1A1A; border: 2px solid #FF4444; border-radius: 5px; padding: 8px;");
+        "background-color: #3A1A1A; border: 2px solid #FF4444; border-radius: 10px; padding: 8px;");
     logMessage("PTT ON");
 }
 
@@ -459,13 +589,17 @@ void RadioWindow::onPttReleased()
     m_isTx = false;
 
     m_tcpClient->switchToRx();
-    m_tcpClient->setVgaGain(m_vgaGainSlider->value());
-    m_tcpClient->setLnaGain(m_lnaGainSlider->value());
+
+    // Restore RX params from dialog
+    m_gainDialog->sendRxParams();
+
+    // Switch meter back to RX mode
+    m_signalMeter->setTxMode(false);
 
     m_txRxIndicator->setText("RX - Listening");
     m_txRxIndicator->setStyleSheet(
         "font-size: 18px; font-weight: bold; color: #00FF66; "
-        "background-color: #1A3A1A; border: 2px solid #00FF66; border-radius: 5px; padding: 8px;");
+        "background-color: #1A3A1A; border: 2px solid #00FF66; border-radius: 10px; padding: 8px;");
     logMessage("PTT OFF");
 }
 
@@ -528,19 +662,19 @@ void RadioWindow::onModulationChanged(int index)
         m_currentModulation = FM_NB;
         m_fmDemod->setBandwidth(12500.0);
         m_modeLabel->setText("NFM");
-        m_modeLabel->setStyleSheet("font-weight: bold; font-size: 14px; color: #00FF66;");
+        m_modeLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #00FF66;");
         break;
     case 1:
         m_currentModulation = FM_WB;
         m_fmDemod->setBandwidth(150000.0);
         m_modeLabel->setText("WFM");
-        m_modeLabel->setStyleSheet("font-weight: bold; font-size: 14px; color: #FFAA00;");
+        m_modeLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #FFAA00;");
         break;
     case 2:
         m_currentModulation = AM;
         m_amDemod->setBandwidth(10000.0);
         m_modeLabel->setText("AM");
-        m_modeLabel->setStyleSheet("font-weight: bold; font-size: 14px; color: #FF6666;");
+        m_modeLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #FF6666;");
         break;
     }
     m_sampleRate = 2000000;

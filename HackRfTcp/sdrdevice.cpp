@@ -18,6 +18,7 @@ SdrDevice::SdrDevice(QObject *parent)
     , m_currentLnaGain(40)
     , m_currentRxAmpGain(14)
     , m_currentTxAmpGain(47)
+    , m_currentAmpEnable(false)
     , m_currentModulationIndex(0.40f)
     , m_currentAmplitude(0.10f)
     , m_isTxMode(false)
@@ -642,6 +643,17 @@ void SdrDevice::processControlCommand(QTcpSocket* client, const QString& command
             response = "ERROR: Invalid TX amp gain (0-47)\n";
         }
     }
+    else if (cmd == "SET_AMP_ENABLE" && parts.size() == 2) {
+        bool ok;
+        int val = parts[1].toInt(&ok);
+        if (ok && (val == 0 || val == 1)) {
+            setAmpEnable(val != 0);
+            response = QString("OK: RF amp %1\n").arg(val ? "enabled" : "disabled");
+            emit parameterChanged("AmpEnable", QString::number(val));
+        } else {
+            response = "ERROR: Invalid amp enable value (0 or 1)\n";
+        }
+    }
     else if (cmd == "SET_MODULATION_INDEX" && parts.size() == 2) {
         bool ok;
         float idx = parts[1].toFloat(&ok);
@@ -718,12 +730,13 @@ QString SdrDevice::getCurrentStatus()
                "  LNA Gain:       %7\n"
                "  RX Amp Gain:    %8\n"
                "  TX Amp Gain:    %9\n"
-               "  Mod Index:      %10\n"
-               "  Amplitude:      %11\n"
-               "  Data Clients:   %12\n"
-               "  Control Clients: %13\n"
-               "  Audio Clients:  %14\n"
-               "  Data Sent:      %15 MB\n"
+               "  RF Amp:         %10\n"
+               "  Mod Index:      %11\n"
+               "  Amplitude:      %12\n"
+               "  Data Clients:   %13\n"
+               "  Control Clients: %14\n"
+               "  Audio Clients:  %15\n"
+               "  Data Sent:      %16 MB\n"
                ).arg(m_isTxMode ? "TX" : "RX")
         .arg(m_currentFrequency)
         .arg(m_currentFrequency / 1000000.0, 0, 'f', 3)
@@ -733,6 +746,7 @@ QString SdrDevice::getCurrentStatus()
         .arg(m_currentLnaGain)
         .arg(m_currentRxAmpGain)
         .arg(m_currentTxAmpGain)
+        .arg(m_currentAmpEnable ? "ON" : "OFF")
         .arg(m_currentModulationIndex)
         .arg(m_currentAmplitude)
         .arg(m_clients.size())
@@ -839,6 +853,15 @@ void SdrDevice::setTxAmpGain(unsigned int gain)
     if (m_hackTvLib) {
         m_hackTvLib->setTxAmpGain(gain);
         qDebug() << "TX amp gain set to:" << gain;
+    }
+}
+
+void SdrDevice::setAmpEnable(bool enable)
+{
+    m_currentAmpEnable = enable;
+    if (m_hackTvLib) {
+        m_hackTvLib->setAmpEnable(enable);
+        qDebug() << "RF amp enable set to:" << enable;
     }
 }
 

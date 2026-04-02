@@ -15,7 +15,8 @@ SOURCES += \
     fmdemodulator.cpp \
     amdemodulator.cpp \
     frequencywidget.cpp \
-    signalmeter.cpp
+    signalmeter.cpp \
+    gainsettingsdialog.cpp
 
 HEADERS += \
     radiowindow.h \
@@ -25,7 +26,8 @@ HEADERS += \
     fmdemodulator.h \
     amdemodulator.h \
     frequencywidget.h \
-    signalmeter.h
+    signalmeter.h \
+    gainsettingsdialog.h
 
 win32 {
     DEFINES += _WIN32

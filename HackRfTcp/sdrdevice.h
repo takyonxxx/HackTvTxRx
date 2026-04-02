@@ -40,6 +40,7 @@ public:
     void setVgaGain(unsigned int gain);
     void setRxAmpGain(unsigned int gain);
     void setTxAmpGain(unsigned int gain);
+    void setAmpEnable(bool enable);
 
     // TX Configuration
     void setModulationIndex(float index);
@@ -112,6 +113,7 @@ private:
     unsigned int m_currentLnaGain;
     unsigned int m_currentRxAmpGain;
     unsigned int m_currentTxAmpGain;
+    bool m_currentAmpEnable;
     float m_currentModulationIndex;
     float m_currentAmplitude;
 

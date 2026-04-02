@@ -111,6 +111,11 @@ void TcpClient::setTxAmpGain(unsigned int gain)
     sendCommand(QString("SET_TX_AMP_GAIN:%1").arg(gain));
 }
 
+void TcpClient::setAmpEnable(bool enable)
+{
+    sendCommand(QString("SET_AMP_ENABLE:%1").arg(enable ? 1 : 0));
+}
+
 void TcpClient::setModulationIndex(float index)
 {
     sendCommand(QString("SET_MODULATION_INDEX:%1").arg(index));

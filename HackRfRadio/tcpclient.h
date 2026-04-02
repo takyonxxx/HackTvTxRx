@@ -27,6 +27,7 @@ public:
     void setLnaGain(unsigned int gain);
     void setRxAmpGain(unsigned int gain);
     void setTxAmpGain(unsigned int gain);
+    void setAmpEnable(bool enable);
     void setModulationIndex(float index);
     void setAmplitude(float amp);
     void switchToRx();

@@ -20,6 +20,7 @@
 #include "amdemodulator.h"
 #include "frequencywidget.h"
 #include "signalmeter.h"
+#include "gainsettingsdialog.h"
 
 class RadioWindow : public QMainWindow
 {
@@ -49,6 +50,7 @@ private slots:
     void onModulationChanged(int index);
     void onVolumeChanged(int value);
     void onSquelchChanged(int value);
+    void onSettingsClicked();
 
 private:
     void setupUi();
@@ -80,16 +82,9 @@ private:
     QComboBox* m_modulationCombo;
     QLabel* m_modeLabel;
 
-    // Gain & TX params
+    // Volume & Squelch (kept on main screen)
     QSlider* m_volumeSlider;    QLabel* m_volumeLabel;
     QSlider* m_squelchSlider;   QLabel* m_squelchLabel;
-    QSlider* m_vgaGainSlider;   QLabel* m_vgaGainLabel;
-    QSlider* m_lnaGainSlider;   QLabel* m_lnaGainLabel;
-    QSlider* m_txGainSlider;    QLabel* m_txGainLabel;
-    QSlider* m_amplitudeSlider; QLabel* m_amplitudeLabel;
-    QSlider* m_modIndexSlider;  QLabel* m_modIndexLabel;
-    QSlider* m_rxGainSlider;    QLabel* m_rxGainLabel;
-    QSlider* m_deemphSlider;    QLabel* m_deemphLabel;
 
     // PTT
     QPushButton* m_pttButton;
@@ -97,6 +92,11 @@ private:
 
     // Signal
     SignalMeter* m_signalMeter;
+
+    // Settings dialog
+    GainSettingsDialog* m_gainDialog;
+    QPushButton* m_settingsBtn;
+    QPushButton* m_rfAmpBtn;
 
     // State
     enum Modulation { FM_NB, FM_WB, AM };

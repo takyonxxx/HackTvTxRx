@@ -134,6 +134,7 @@ public:
     void setVgaGain(unsigned int vga_gain);
     void setTxAmpGain(unsigned int tx_amp_gain);
     void setRxAmpGain(unsigned int rx_amp_gain);
+    void setAmpEnable(bool enable);
 
     // RTL-SDR specific
     void setFreqCorrection(int ppm);

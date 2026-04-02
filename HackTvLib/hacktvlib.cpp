@@ -309,6 +309,16 @@ void HackTvLib::setRxAmpGain(unsigned int rx_amp_gain)
     }
 }
 
+void HackTvLib::setAmpEnable(bool enable)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setAmpEnable(enable);
+    }
+    if (s) {
+        s->amp = enable ? 1 : 0;
+    }
+}
+
 void HackTvLib::setFreqCorrection(int ppm)
 {
     if (rtlSdrDevice) {
