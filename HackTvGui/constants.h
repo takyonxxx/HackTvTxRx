@@ -83,15 +83,14 @@ inline void getFft(const std::vector<std::complex<float>>& samples, std::vector<
         float power = std::norm(fft_data[i]);
         maxPower = std::max(maxPower, power);
     }
-    float amplificationFactor = 2.0; // Genliği koruyoruz
-    float minDisplayPower = maxPower / 1e4; // Dinamik aralığı koruyoruz (-40 dB)
-    float refLevel = 10.0f; // Referans seviyesini daha da yukarı çektik, bu sinyali daha aşağı kaydıracak
+    float amplificationFactor = 1.5f;
+    float minDisplayPower = maxPower / 1e10f; // Dynamic range (-100 dB) - no visible floor clipping
+    float refLevel = -5.0f;
     fft_output.resize(fft_size);
     float totalDb = 0.0f;
     for (int i = 0; i < fft_size; ++i) {
         float power = std::norm(fft_data[i]);
         float db = 10.0f * std::log10(std::max(power, minDisplayPower) / maxPower);
-        // dB değerini referans seviyesine göre ayarla ve ölçeklendir
         fft_output[i] = (db - refLevel) * amplificationFactor;
         totalDb += fft_output[i];
     }

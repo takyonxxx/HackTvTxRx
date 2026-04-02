@@ -696,8 +696,8 @@ void MainWindow::addRxGroup()
     cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
 
-    cPlotter->setFftRange(-100.0f, 0.0f);
-    cPlotter->setPandapterRange(-140.f, 20.f);
+    cPlotter->setFftRange(-90.0f, 10.0f);
+    cPlotter->setPandapterRange(-110.f, 10.f);
     cPlotter->setDemodRanges(-200000, -_KHZ(5), _KHZ(5), 200000, true);
 
     cPlotter->setFreqUnits(1000);
@@ -712,6 +712,21 @@ void MainWindow::addRxGroup()
     cPlotter->setFftFill(true);
     cPlotter->setMinimumHeight(150);
     cPlotter->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    // Vertical gain slider (dB range control) next to plotter
+    QSlider *plotterGainSlider = new QSlider(Qt::Vertical, this);
+    plotterGainSlider->setRange(-160, 0);
+    plotterGainSlider->setValue(-110);
+    plotterGainSlider->setToolTip("Spectrum floor (dB)");
+    plotterGainSlider->setFixedWidth(22);
+    plotterGainSlider->setStyleSheet(
+        "QSlider::groove:vertical { border: 1px solid #334455; width: 6px; background: #1a2a3a; border-radius: 3px; }"
+        "QSlider::handle:vertical { background: #FFC300; height: 14px; margin: 0 -4px; border-radius: 7px; }"
+    );
+    connect(plotterGainSlider, &QSlider::valueChanged, this, [this](int value) {
+        cPlotter->setPandapterRange(static_cast<float>(value), 10.f);
+        cPlotter->setFftRange(static_cast<float>(value + 20), 10.f);
+    });
 
     connect(cPlotter, &CPlotter::newDemodFreq, this, &MainWindow::on_plotter_newDemodFreq);
     connect(cPlotter, &CPlotter::newFilterFreq, this, &MainWindow::on_plotter_newFilterFreq);
@@ -746,8 +761,12 @@ void MainWindow::addRxGroup()
     topLayout->addWidget(freqCtrl, 7);
     rxLayout->addLayout(topLayout);
 
-    // Plotter takes all available space
-    rxLayout->addWidget(cPlotter, 1);
+    // Plotter + vertical gain slider in horizontal layout
+    QHBoxLayout *plotterLayout = new QHBoxLayout();
+    plotterLayout->setSpacing(2);
+    plotterLayout->addWidget(cPlotter, 1);
+    plotterLayout->addWidget(plotterGainSlider, 0);
+    rxLayout->addLayout(plotterLayout, 1);
 
     // Compact horizontal slider controls: Label Slider Value | Label Slider Value | ...
     QGridLayout *controlsGrid = new QGridLayout();
