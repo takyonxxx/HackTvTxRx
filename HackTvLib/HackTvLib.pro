@@ -31,7 +31,7 @@ win32 {
     LIBS += -lhackrf -lusb-1.0
 
     # Audio/Signal processing libraries
-    LIBS += -lfftw3f -lfdk-aac -lopus -lportaudio -lrtlsdr
+    LIBS += -lfftw3f -lfdk-aac -lopus -lrtlsdr
 
     # FFmpeg libraries (ORDER MATTERS - most dependent first)
     LIBS += -lavdevice -lavfilter -lavformat -lavcodec -lswresample -lswscale -lavutil
@@ -110,7 +110,7 @@ macx {
     # LIBS += -L$$HOMEBREW_PREFIX/lib
 
     # Libraries
-    LIBS += -lusb-1.0 -lhackrf -lfftw3f -lfdk-aac -lopus -lportaudio -lrtlsdr
+    LIBS += -lusb-1.0 -lhackrf -lfftw3f -lfdk-aac -lopus -lrtlsdr
 
     # FFmpeg libraries
     LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
@@ -158,7 +158,7 @@ linux {
     LIBS += -L/lib/x86_64-linux-gnu
 
     # Link to libraries
-    LIBS += -lusb-1.0 -lhackrf -lfftw3f -lfdk-aac -lopus -lportaudio -lrtlsdr
+    LIBS += -lusb-1.0 -lhackrf -lfftw3f -lfdk-aac -lopus -lrtlsdr
 
     # FFmpeg libraries
     LIBS += -lavformat -lavdevice -lavcodec -lavutil -lavfilter -lswscale -lswresample
@@ -223,8 +223,6 @@ SOURCES += \
     rtlsdrdevice.cpp
 
 HEADERS += \
-    audiofileinput.h \
-    audioinput.h \
     constants.h \
     hackrfdevice.h \
     hacktv/acp.h \
@@ -255,7 +253,6 @@ HEADERS += \
     hacktvlib.h \
     modulation.h \
     rtlsdrdevice.h \
-    stream_tx.h \
     types.h
 
 TRANSLATIONS += \

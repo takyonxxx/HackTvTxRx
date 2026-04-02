@@ -8,7 +8,7 @@
 #define HACKTVLIB_EXPORT __declspec(dllimport)
 #endif
 #else
-#define HACKTVLIB_EXPORT  // Linux için boş
+#define HACKTVLIB_EXPORT  // Linux
 #endif
 
 #include <QObject>
@@ -120,9 +120,6 @@ public:
     void setReceivedDataCallback(DataCallback callback);
     void clearCallbacks();
     bool setArguments(const std::vector<std::string>& args);
-    void setMicEnabled(bool newMicEnabled);
-    void setAudioFileEnabled(bool enable, const std::string& filePath = "", bool loop = true);
-    void setAudioFilePath(const std::string& filePath, bool loop = true);
     void setFrequency(uint64_t frequency_hz);
     void setSampleRate(uint32_t sample_rate);
     void setAmplitude(float newAmplitude);
@@ -141,7 +138,7 @@ public:
     void setDirectSampling(int mode);
     void setOffsetTuning(bool enable);
 
-    // External audio ring buffer for TCP TX
+    // External audio for FM TX (GUI feeds audio here)
     // Call enableExternalAudioRing() AFTER start() in TX mode
     // Then feed mono 44100Hz float audio via writeExternalAudio()
     void enableExternalAudioRing();
@@ -160,11 +157,6 @@ private slots:
     void dataReceived(const int8_t* data, size_t data_len);
 
 private:
-    // ========================================
-    // MEMBER VARIABLES - INITIALIZATION ORDER MATTERS!
-    // Bunlar class definition order'ında initialize edilir
-    // ========================================
-
     // Callbacks
     LogCallback m_logCallback;
     DataCallback m_dataCallback;
@@ -181,18 +173,12 @@ private:
     // Configuration
     hacktv_t* s = nullptr;
     rxtx_mode m_rxTxMode = RX_MODE;
-    bool micEnabled = false;
-    std::string m_audioFilePath;
-    bool m_audioFileLoop = true;
 
-    // Devices - CRITICAL: Initialize to nullptr!
+    // Devices
     HackRfDevice* hackRfDevice = nullptr;
     RTLSDRDevice* rtlSdrDevice = nullptr;
 
-    // ========================================
-    // PRIVATE METHODS
-    // ========================================
-
+    // Methods
     bool openDevice();
     bool setVideo();
     bool initAv();

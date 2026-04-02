@@ -33,6 +33,7 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvRe
 #include <cstdlib>
 #include "hacktv/av.h"
 #include "hacktv/rf.h"
+#include <libhackrf/hackrf.h>
 
 #define VERSION "1.0"
 
@@ -130,7 +131,6 @@ HackTvLib::HackTvLib(QObject *parent)
     , m_signal(0)
     , s(nullptr)
     , m_rxTxMode(RX_MODE)
-    , micEnabled(false)
     , hackRfDevice(nullptr)
     , rtlSdrDevice(nullptr)
 {
@@ -300,6 +300,12 @@ void HackTvLib::setTxAmpGain(unsigned int tx_amp_gain)
     if (hackRfDevice) {
         hackRfDevice->setTxAmpGain(tx_amp_gain);
     }
+    else if (s && s->rf.ctx && strcmp(s->output_type, "hackrf") == 0) {
+        hackrf_device** pDev = (hackrf_device**)s->rf.ctx;
+        if (*pDev) {
+            hackrf_set_txvga_gain(*pDev, tx_amp_gain);
+        }
+    }
 }
 
 void HackTvLib::setRxAmpGain(unsigned int rx_amp_gain)
@@ -312,7 +318,18 @@ void HackTvLib::setRxAmpGain(unsigned int rx_amp_gain)
 void HackTvLib::setAmpEnable(bool enable)
 {
     if (hackRfDevice) {
+        // FM TX / RX mode: direct device access
         hackRfDevice->setAmpEnable(enable);
+    }
+    else if (s && s->rf.ctx && strcmp(s->output_type, "hackrf") == 0) {
+        // Video TX mode: device managed by rf_hackrf.c
+        // rf.ctx points to hackrf_t whose first member is hackrf_device*
+        hackrf_device** pDev = (hackrf_device**)s->rf.ctx;
+        if (*pDev) {
+            hackrf_set_amp_enable(*pDev, enable ? 1 : 0);
+            fprintf(stderr, "setAmpEnable(%d) via rf.ctx\n", enable ? 1 : 0);
+            fflush(stderr);
+        }
     }
     if (s) {
         s->amp = enable ? 1 : 0;
@@ -1186,24 +1203,6 @@ bool HackTvLib::parseArguments()
     return true;
 }
 
-void HackTvLib::setMicEnabled(bool newMicEnabled)
-{
-    micEnabled = newMicEnabled;
-}
-
-void HackTvLib::setAudioFileEnabled(bool enable, const std::string& filePath, bool loop)
-{
-    if (hackRfDevice) {
-        hackRfDevice->setAudioFileEnabled(enable, filePath, loop);
-    }
-}
-
-void HackTvLib::setAudioFilePath(const std::string& filePath, bool loop)
-{
-    m_audioFilePath = filePath;
-    m_audioFileLoop = loop;
-}
-
 int16_t* convertFloatToInt16(const std::vector<float>& float_buffer) {
     size_t size = float_buffer.size();
     int16_t* fm_buffer = new int16_t[size];
@@ -1417,9 +1416,9 @@ bool HackTvLib::stop()
     fflush(stderr);
 
     // ========================================
-    // RX MODE or FM TX (Microphone/AudioFile) - Stop HackRF/RTL-SDR
+    // RX MODE or FM TX - Stop HackRF/RTL-SDR
     // ========================================
-    if (m_rxTxMode == RX_MODE || micEnabled || !m_audioFilePath.empty()) {
+    if (m_rxTxMode == RX_MODE || (hackRfDevice && !m_txThread.joinable())) {
         fprintf(stderr, "[1] Stopping RX/FM TX mode...\n");
         fflush(stderr);
 
@@ -1434,12 +1433,6 @@ bool HackTvLib::stop()
             fflush(stderr);
 
             if (hackRfDevice) {
-                // Stop audio file thread FIRST (before stopping streaming)
-                // This prevents the decode thread from writing to stream_tx
-                // while hackrf_stop_tx is shutting down the USB transfer
-                hackRfDevice->setAudioFileEnabled(false);
-                hackRfDevice->setMicEnabled(false);
-
                 int result = hackRfDevice->stop();
                 fprintf(stderr, "[3] hackRfDevice->stop() returned: %d\n", result);
                 fflush(stderr);
@@ -1447,10 +1440,6 @@ bool HackTvLib::stop()
                 if (result == 0) {
                     delete hackRfDevice;
                     hackRfDevice = nullptr;
-
-                    // Reset state
-                    micEnabled = false;
-                    m_audioFilePath.clear();
 
                     fprintf(stderr, "[4] HackRF stopped\n");
                     fflush(stderr);
@@ -1774,7 +1763,6 @@ bool HackTvLib::start()
 
     fprintf(stderr, "[4]Arguments parsed\n");
     fprintf(stderr, "     mode = %d (%s)\n", m_rxTxMode, getRxTxModeString(m_rxTxMode));
-    fprintf(stderr, "     micEnabled = %d\n", micEnabled);
     fprintf(stderr, "     output_type = '%s'\n", s->output_type ? s->output_type : "NULL");
     fflush(stderr);
 
@@ -1842,7 +1830,6 @@ bool HackTvLib::start()
             }
 
             // Set parameters AFTER starting
-            hackRfDevice->setMicEnabled(false);
             hackRfDevice->setSampleRate(s->samplerate);
             hackRfDevice->setFrequency(s->frequency);
             hackRfDevice->setAmpEnable(s->amp);
@@ -1897,11 +1884,11 @@ bool HackTvLib::start()
     }
 
     // ========================================
-    // TX MODE - FM TRANSMITTER (Microphone)
+    // TX MODE - FM TRANSMITTER (GUI feeds audio via ring buffer)
     // ========================================
-    if ((micEnabled || !m_audioFilePath.empty()) && m_rxTxMode == TX_MODE) {
-        fprintf(stderr, "[10] === FM TRANSMITTER MODE (%s) ===\n",
-                micEnabled ? "MIC" : "FILE");
+    if (m_rxTxMode == TX_MODE && optind < m_argv.size() &&
+        strcmp(m_argv[optind], "fmtransmitter") == 0) {
+        fprintf(stderr, "[10] === FM TRANSMITTER MODE ===\n");
         fflush(stderr);
 
         if (strcmp(s->output_type, "hackrf") == 0) {
@@ -1910,18 +1897,11 @@ bool HackTvLib::start()
                 fprintf(stderr, "     Deleting existing HackRfDevice...\n");
                 fflush(stderr);
                 try {
-                    // CRITICAL: Ensure mic is disabled before deleting
-                    hackRfDevice->setMicEnabled(false);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
                     delete hackRfDevice;
                     fprintf(stderr, "    Deleted old device\n");
                     fflush(stderr);
-                } catch (const std::exception& e) {
-                    fprintf(stderr, "     Exception during delete: %s\n", e.what());
-                    fflush(stderr);
                 } catch (...) {
-                    fprintf(stderr, "     Unknown exception during delete\n");
+                    fprintf(stderr, "     Exception during delete\n");
                     fflush(stderr);
                 }
                 hackRfDevice = nullptr;
@@ -1947,134 +1927,56 @@ bool HackTvLib::start()
                 return false;
             }
 
-            // CRITICAL: DON'T enable mic yet - device not started!
+            // Start TX
             fprintf(stderr, "[11] Starting HackRF in TX mode...\n");
-            fprintf(stderr, "     About to call hackRfDevice->start(rf_mode::TX)...\n");
             fflush(stderr);
 
             int result = RF_ERROR;
             try {
                 result = hackRfDevice->start(rf_mode::TX);
-                fprintf(stderr, "     hackRfDevice->start() completed\n");
-                fflush(stderr);
             } catch (const std::exception& e) {
                 fprintf(stderr, "Exception in start(): %s\n", e.what());
                 fflush(stderr);
-                log("Failed to start HackRF: %s", e.what());
                 delete hackRfDevice;
                 hackRfDevice = nullptr;
                 return false;
             } catch (...) {
                 fprintf(stderr, "Unknown exception in start()\n");
                 fflush(stderr);
-                log("Failed to start HackRF: unknown exception");
                 delete hackRfDevice;
                 hackRfDevice = nullptr;
                 return false;
             }
 
-            fprintf(stderr, "[12] start() returned: %d\n", result);
-            fflush(stderr);
-
             if (result != RF_OK) {
                 fprintf(stderr, "Failed to start HackRF in TX mode (result=%d)\n", result);
                 fflush(stderr);
                 log("Could not open HackRF in TX. Please check the device. Error code: %d", result);
-
-                // Clean up
-                try {
-                    delete hackRfDevice;
-                } catch (...) {
-                    fprintf(stderr, "     Exception during cleanup\n");
-                    fflush(stderr);
-                }
+                delete hackRfDevice;
                 hackRfDevice = nullptr;
                 return false;
             }
 
-            fprintf(stderr, "[13]Device started successfully\n");
-            fflush(stderr);
-
-            // Set basic parameters first
-            fprintf(stderr, "[14] Setting parameters...\n");
-            fflush(stderr);
-
+            // Set RF parameters
             try {
-                fprintf(stderr, "     Setting sample rate to %u...\n", s->samplerate);
-                fprintf(stderr, "     hackRfDevice ptr: %p\n", (void*)hackRfDevice);
-                fflush(stderr);
                 hackRfDevice->setSampleRate(s->samplerate);
-                fprintf(stderr, "     Sample rate set OK\n");
-                fflush(stderr);
-
-                fprintf(stderr, "     Setting frequency to %llu...\n", (unsigned long long)s->frequency);
-                fflush(stderr);
                 hackRfDevice->setFrequency(s->frequency);
-
-                fprintf(stderr, "     Setting amp enable to %d...\n", s->amp);
-                fflush(stderr);
                 hackRfDevice->setAmpEnable(s->amp);
-
-                fprintf(stderr, "[15]Parameters set\n");
-                fflush(stderr);
-
-                // NOW enable audio source AFTER device is fully running
-                fprintf(stderr, "[16] Enabling audio source...\n");
-                fprintf(stderr, "     Waiting 500ms for device to stabilize...\n");
-                fflush(stderr);
-
-                // Give device time to stabilize
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-                if (micEnabled) {
-                    fprintf(stderr, "     About to call setMicEnabled(true)...\n");
-                    fflush(stderr);
-                    hackRfDevice->setMicEnabled(true);
-                    fprintf(stderr, "[17]Microphone enabled\n");
-                    fflush(stderr);
-                } else if (!m_audioFilePath.empty()) {
-                    fprintf(stderr, "     About to call setAudioFileEnabled(true, %s)...\n",
-                            m_audioFilePath.c_str());
-                    fflush(stderr);
-                    hackRfDevice->setAudioFileEnabled(true, m_audioFilePath, m_audioFileLoop);
-                    fprintf(stderr, "[17]Audio file playback enabled\n");
-                    fflush(stderr);
-                }
-
             } catch (const std::exception& e) {
                 fprintf(stderr, "Exception setting parameters: %s\n", e.what());
                 fflush(stderr);
-                log("Failed to configure HackRF: %s", e.what());
-
-                try {
-                    hackRfDevice->stop();
-                    delete hackRfDevice;
-                } catch (...) {
-                    fprintf(stderr, "     Exception during cleanup\n");
-                    fflush(stderr);
-                }
-                hackRfDevice = nullptr;
-                return false;
-            } catch (...) {
-                fprintf(stderr, "Unknown exception setting parameters\n");
-                fflush(stderr);
-                log("Failed to configure HackRF: unknown error");
-
-                try {
-                    hackRfDevice->stop();
-                    delete hackRfDevice;
-                } catch (...) {
-                    fprintf(stderr, "     Exception during cleanup\n");
-                    fflush(stderr);
-                }
+                hackRfDevice->stop();
+                delete hackRfDevice;
                 hackRfDevice = nullptr;
                 return false;
             }
 
-            fprintf(stderr, "[18]FM TX SUCCESS \n");
+            // Ring buffer will be enabled by GUI via enableExternalAudioRing()
+            // GUI feeds audio via writeExternalAudio()
+
+            fprintf(stderr, "[18]FM TX SUCCESS\n");
             fflush(stderr);
-            log("HackTvLib started in TX mode. %s",
-                micEnabled ? "Mic Enabled." : "Audio File Enabled.");
+            log("HackTvLib started in FM TX mode. Audio via ring buffer.");
             return true;
         }
 
@@ -2217,10 +2119,7 @@ void HackTvLib::enableExternalAudioRing()
         return;
     }
 
-    // Stop PortAudio mic if running
-    hackRfDevice->setMicEnabled(false);
-
-    // Enable ring buffer path without any audio source
+    // Enable ring buffer path for GUI-fed audio
     hackRfDevice->ringReset();
     hackRfDevice->m_useAudioFileRing.store(true);
 

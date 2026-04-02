@@ -97,12 +97,26 @@ MainWindow::MainWindow(QWidget *parent)
         txAmplitudeSpinBox->setValue(tx_amplitude);
     }
     if (txModulationIndexSlider) {
-        txModulationIndexSlider->setValue(static_cast<int>(tx_modulation_index * 10));
+        txModulationIndexSlider->setValue(static_cast<int>(tx_modulation_index * 100));
         txModulationIndexSpinBox->setValue(tx_modulation_index);
     }
-    if (txInterpolationSlider) {
-        txInterpolationSlider->setValue(static_cast<int>(tx_interpolation));
-        txInterpolationSpinBox->setValue(tx_interpolation);
+    if (txAmpSlider) {
+        txAmpSlider->setValue(m_txAmpGain);
+        txAmpSpinBox->setValue(m_txAmpGain);
+    }
+
+    // Restore RX demod sliders from loaded settings
+    if (rxGainSlider) {
+        rxGainSlider->setValue(static_cast<int>(rxGain * 10));
+        rxGainLevelLabel->setText(QString::number(rxGain, 'f', 1));
+    }
+    if (rxModIndexSlider) {
+        rxModIndexSlider->setValue(static_cast<int>(rxModIndex * 10));
+        rxModIndexLevelLabel->setText(QString::number(rxModIndex, 'f', 1));
+    }
+    if (rxDeemphSlider) {
+        rxDeemphSlider->setValue(rxDeemph);
+        rxDeemphLevelLabel->setText(rxDeemph == 0 ? "OFF" : QString("%1us").arg(rxDeemph));
     }
 
     // Restore checkboxes from settings
@@ -117,8 +131,16 @@ MainWindow::MainWindow(QWidget *parent)
     }
 
     // Connect checkboxes AFTER restore to avoid triggering saveSettings during init
-    connect(ampEnabled, &QCheckBox::stateChanged, this, [this]() { saveSettings(); });
-    connect(colorDisabled, &QCheckBox::stateChanged, this, [this]() { saveSettings(); });
+    connect(ampEnabled, &QCheckBox::stateChanged, this, [this]() {
+        if (m_isProcessing && m_hackTvLib) {
+            m_hackTvLib->setAmpEnable(ampEnabled->isChecked());
+        }
+        saveSettings();
+    });
+    connect(colorDisabled, &QCheckBox::stateChanged, this, [this]() {
+        // No Color requires restart - just save for next start
+        saveSettings();
+    });
 
     logTimer = new QTimer(this);
     connect(logTimer, &QTimer::timeout, this, &MainWindow::updateLogDisplay);
@@ -367,7 +389,7 @@ void MainWindow::addOutputGroup()
     colorDisabled = new QCheckBox("No Color", this);
     colorDisabled->setMinimumWidth(85);
 
-    QLabel *channelLabel = new QLabel("Ch:", this);
+    channelLabel = new QLabel("Ch:", this);
     channelCombo = new QComboBox(this);
     channelCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
@@ -375,7 +397,7 @@ void MainWindow::addOutputGroup()
     frequencyEdit = new QLineEdit(this);
     frequencyEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
-    QLabel *sampleRateLabel = new QLabel("SR:", this);
+    QLabel *sampleRateLabel = new QLabel("BW:", this);
     sampleRateCombo = new QComboBox(this);
 
     std::map<int, QString> sortedSampleRates {
@@ -397,101 +419,76 @@ void MainWindow::addOutputGroup()
     outputLayout->addWidget(rxtxLabel, 0, 2);
     outputLayout->addWidget(rxtxCombo, 0, 3);
     outputLayout->addWidget(ampEnabled, 0, 4);
-    outputLayout->addWidget(colorDisabled, 0, 5, 1, 2); // span 2 columns
+    outputLayout->addWidget(colorDisabled, 0, 5, 1, 2);
 
-    // Row 1: Channel | Freq | SampleRate
-    outputLayout->addWidget(channelLabel, 1, 0);
-    outputLayout->addWidget(channelCombo, 1, 1);
-    outputLayout->addWidget(freqLabel, 1, 2);
-    outputLayout->addWidget(frequencyEdit, 1, 3, 1, 2);
-    outputLayout->addWidget(sampleRateLabel, 1, 5);
-    outputLayout->addWidget(sampleRateCombo, 1, 6);
+    // Row 1: Freq | BW | Ch (Freq+BW left under Device, Ch right side for TX only)
+    outputLayout->addWidget(freqLabel, 1, 0);
+    outputLayout->addWidget(frequencyEdit, 1, 1);
+    outputLayout->addWidget(sampleRateLabel, 1, 2);
+    outputLayout->addWidget(sampleRateCombo, 1, 3);
+    outputLayout->addWidget(channelLabel, 1, 4);
+    outputLayout->addWidget(channelCombo, 1, 5, 1, 2);
 
     // Set stretch
-    outputLayout->setColumnStretch(1, 3); // device/channel combo
-    outputLayout->setColumnStretch(3, 3); // rxtx/freq
-    outputLayout->setColumnStretch(4, 1); // freq extends
-    outputLayout->setColumnStretch(6, 1); // sample rate combo
+    outputLayout->setColumnStretch(1, 3); // freq edit
+    outputLayout->setColumnStretch(3, 1); // BW combo
+    outputLayout->setColumnStretch(5, 2); // channel combo
     int col = 7; // for TX controls row reference
 
     // TX Controls layout (hidden in RX mode)
     txControlsLayout = new QGridLayout();
     txControlsLayout->setSpacing(4);
 
-    // Amplitude
+    // TX Amplitude (same as HackRfRadio: range 1-100, /100 = 0.01-1.00, default 0.50)
     txAmplitudeSlider = new QSlider(Qt::Horizontal);
-    txAmplitudeSlider->setRange(0, 100);
-    txAmplitudeSlider->setValue(tx_amplitude*100);
+    txAmplitudeSlider->setRange(1, 100);
+    txAmplitudeSlider->setValue(static_cast<int>(tx_amplitude * 100));
     txAmplitudeSpinBox = new QDoubleSpinBox();
     txAmplitudeSpinBox->setMinimumWidth(55);
-    txAmplitudeSpinBox->setRange(0.0, 5.0);
+    txAmplitudeSpinBox->setRange(0.01, 1.0);
     txAmplitudeSpinBox->setValue(tx_amplitude);
     txAmplitudeSpinBox->setSingleStep(0.01);
-    QLabel *txAmplitudeLabel = new QLabel("Amplitude:");
+    QLabel *txAmplitudeLabel = new QLabel("TX Amp:");
     txAmplitudeLabel->setStyleSheet(labelStyle);
     txControlsLayout->addWidget(txAmplitudeLabel, 0, 0);
     txControlsLayout->addWidget(txAmplitudeSlider, 0, 1);
     txControlsLayout->addWidget(txAmplitudeSpinBox, 0, 2);
 
-    // Filter Size
-    txFilterSizeSlider = new QSlider(Qt::Horizontal);
-    txFilterSizeSlider->setRange(0, 500);
-    txFilterSizeSlider->setValue(tx_filter_size*100);
-    txFilterSizeSpinBox = new QDoubleSpinBox();
-    txFilterSizeSpinBox->setMinimumWidth(55);
-    txFilterSizeSpinBox->setRange(0.0, 5.0);
-    txFilterSizeSpinBox->setValue(tx_filter_size);
-    txFilterSizeSpinBox->setSingleStep(0.01);
-    QLabel *txFilterSizeLabel = new QLabel("Filter:");
-    txFilterSizeLabel->setStyleSheet(labelStyle);
-    txControlsLayout->addWidget(txFilterSizeLabel, 0, 3);
-    txControlsLayout->addWidget(txFilterSizeSlider, 0, 4);
-    txControlsLayout->addWidget(txFilterSizeSpinBox, 0, 5);
-
-    // Modulation Index
+    // TX Modulation Index (same as HackRfRadio: range 1-500, /100 = 0.01-5.00, default 0.40)
     txModulationIndexSlider = new QSlider(Qt::Horizontal);
-    txModulationIndexSlider->setRange(0, 1000);
-    txModulationIndexSlider->setValue(tx_modulation_index*100);
+    txModulationIndexSlider->setRange(1, 500);
+    txModulationIndexSlider->setValue(static_cast<int>(tx_modulation_index * 100));
     txModulationIndexSpinBox = new QDoubleSpinBox();
     txModulationIndexSpinBox->setMinimumWidth(55);
-    txModulationIndexSpinBox->setRange(0.0, 10.0);
+    txModulationIndexSpinBox->setRange(0.01, 5.0);
     txModulationIndexSpinBox->setValue(tx_modulation_index);
     txModulationIndexSpinBox->setSingleStep(0.01);
     QLabel *txModulationIndexLabel = new QLabel("Mod Idx:");
     txModulationIndexLabel->setStyleSheet(labelStyle);
-    txControlsLayout->addWidget(txModulationIndexLabel, 1, 0);
-    txControlsLayout->addWidget(txModulationIndexSlider, 1, 1);
-    txControlsLayout->addWidget(txModulationIndexSpinBox, 1, 2);
+    txControlsLayout->addWidget(txModulationIndexLabel, 0, 3);
+    txControlsLayout->addWidget(txModulationIndexSlider, 0, 4);
+    txControlsLayout->addWidget(txModulationIndexSpinBox, 0, 5);
 
-    // Interpolation
-    txInterpolationSlider = new QSlider(Qt::Horizontal);
-    txInterpolationSlider->setRange(0, 100);
-    txInterpolationSlider->setValue(tx_interpolation);
-    txInterpolationSpinBox = new QDoubleSpinBox();
-    txInterpolationSpinBox->setMinimumWidth(55);
-    txInterpolationSpinBox->setRange(0.0, 100.0);
-    txInterpolationSpinBox->setValue(tx_interpolation);
-    txInterpolationSpinBox->setSingleStep(1.0);
-    QLabel *txInterpolationLabel = new QLabel("Interp:");
-    txInterpolationLabel->setStyleSheet(labelStyle);
-    txControlsLayout->addWidget(txInterpolationLabel, 1, 3);
-    txControlsLayout->addWidget(txInterpolationSlider, 1, 4);
-    txControlsLayout->addWidget(txInterpolationSpinBox, 1, 5);
-
-    // Tx Gain
+    // Tx IF Gain (0-47, default 47)
     txAmpSlider = new QSlider(Qt::Horizontal);
-    txAmpSlider->setRange(0, HACKRF_TX_AMP_MAX_DB);
+    txAmpSlider->setRange(0, 47);
     txAmpSlider->setValue(m_txAmpGain);
     txAmpSpinBox = new QSpinBox();
     txAmpSpinBox->setMinimumWidth(55);
-    txAmpSpinBox->setRange(0, HACKRF_TX_AMP_MAX_DB);
+    txAmpSpinBox->setRange(0, 47);
     txAmpSpinBox->setValue(m_txAmpGain);
     txAmpSpinBox->setSingleStep(1);
-    QLabel *txAmpLabel = new QLabel("Tx Gain:");
+    QLabel *txAmpLabel = new QLabel("TX Power:");
     txAmpLabel->setStyleSheet(labelStyle);
-    txControlsLayout->addWidget(txAmpLabel, 2, 0);
-    txControlsLayout->addWidget(txAmpSlider, 2, 1);
-    txControlsLayout->addWidget(txAmpSpinBox, 2, 2);
+    txControlsLayout->addWidget(txAmpLabel, 1, 0);
+    txControlsLayout->addWidget(txAmpSlider, 1, 1);
+    txControlsLayout->addWidget(txAmpSpinBox, 1, 2);
+
+    // Hidden placeholders for Filter/Interp (kept for Video TX compatibility but never shown in FM TX)
+    txFilterSizeSlider = new QSlider(Qt::Horizontal); txFilterSizeSlider->setVisible(false);
+    txFilterSizeSpinBox = new QDoubleSpinBox(); txFilterSizeSpinBox->setVisible(false);
+    txInterpolationSlider = new QSlider(Qt::Horizontal); txInterpolationSlider->setVisible(false);
+    txInterpolationSpinBox = new QDoubleSpinBox(); txInterpolationSpinBox->setVisible(false);
 
     // Stretch the slider columns
     txControlsLayout->setColumnStretch(1, 1);
@@ -572,25 +569,6 @@ void MainWindow::addOutputGroup()
         if(m_isProcessing)
         {
             m_hackTvLib->setModulation_index(tx_modulation_index);
-        }
-        saveSettings();
-    });
-
-    connect(txInterpolationSlider, &QSlider::valueChanged, [this](int value) {
-        txInterpolationSpinBox->setValue(value);
-        tx_interpolation = value;
-        if(m_isProcessing)
-        {
-            m_hackTvLib->setInterpolation(tx_interpolation);
-        }
-        saveSettings();
-    });
-    connect(txInterpolationSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), [this](double value) {
-        txInterpolationSlider->setValue(static_cast<int>(value));
-        tx_interpolation = value;
-        if(m_isProcessing)
-        {
-            m_hackTvLib->setInterpolation(tx_interpolation);
         }
         saveSettings();
     });
@@ -891,6 +869,70 @@ void MainWindow::addRxGroup()
     rtlDirectCombo->setVisible(false);
     rtlOffsetCheck->setVisible(false);
 
+    // Row 2: RX Gain | FM Mod Index | De-Emphasis (FM demodulator controls)
+    QString rxSliderLabel = "QLabel { color: #c8f0ff; font-size: 11px; font-weight: bold; }";
+
+    rxGainLabel = new QLabel("Gain:", rxGroup);
+    rxGainLabel->setStyleSheet(rxSliderLabel);
+    rxGainSlider = new QSlider(Qt::Horizontal, rxGroup);
+    rxGainSlider->setRange(0, 100);
+    rxGainSlider->setValue(static_cast<int>(rxGain * 10));
+    rxGainLevelLabel = new QLabel(QString::number(rxGain, 'f', 1), rxGroup);
+    rxGainLevelLabel->setAlignment(Qt::AlignCenter);
+    rxGainLevelLabel->setFixedWidth(32);
+    rxGainLevelLabel->setStyleSheet(labelStyle);
+    controlsGrid->addWidget(rxGainLabel, 2, 0);
+    controlsGrid->addWidget(rxGainSlider, 2, 1);
+    controlsGrid->addWidget(rxGainLevelLabel, 2, 2);
+
+    rxModIndexLabel = new QLabel("ModIdx:", rxGroup);
+    rxModIndexLabel->setStyleSheet(rxSliderLabel);
+    rxModIndexSlider = new QSlider(Qt::Horizontal, rxGroup);
+    rxModIndexSlider->setRange(1, 100);
+    rxModIndexSlider->setValue(static_cast<int>(rxModIndex * 10));
+    rxModIndexLevelLabel = new QLabel(QString::number(rxModIndex, 'f', 1), rxGroup);
+    rxModIndexLevelLabel->setAlignment(Qt::AlignCenter);
+    rxModIndexLevelLabel->setFixedWidth(32);
+    rxModIndexLevelLabel->setStyleSheet(labelStyle);
+    controlsGrid->addWidget(rxModIndexLabel, 2, 3);
+    controlsGrid->addWidget(rxModIndexSlider, 2, 4);
+    controlsGrid->addWidget(rxModIndexLevelLabel, 2, 5);
+
+    rxDeemphLabel = new QLabel("DeEm:", rxGroup);
+    rxDeemphLabel->setStyleSheet(rxSliderLabel);
+    rxDeemphSlider = new QSlider(Qt::Horizontal, rxGroup);
+    rxDeemphSlider->setRange(0, 1000);
+    rxDeemphSlider->setValue(rxDeemph);
+    rxDeemphLevelLabel = new QLabel(QString::number(rxDeemph), rxGroup);
+    rxDeemphLevelLabel->setAlignment(Qt::AlignCenter);
+    rxDeemphLevelLabel->setFixedWidth(32);
+    rxDeemphLevelLabel->setStyleSheet(labelStyle);
+    controlsGrid->addWidget(rxDeemphLabel, 2, 6);
+    controlsGrid->addWidget(rxDeemphSlider, 2, 7);
+    controlsGrid->addWidget(rxDeemphLevelLabel, 2, 8);
+
+    // Connect RX demod sliders
+    connect(rxGainSlider, &QSlider::valueChanged, this, [this](int value) {
+        rxGain = value / 10.0f;
+        rxGainLevelLabel->setText(QString::number(rxGain, 'f', 1));
+        if (wbfmDemodulator) wbfmDemodulator->setOutputGain(rxGain);
+        saveSettings();
+    });
+
+    connect(rxModIndexSlider, &QSlider::valueChanged, this, [this](int value) {
+        rxModIndex = value / 10.0f;
+        rxModIndexLevelLabel->setText(QString::number(rxModIndex, 'f', 1));
+        if (wbfmDemodulator) wbfmDemodulator->setRxModIndex(rxModIndex);
+        saveSettings();
+    });
+
+    connect(rxDeemphSlider, &QSlider::valueChanged, this, [this](int value) {
+        rxDeemph = value;
+        rxDeemphLevelLabel->setText(value == 0 ? "OFF" : QString("%1us").arg(value));
+        if (wbfmDemodulator) wbfmDemodulator->setDeemphTau(static_cast<float>(rxDeemph));
+        saveSettings();
+    });
+
     // Stretch the slider columns equally
     controlsGrid->setColumnStretch(1, 1);
     controlsGrid->setColumnStretch(4, 1);
@@ -983,16 +1025,20 @@ void MainWindow::saveSettings()
     settings.setValue("samplerate", m_sampleRate);
     settings.setValue("lowcutfreq", m_LowCutFreq);
     settings.setValue("hicutfreq", m_HiCutFreq);
-    settings.setValue("tx_amplitude", tx_amplitude);
-    settings.setValue("tx_filter_size", tx_filter_size);
-    settings.setValue("tx_modulation_index", tx_modulation_index);
-    settings.setValue("tx_interpolation", tx_interpolation);
+    // Store floats as integers (x1000) to avoid Turkish locale comma/dot issues
+    settings.setValue("tx_amplitude_i", static_cast<int>(tx_amplitude * 1000));
+    settings.setValue("tx_filter_size_i", static_cast<int>(tx_filter_size * 1000));
+    settings.setValue("tx_modulation_index_i", static_cast<int>(tx_modulation_index * 1000));
+    settings.setValue("tx_interpolation_i", static_cast<int>(tx_interpolation * 1000));
     settings.setValue("m_volumeLevel", m_volumeLevel);
     settings.setValue("m_txAmpGain", m_txAmpGain);
     settings.setValue("m_rxAmpGain", m_rxAmpGain);
     settings.setValue("m_lnaGain", m_lnaGain);
     settings.setValue("m_vgaGain", m_vgaGain);
-    settings.setValue("audioGain", static_cast<double>(audioGain));
+    settings.setValue("audioGain_i", static_cast<int>(audioGain * 1000));
+    settings.setValue("rxGain_i", static_cast<int>(rxGain * 1000));
+    settings.setValue("rxModIndex_i", static_cast<int>(rxModIndex * 1000));
+    settings.setValue("rxDeemph", rxDeemph);
     settings.setValue("ampEnabled", ampEnabled->isChecked());
     settings.setValue("colorDisabled", colorDisabled->isChecked());
     settings.endGroup();
@@ -1002,20 +1048,32 @@ void MainWindow::loadSettings()
 {
     QSettings settings(m_sSettingsFile, QSettings::IniFormat);
     settings.beginGroup("Rf");
-    m_frequency = settings.value("frequency").toInt();
+    m_frequency = settings.value("frequency").toLongLong();
     m_sampleRate = settings.value("samplerate").toInt();
     m_LowCutFreq = settings.value("lowcutfreq").toInt();
     m_HiCutFreq = settings.value("hicutfreq").toInt();
-    tx_amplitude = settings.value("tx_amplitude").toDouble();
-    tx_filter_size = settings.value("tx_filter_size").toDouble();
-    tx_modulation_index = settings.value("tx_modulation_index").toDouble();
-    tx_interpolation = settings.value("tx_interpolation").toDouble();
-    m_volumeLevel = settings.value("m_volumeLevel").toInt();
-    m_txAmpGain = settings.value("m_txAmpGain").toInt();
-    m_rxAmpGain = settings.value("m_rxAmpGain").toInt();
-    m_lnaGain = settings.value("m_lnaGain").toInt();
-    m_vgaGain = settings.value("m_vgaGain").toInt();
-    audioGain = settings.value("audioGain", 0.75).toFloat();
+    // Integer-stored floats (x1000) - locale-safe
+    // If new _i key exists, use it. Otherwise keep member default value.
+    if (settings.contains("tx_amplitude_i"))
+        tx_amplitude = settings.value("tx_amplitude_i").toInt() / 1000.0;
+    if (settings.contains("tx_filter_size_i"))
+        tx_filter_size = settings.value("tx_filter_size_i").toInt() / 1000.0;
+    if (settings.contains("tx_modulation_index_i"))
+        tx_modulation_index = settings.value("tx_modulation_index_i").toInt() / 1000.0;
+    if (settings.contains("tx_interpolation_i"))
+        tx_interpolation = settings.value("tx_interpolation_i").toInt() / 1000.0;
+    m_volumeLevel = settings.value("m_volumeLevel", 10).toInt();
+    m_txAmpGain = settings.value("m_txAmpGain", 40).toInt();
+    m_rxAmpGain = settings.value("m_rxAmpGain", 0).toInt();
+    m_lnaGain = settings.value("m_lnaGain", 40).toInt();
+    m_vgaGain = settings.value("m_vgaGain", 40).toInt();
+    if (settings.contains("audioGain_i"))
+        audioGain = settings.value("audioGain_i").toInt() / 1000.0f;
+    if (settings.contains("rxGain_i"))
+        rxGain = settings.value("rxGain_i").toInt() / 1000.0f;
+    if (settings.contains("rxModIndex_i"))
+        rxModIndex = settings.value("rxModIndex_i").toInt() / 1000.0f;
+    rxDeemph = settings.value("rxDeemph", 0).toInt();
     settings.endGroup();
 }
 
@@ -1158,6 +1216,11 @@ void MainWindow::executeCommand()
             wbfmDemodulator = std::make_unique<WBFMDemodulator>(
                 static_cast<double>(m_sampleRate),
                 std::max(150000.0, static_cast<double>(m_CutFreq) * 2.0));
+
+            // Apply saved demod settings
+            wbfmDemodulator->setOutputGain(rxGain);
+            wbfmDemodulator->setRxModIndex(rxModIndex);
+            wbfmDemodulator->setDeemphTau(static_cast<float>(rxDeemph));
         }
 
         cPlotter->setSampleRate(m_sampleRate);
@@ -1171,7 +1234,6 @@ void MainWindow::executeCommand()
         }
 
         m_hackTvLib->setArguments(stdArgs);
-        m_hackTvLib->setAmplitude(tx_amplitude);
 
         // Thread-safe callbacks
         m_hackTvLib->setLogCallback([this](const std::string& msg) {
@@ -1216,6 +1278,37 @@ void MainWindow::executeCommand()
             return;
         }
 
+        // Apply all saved parameters AFTER start (device now exists)
+        // TX params
+        m_hackTvLib->setAmplitude(tx_amplitude);
+        m_hackTvLib->setModulation_index(tx_modulation_index);
+        m_hackTvLib->setTxAmpGain(m_txAmpGain);
+        m_hackTvLib->setAmpEnable(ampEnabled->isChecked());
+        // RX params
+        m_hackTvLib->setLnaGain(m_lnaGain);
+        m_hackTvLib->setVgaGain(m_vgaGain);
+        m_hackTvLib->setRxAmpGain(m_rxAmpGain);
+
+        // For FM TX: enable external audio ring and start mic capture or file playback
+        if (mode == "tx" && (isFmTransmit || isFmFile)) {
+            // Give device time to initialize before enabling audio ring
+            QTimer::singleShot(1000, this, [this]() {
+                if (!m_hackTvLib || !m_hackTvLib->isDeviceReady()) return;
+
+                m_hackTvLib->enableExternalAudioRing();
+
+                if (isFmTransmit) {
+                    // Start Qt AudioSource mic capture
+                    startMicCapture();
+                    qDebug() << "FM TX: Mic capture started via Qt AudioSource";
+                } else if (isFmFile && !inputFileEdit->text().isEmpty()) {
+                    // Start file audio playback to TX
+                    startFilePlayback(inputFileEdit->text());
+                    qDebug() << "FM TX: File playback started:" << inputFileEdit->text();
+                }
+            });
+        }
+
         executeButton->setText("STOP");
         QString argsString = args.join(' ');
         logBrowser->append(argsString);
@@ -1224,6 +1317,10 @@ void MainWindow::executeCommand()
     else if (executeButton->text() == "STOP")
     {       
         m_isProcessing.store(false);
+
+        // Stop GUI-side audio capture/playback
+        stopMicCapture();
+        stopFilePlayback();
 
         if (m_hackTvLib) {
             m_hackTvLib->clearCallbacks();
@@ -1241,7 +1338,6 @@ QStringList MainWindow::buildCommand()
     QStringList args;
 
     auto output = outputCombo->currentData().toString();
-    m_hackTvLib->setMicEnabled(false);
 
     mode = rxtxCombo->currentText().toLower();
     args << "--rx-tx-mode" << mode;
@@ -1267,7 +1363,8 @@ QStringList MainWindow::buildCommand()
         args << "fmtransmitter";
         if(mode == "tx")
         {
-            m_hackTvLib->setMicEnabled(true);
+            // GUI will capture audio via Qt AudioSource
+            // and feed it via enableExternalAudioRing/writeExternalAudio
             sampleRateCombo->setCurrentIndex(0);
         }
         break;
@@ -1275,8 +1372,7 @@ QStringList MainWindow::buildCommand()
         args << "fmtransmitter";
         if(mode == "tx" && !inputFileEdit->text().isEmpty())
         {
-            m_hackTvLib->setMicEnabled(false);
-            m_hackTvLib->setAudioFilePath(inputFileEdit->text().toStdString(), true);
+            // GUI will decode and feed audio via ring buffer
             sampleRateCombo->setCurrentIndex(0);
         }
         break;
@@ -1386,22 +1482,32 @@ void MainWindow::onInputTypeChanged(int index)
 
     txAmplitudeSlider->setVisible(isFmAny);
     txAmplitudeSpinBox->setVisible(isFmAny);
-    txFilterSizeSlider->setVisible(isFmAny);
-    txFilterSizeSpinBox->setVisible(isFmAny);
+    txFilterSizeSlider->setVisible(false);
+    txFilterSizeSpinBox->setVisible(false);
     txModulationIndexSlider->setVisible(isFmAny);
     txModulationIndexSpinBox->setVisible(isFmAny);
-    txInterpolationSlider->setVisible(isFmAny);
-    txInterpolationSpinBox->setVisible(isFmAny);
-    txAmpSlider->setVisible(isFmAny);
-    txAmpSpinBox->setVisible(isFmAny);
-    tx_line->setVisible(isFmAny);
+    txInterpolationSlider->setVisible(false);
+    txInterpolationSpinBox->setVisible(false);
+    // TX Gain always visible in any TX mode
+    txAmpSlider->setVisible(true);
+    txAmpSpinBox->setVisible(true);
+    tx_line->setVisible(true);
 
-    // Also hide/show labels (columns 0 and 3 in the 2-column grid)
+    // Show/hide labels in TX controls grid
     for (int i = 0; i < txControlsLayout->rowCount(); ++i) {
         for (int c : {0, 3}) {
             QLayoutItem* item = txControlsLayout->itemAtPosition(i, c);
             if (item && item->widget()) {
-                item->widget()->setVisible(isFmAny);
+                if (i == 1 && c == 0) {
+                    // Row 1 col 0 = TX Power label: always visible
+                    item->widget()->setVisible(true);
+                } else if (c == 3) {
+                    // Col 3 labels (ModIdx right side): only in FM
+                    item->widget()->setVisible(isFmAny);
+                } else {
+                    // Row 0 col 0 = Amplitude label: only FM
+                    item->widget()->setVisible(isFmAny);
+                }
             }
         }
     }
@@ -1415,31 +1521,36 @@ void MainWindow::onRxTxTypeChanged(int index)
     rxGroup->setVisible(!isTx);
     colorDisabled->setVisible(isTx);
     ampEnabled->setVisible(isTx);
+    channelLabel->setVisible(isTx);
+    channelCombo->setVisible(isTx);
 
     if(isTx)
     {
         inputTypeCombo->setCurrentIndex(0);  // Start in Tx mode
-        onInputTypeChanged(0);
+        onInputTypeChanged(0);  // This sets correct visibility for all TX controls
     }
+    else
+    {
+        // RX mode - hide all TX controls
+        txAmplitudeSlider->setVisible(false);
+        txAmplitudeSpinBox->setVisible(false);
+        txFilterSizeSlider->setVisible(false);
+        txFilterSizeSpinBox->setVisible(false);
+        txModulationIndexSlider->setVisible(false);
+        txModulationIndexSpinBox->setVisible(false);
+        txInterpolationSlider->setVisible(false);
+        txInterpolationSpinBox->setVisible(false);
+        txAmpSlider->setVisible(false);
+        txAmpSpinBox->setVisible(false);
+        tx_line->setVisible(false);
 
-    txAmplitudeSlider->setVisible(isTx);
-    txAmplitudeSpinBox->setVisible(isTx);
-    txFilterSizeSlider->setVisible(isTx);
-    txFilterSizeSpinBox->setVisible(isTx);
-    txModulationIndexSlider->setVisible(isTx);
-    txModulationIndexSpinBox->setVisible(isTx);
-    txInterpolationSlider->setVisible(isTx);
-    txInterpolationSpinBox->setVisible(isTx);
-    txAmpSlider->setVisible(isTx);
-    txAmpSpinBox->setVisible(isTx);
-    tx_line->setVisible(isTx);
-
-    // Also hide/show all TX control labels (in columns 0 and 3)
-    for (int i = 0; i < txControlsLayout->rowCount(); ++i) {
-        for (int c : {0, 3}) {
-            QLayoutItem* item = txControlsLayout->itemAtPosition(i, c);
-            if (item && item->widget()) {
-                item->widget()->setVisible(isTx);
+        // Hide all TX control labels
+        for (int i = 0; i < txControlsLayout->rowCount(); ++i) {
+            for (int c : {0, 3}) {
+                QLayoutItem* item = txControlsLayout->itemAtPosition(i, c);
+                if (item && item->widget()) {
+                    item->widget()->setVisible(false);
+                }
             }
         }
     }
@@ -1647,6 +1758,10 @@ void MainWindow::exitApp()
     m_shuttingDown.store(true);
     m_isProcessing.store(false);
 
+    // Stop GUI-side audio
+    stopMicCapture();
+    stopFilePlayback();
+
     if (m_hackTvLib) {
         m_hackTvLib->clearCallbacks();
         m_hackTvLib->stop();
@@ -1682,4 +1797,251 @@ void MainWindow::exitApp()
         qDebug() << "Unknown exception during shutdown";
         std::exit(0);
     }
+}
+
+// ============================================================
+// GUI-side Audio Capture for FM TX
+// Replaces PortAudio mic in DLL with Qt AudioSource
+// ============================================================
+
+void MainWindow::startMicCapture()
+{
+    stopMicCapture();
+
+    QAudioFormat format;
+    format.setSampleRate(44100);
+    format.setChannelCount(1);
+    format.setSampleFormat(QAudioFormat::Float);
+
+    QAudioDevice inputDevice = QMediaDevices::defaultAudioInput();
+    if (inputDevice.isNull()) {
+        qDebug() << "No audio input device found";
+        return;
+    }
+
+    qDebug() << "FM TX mic:" << inputDevice.description();
+
+    // Fallback if Float32 not supported
+    if (!inputDevice.isFormatSupported(format)) {
+        format = inputDevice.preferredFormat();
+        format.setChannelCount(1);
+        format.setSampleFormat(QAudioFormat::Float);
+        qDebug() << "Using preferred format, rate:" << format.sampleRate();
+    }
+
+    m_micSource = new QAudioSource(inputDevice, format, this);
+    m_micSource->setBufferSize(4096);
+
+    m_micDevice = m_micSource->start();
+    if (!m_micDevice) {
+        qDebug() << "Failed to start mic capture";
+        delete m_micSource;
+        m_micSource = nullptr;
+        return;
+    }
+
+    // Pre-fill ring buffer with 50ms silence to prevent TX callback starvation
+    if (m_hackTvLib) {
+        std::vector<float> silence(2205, 0.0f); // 50ms at 44100 Hz
+        m_hackTvLib->writeExternalAudio(silence.data(), silence.size());
+    }
+
+    // Polling timer: read mic data every 5ms (matches HackRfRadio approach)
+    // This is more reliable than readyRead which depends on Qt event loop responsiveness
+    m_micFlushTimer = new QTimer(this);
+    connect(m_micFlushTimer, &QTimer::timeout, this, [this]() {
+        if (!m_micDevice || !m_hackTvLib) return;
+
+        // Read all available data from mic
+        QByteArray data = m_micDevice->readAll();
+        if (data.isEmpty()) return;
+
+        const float* p = reinterpret_cast<const float*>(data.constData());
+        size_t n = data.size() / sizeof(float);
+
+        if (n > 0) {
+            m_hackTvLib->writeExternalAudio(p, n);
+        }
+    });
+    m_micFlushTimer->start(5); // 5ms polling - 200Hz rate, smooth audio feed
+
+    qDebug() << "Mic capture started at" << format.sampleRate() << "Hz, poll=5ms";
+}
+
+void MainWindow::stopMicCapture()
+{
+    if (m_micFlushTimer) {
+        m_micFlushTimer->stop();
+        delete m_micFlushTimer;
+        m_micFlushTimer = nullptr;
+    }
+    if (m_micSource) {
+        m_micSource->stop();
+        delete m_micSource;
+        m_micSource = nullptr;
+        m_micDevice = nullptr;
+        qDebug() << "Mic capture stopped";
+    }
+}
+
+void MainWindow::startFilePlayback(const QString& filePath)
+{
+    stopFilePlayback();
+
+    m_fileAudioData.clear();
+    m_filePlayPos = 0;
+
+    QString ext = filePath.section('.', -1).toLower();
+
+    if (ext == "wav") {
+        // Direct WAV parsing (fast, no Qt decoder overhead)
+        QFile file(filePath);
+        if (!file.open(QIODevice::ReadOnly)) {
+            qDebug() << "Cannot open:" << filePath;
+            return;
+        }
+
+        QByteArray header = file.read(44);
+        if (header.size() < 44) { file.close(); return; }
+
+        QByteArray pcm = file.readAll();
+        file.close();
+
+        int channels = *reinterpret_cast<const int16_t*>(header.constData() + 22);
+        int sampleRate = *reinterpret_cast<const int32_t*>(header.constData() + 24);
+        int bitsPerSample = *reinterpret_cast<const int16_t*>(header.constData() + 34);
+
+        qDebug() << "WAV:" << channels << "ch" << sampleRate << "Hz" << bitsPerSample << "bit";
+
+        if (bitsPerSample == 16) {
+            const int16_t* samples = reinterpret_cast<const int16_t*>(pcm.constData());
+            size_t totalSamples = pcm.size() / sizeof(int16_t);
+
+            if (channels == 2) {
+                m_fileAudioData.resize(totalSamples / 2);
+                for (size_t i = 0; i < totalSamples / 2; i++) {
+                    m_fileAudioData[i] = (samples[i*2] + samples[i*2+1]) / (2.0f * 32768.0f);
+                }
+            } else {
+                m_fileAudioData.resize(totalSamples);
+                for (size_t i = 0; i < totalSamples; i++) {
+                    m_fileAudioData[i] = samples[i] / 32768.0f;
+                }
+            }
+
+            if (sampleRate != 44100 && sampleRate > 0) {
+                size_t newLen = static_cast<size_t>(m_fileAudioData.size() * 44100.0 / sampleRate);
+                std::vector<float> resampled(newLen);
+                double ratio = static_cast<double>(m_fileAudioData.size()) / newLen;
+                for (size_t i = 0; i < newLen; i++) {
+                    double pos = i * ratio;
+                    size_t idx = static_cast<size_t>(pos);
+                    double frac = pos - idx;
+                    if (idx + 1 < m_fileAudioData.size())
+                        resampled[i] = static_cast<float>(m_fileAudioData[idx] * (1.0 - frac) + m_fileAudioData[idx+1] * frac);
+                    else if (idx < m_fileAudioData.size())
+                        resampled[i] = m_fileAudioData[idx];
+                }
+                m_fileAudioData = std::move(resampled);
+            }
+        }
+        startFilePlaybackTimer();
+    }
+    else {
+        // MP3, FLAC, OGG, AAC, etc. via QAudioDecoder
+        qDebug() << "Decoding audio file via QAudioDecoder:" << filePath;
+
+        QAudioFormat decodeFormat;
+        decodeFormat.setSampleRate(44100);
+        decodeFormat.setChannelCount(1);
+        decodeFormat.setSampleFormat(QAudioFormat::Int16);
+
+        m_audioDecoder = new QAudioDecoder(this);
+        m_audioDecoder->setAudioFormat(decodeFormat);
+        m_audioDecoder->setSource(QUrl::fromLocalFile(filePath));
+
+        connect(m_audioDecoder, &QAudioDecoder::bufferReady, this, [this]() {
+            QAudioBuffer buf = m_audioDecoder->read();
+            if (!buf.isValid()) return;
+
+            const int16_t* data = buf.constData<int16_t>();
+            int sampleCount = buf.sampleCount();
+
+            size_t oldSize = m_fileAudioData.size();
+            m_fileAudioData.resize(oldSize + sampleCount);
+            for (int i = 0; i < sampleCount; i++) {
+                m_fileAudioData[oldSize + i] = data[i] / 32768.0f;
+            }
+        });
+
+        connect(m_audioDecoder, &QAudioDecoder::finished, this, [this, filePath]() {
+            qDebug() << "Decode finished:" << m_fileAudioData.size() << "samples"
+                     << "(" << m_fileAudioData.size() / 44100.0 << "s)";
+            startFilePlaybackTimer();
+            m_audioDecoder->deleteLater();
+            m_audioDecoder = nullptr;
+        });
+
+        connect(m_audioDecoder, QOverload<QAudioDecoder::Error>::of(&QAudioDecoder::error),
+                this, [this, filePath](QAudioDecoder::Error error) {
+            qDebug() << "QAudioDecoder error:" << error << "for file:" << filePath;
+            if (m_audioDecoder) {
+                m_audioDecoder->deleteLater();
+                m_audioDecoder = nullptr;
+            }
+        });
+
+        m_audioDecoder->start();
+    }
+}
+
+void MainWindow::startFilePlaybackTimer()
+{
+    if (m_fileAudioData.empty()) {
+        qDebug() << "No audio data to play";
+        return;
+    }
+
+    qDebug() << "Audio file loaded:" << m_fileAudioData.size() << "samples"
+             << "(" << m_fileAudioData.size() / 44100.0 << "s)";
+
+    m_filePlayPos = 0;
+    m_filePlayTimer = new QTimer(this);
+    connect(m_filePlayTimer, &QTimer::timeout, this, [this]() {
+        if (!m_hackTvLib || m_fileAudioData.empty()) return;
+
+        const size_t chunkSize = 882; // 20ms at 44100Hz
+        size_t remaining = m_fileAudioData.size() - m_filePlayPos;
+
+        if (remaining == 0) {
+            if (m_fileLoop) {
+                m_filePlayPos = 0;
+                remaining = m_fileAudioData.size();
+            } else {
+                stopFilePlayback();
+                return;
+            }
+        }
+
+        size_t toSend = std::min(chunkSize, remaining);
+        m_hackTvLib->writeExternalAudio(m_fileAudioData.data() + m_filePlayPos, toSend);
+        m_filePlayPos += toSend;
+    });
+    m_filePlayTimer->start(20);
+}
+
+void MainWindow::stopFilePlayback()
+{
+    if (m_filePlayTimer) {
+        m_filePlayTimer->stop();
+        delete m_filePlayTimer;
+        m_filePlayTimer = nullptr;
+    }
+    if (m_audioDecoder) {
+        m_audioDecoder->stop();
+        m_audioDecoder->deleteLater();
+        m_audioDecoder = nullptr;
+    }
+    m_filePlayPos = 0;
+    qDebug() << "File playback stopped";
 }

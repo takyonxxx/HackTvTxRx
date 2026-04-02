@@ -46,8 +46,6 @@ public:
     void setReceivedDataCallback(DataCallback callback);
     void clearCallbacks();
     bool setArguments(const std::vector<std::string>& args);
-    void setMicEnabled(bool newMicEnabled);
-    void setAudioFilePath(const std::string& filePath, bool loop = true);
     void setFrequency(uint64_t frequency_hz);
     void setSampleRate(uint32_t sample_rate);
     void setAmplitude(float newAmplitude);
@@ -66,7 +64,9 @@ public:
     void setDirectSampling(int mode);
     void setOffsetTuning(bool enable);
 
-    // External audio ring buffer for TCP TX
+    // External audio ring buffer for FM TX
+    // Call enableExternalAudioRing() AFTER start() in TX mode
+    // Then feed mono 44100Hz float audio via writeExternalAudio()
     void enableExternalAudioRing();
     void writeExternalAudio(const float* data, size_t count);
 
@@ -103,9 +103,6 @@ private:
     // Configuration
     hacktv_t* s = nullptr;
     rxtx_mode m_rxTxMode;
-    bool micEnabled = false;
-    std::string m_audioFilePath;
-    bool m_audioFileLoop = true;
 
     // Devices
     HackRfDevice* hackRfDevice = nullptr;

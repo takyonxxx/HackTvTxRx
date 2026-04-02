@@ -140,18 +140,15 @@ bool SdrDevice::reinitialize(const std::string& mode)
         "-f", freqStr
     };
 
-    // Enable amp for TX
+    // Add fmtransmitter source for TX mode (required for FM TX path in lib)
     if (mode == "tx") {
         args.push_back("-a");
+        args.push_back("fmtransmitter");
     }
 
     if (!m_hackTvLib->setArguments(args)) {
         emit errorOccurred("Failed to set arguments for mode: " + QString::fromStdString(mode));
         return false;
-    }
-
-    if (mode == "tx") {
-        m_hackTvLib->setMicEnabled(true);
     }
 
     if (!m_hackTvLib->start()) {
@@ -167,13 +164,13 @@ bool SdrDevice::reinitialize(const std::string& mode)
         m_hackTvLib->enableExternalAudioRing();
 
         // Pre-fill ring buffer with ~100ms of silence to prevent initial crackle
-        // 44100 Hz * 0.1s = 4410 mono samples
         std::vector<float> silence(4410, 0.0f);
         m_hackTvLib->writeExternalAudio(silence.data(), silence.size());
 
         m_hackTvLib->setModulation_index(m_currentModulationIndex);
         m_hackTvLib->setAmplitude(m_currentAmplitude);
         m_hackTvLib->setTxAmpGain(m_currentTxAmpGain);
+        m_hackTvLib->setAmpEnable(m_currentAmpEnable);
 
         qDebug() << "TX ready - modIdx=" << m_currentModulationIndex
                  << "amp=" << m_currentAmplitude

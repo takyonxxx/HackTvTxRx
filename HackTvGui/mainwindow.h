@@ -15,6 +15,11 @@
 #include <QThreadPool>
 #include <QTimer>
 #include <QMessageBox>
+#include <QAudioSource>
+#include <QAudioFormat>
+#include <QAudioDecoder>
+#include <QMediaDevices>
+#include <QAudioDevice>
 
 #include <memory>
 #include <vector>
@@ -88,13 +93,16 @@ private:
     QComboBox *outputCombo, *channelCombo, *sampleRateCombo, *rxtxCombo, *inputTypeCombo, *modeCombo;
     QCheckBox *ampEnabled, *colorDisabled;
     QLineEdit *frequencyEdit, *inputFileEdit, *ffmpegOptionsEdit;
+    QLabel *channelLabel;
     QPushButton *chooseFileButton, *executeButton, *exitButton, *clearButton, *hardResetButton;
     QSlider *txAmplitudeSlider, *txFilterSizeSlider, *txModulationIndexSlider, *txInterpolationSlider;
     QDoubleSpinBox *txAmplitudeSpinBox, *txFilterSizeSpinBox, *txModulationIndexSpinBox, *txInterpolationSpinBox;
     QSpinBox *txAmpSpinBox;
     QLabel *volumeLabel, *volumeLevelLabel, *lnaLabel, *lnaLevelLabel, *vgaLabel, *vgaLevelLabel,
-        *rxAmpLabel, *rxAmpLevelLabel, *rtlPpmLabel, *rtlDirectLabel;
-    QSlider *volumeSlider, *lnaSlider, *vgaSlider, *txAmpSlider, *rxAmpSlider;
+        *rxAmpLabel, *rxAmpLevelLabel, *rtlPpmLabel, *rtlDirectLabel,
+        *rxGainLabel, *rxGainLevelLabel, *rxModIndexLabel, *rxModIndexLevelLabel, *rxDeemphLabel, *rxDeemphLevelLabel;
+    QSlider *volumeSlider, *lnaSlider, *vgaSlider, *txAmpSlider, *rxAmpSlider,
+        *rxGainSlider, *rxModIndexSlider, *rxDeemphSlider;
     QSpinBox *rtlPpmSpinBox;
     QComboBox *rtlDirectCombo;
     QCheckBox *rtlOffsetCheck;
@@ -123,15 +131,18 @@ private:
     qint64 m_frequency;
     int m_sampleRate;
     int m_volumeLevel = 10;
-    int m_lnaGain = 40;
-    int m_vgaGain = 40;
-    int m_txAmpGain = 40;
-    int m_rxAmpGain = 0;
+    int m_lnaGain = 20;
+    int m_vgaGain = 30;
+    int m_txAmpGain = 47;
+    int m_rxAmpGain = 11;
 
     QString mode;
     bool isTx, isFmTransmit, isFmFile, isFile, isTest, isFFmpeg;
 
     float audioGain = 0.75f;
+    float rxGain = 1.0f;
+    float rxModIndex = 2.0f;
+    int rxDeemph = 0;
     int m_LowCutFreq = -120e3;
     int m_HiCutFreq = 120e3;
     int m_CutFreq = 120e3;
@@ -141,9 +152,9 @@ private:
     int fftrate = 50;
 
     QFrame* tx_line;
-    float tx_amplitude = 1.0;
+    float tx_amplitude = 0.50;       // HackRfRadio default: 0.50
     float tx_filter_size = 0;
-    float tx_modulation_index = 5.0;
+    float tx_modulation_index = 0.40; // HackRfRadio default: 0.40
     float tx_interpolation = 48;
     double transitionWidth = 50e3;
     double quadratureRate = 480e3;
@@ -162,6 +173,21 @@ private:
     std::unique_ptr<WBFMDemodulator> wbfmDemodulator;
     QImage currentFrame;
 
+    // GUI-side audio capture for FM TX (replaces PortAudio in DLL)
+    QAudioSource* m_micSource = nullptr;
+    QIODevice* m_micDevice = nullptr;
+    QTimer* m_micFlushTimer = nullptr;
+    QTimer* m_filePlayTimer = nullptr;
+    QAudioDecoder* m_audioDecoder = nullptr;
+    std::vector<float> m_fileAudioData;
+    size_t m_filePlayPos = 0;
+    bool m_fileLoop = true;
+
+    void startMicCapture();
+    void stopMicCapture();
+    void startFilePlayback(const QString& filePath);
+    void startFilePlaybackTimer();
+    void stopFilePlayback();
 
 protected:
     void closeEvent(QCloseEvent *event) override;

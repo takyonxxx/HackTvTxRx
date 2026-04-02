@@ -1,6 +1,6 @@
 #include "hackrfdevice.h"
-#include "audiofileinput.h"
 #include "modulation.h"
+#include "hacktv/rf.h"
 #include <iostream>
 #include "constants.h"
 #include <thread>
@@ -180,16 +180,6 @@ int HackRfDevice::stop()
         // Running flag'ini false yap
         m_isRunning.store(false);
 
-        // Audio input'u durdur
-        if (m_audioInput) {
-            m_audioInput->stop();
-            m_audioInput.reset();
-        }
-        if (m_audioFileInput) {
-            m_audioFileInput->stop();
-            delete m_audioFileInput; m_audioFileInput = nullptr;
-        }
-
         int r = HACKRF_SUCCESS;
 
         // TX/RX'i durdur
@@ -247,18 +237,9 @@ void HackRfDevice::reset()
     m_isStopped.store(true);
     mode = RX;
 
-    // Audio input'u temizle
-    if(m_audioInput) {
-        m_audioInput->stop();
-        m_audioInput.reset();
-    }
-    if(m_audioFileInput) {
-        m_audioFileInput->stop();
-        delete m_audioFileInput; m_audioFileInput = nullptr;
-    }
-
-    // Stream buffer'ları temizle
-    stream_tx.free();
+    // Ring buffer'ı sıfırla
+    ringReset();
+    m_useAudioFileRing.store(false);
 
     // Modülasyon parametrelerini sıfırla
     amplitude = 1.0f;
@@ -289,15 +270,6 @@ int HackRfDevice::hardReset()
         // Stop streaming first if running
         if (m_isRunning.load() && h_device) {
             m_isRunning.store(false);
-
-            if (m_audioInput) {
-                m_audioInput->stop();
-                m_audioInput.reset();
-            }
-            if (m_audioFileInput) {
-                m_audioFileInput->stop();
-                delete m_audioFileInput; m_audioFileInput = nullptr;
-            }
 
             if (hackrf_is_streaming(h_device) == HACKRF_TRUE) {
                 if (mode == RX) {
@@ -358,7 +330,8 @@ int HackRfDevice::hardReset()
         }
 
         // Clear internal state
-        stream_tx.free();
+        ringReset();
+        m_useAudioFileRing.store(false);
         device_serials.clear();
         device_board_ids.clear();
 
@@ -615,45 +588,6 @@ int HackRfDevice::_rx_callback(hackrf_transfer *transfer)
     }
 }
 
-std::vector<float> HackRfDevice::readStreamToSize(size_t size)
-{
-    std::vector<float> float_buffer;
-    float_buffer.reserve(size);
-
-    // CRITICAL: Add timeout to prevent infinite blocking
-    const int MAX_WAIT_MS = 100; // 100ms timeout
-    const auto start_time = std::chrono::steady_clock::now();
-
-    while (float_buffer.size() < size && m_isRunning.load()) {
-        // Check timeout
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           std::chrono::steady_clock::now() - start_time
-                           ).count();
-
-        if (elapsed > MAX_WAIT_MS) {
-            // Timeout - return what we have (may be empty)
-            break;
-        }
-
-        std::vector<float> temp_buffer = stream_tx.readBufferToVector();
-
-        if (temp_buffer.empty()) {
-            // Stream boşsa biraz bekle
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
-            continue;
-        }
-
-        size_t elements_needed = size - float_buffer.size();
-        size_t elements_to_add = std::min(elements_needed, temp_buffer.size());
-
-        float_buffer.insert(float_buffer.end(),
-                            temp_buffer.begin(),
-                            temp_buffer.begin() + elements_to_add);
-    }
-
-    return float_buffer;
-}
-
 int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
 {
     if (!m_isRunning.load() || !buffer || length == 0) {
@@ -662,166 +596,76 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
 
     try {
         size_t output_iq_needed = length / 2;
-        std::vector<float> float_buffer;
 
-        if (m_useAudioFileRing.load()) {
-            // Ring buffer: stereo interleaved at 44100 Hz
-            // MPX generator upsamples directly to m_sampleRate (e.g. 2 MHz)
-            // No separate resampler needed!
-            //
-            // audio_frames needed = output_iq_needed / upsample_ratio
-            // upsample_ratio = m_sampleRate / 44100
-
-            float upsampleRatio = static_cast<float>(m_sampleRate) / 44100.0f;
-            size_t audio_frames_needed = static_cast<size_t>(output_iq_needed / upsampleRatio) + 2;
-            size_t stereo_floats_needed = audio_frames_needed * 2;
-
-            std::vector<float> stereo_buffer(stereo_floats_needed, 0.0f);
-            size_t got = ringRead(stereo_buffer.data(), stereo_floats_needed);
-
-            if (got < 2) {
-                std::memset(buffer, 0, length);
-                return 0;
-            }
-            got = got & ~1;
-
-            // Generate MPX directly at TX sample rate
-            static StereoMPXGenerator* s_mpxGen = nullptr;
-            static uint32_t s_lastMpxSampleRate = 0;
-            if (!s_mpxGen || m_sampleRate != s_lastMpxSampleRate) {
-                delete s_mpxGen;
-                s_mpxGen = new StereoMPXGenerator(44100.0f, static_cast<float>(m_sampleRate), 75e-6f);
-                s_lastMpxSampleRate = m_sampleRate;
-            }
-            std::vector<float> mpx_signal = s_mpxGen->process(stereo_buffer.data(), (got > 0 ? got : stereo_floats_needed));
-
-            if (mpx_signal.empty()) {
-                std::memset(buffer, 0, length);
-                return 0;
-            }
-
-            // FM modulate the MPX composite (already at TX sample rate)
-            static FrequencyModulator* s_fmMod = nullptr;
-            static float s_lastFmModIndex = -1.0f;
-            float curModIndex = modulation_index.load();
-            if (!s_fmMod || curModIndex != s_lastFmModIndex) {
-                delete s_fmMod;
-                s_fmMod = new FrequencyModulator(curModIndex, false); // no pre-emphasis (MPX handles it)
-                s_lastFmModIndex = curModIndex;
-            }
-
-            // Apply amplitude
-            float amp = amplitude.load();
-            for (auto& s : mpx_signal) s *= amp;
-
-            std::vector<std::complex<float>> iq_signal(mpx_signal.size());
-            s_fmMod->work(mpx_signal.size(), mpx_signal, iq_signal);
-
-            // Write IQ directly to output buffer (no resampler needed!)
-            size_t output_samples = std::min(static_cast<size_t>(length / 2), iq_signal.size());
-            for (size_t i = 0; i < output_samples; ++i) {
-                buffer[2 * i] = static_cast<int8_t>(
-                    std::max(-127.0f, std::min(127.0f, iq_signal[i].real() * 127.0f)));
-                buffer[2 * i + 1] = static_cast<int8_t>(
-                    std::max(-127.0f, std::min(127.0f, iq_signal[i].imag() * 127.0f)));
-            }
-            if (output_samples * 2 < length) {
-                std::memset(buffer + output_samples * 2, 0, length - output_samples * 2);
-            }
+        if (!m_useAudioFileRing.load()) {
+            // No audio source active - send silence
+            std::memset(buffer, 0, length);
             return 0;
-
-        } else {
-            // Mic mode: read from stream_tx (original unchanged path)
-            size_t desired_size = output_iq_needed;
-            if (stream_tx.isEmpty()) {
-                std::memset(buffer, 0, length);
-                return 0;
-            }
-
-            float_buffer = readStreamToSize(desired_size);
-
-            if (float_buffer.empty() || float_buffer.size() < desired_size) {
-                std::memset(buffer, 0, length);
-                return 0;
-            }
         }
 
-        // Amplitude uygula
-        for (auto& sample : float_buffer) {
-            sample *= amplitude.load();
+        // Ring buffer: stereo interleaved at 44100 Hz
+        // MPX generator upsamples directly to m_sampleRate (e.g. 2 MHz)
+        // No separate resampler needed!
+        //
+        // audio_frames needed = output_iq_needed / upsample_ratio
+        // upsample_ratio = m_sampleRate / 44100
+
+        float upsampleRatio = static_cast<float>(m_sampleRate) / 44100.0f;
+        size_t audio_frames_needed = static_cast<size_t>(output_iq_needed / upsampleRatio) + 2;
+        size_t stereo_floats_needed = audio_frames_needed * 2;
+
+        std::vector<float> stereo_buffer(stereo_floats_needed, 0.0f);
+        size_t got = ringRead(stereo_buffer.data(), stereo_floats_needed);
+
+        if (got < 2) {
+            std::memset(buffer, 0, length);
+            return 0;
+        }
+        got = got & ~1;
+
+        // Generate MPX directly at TX sample rate
+        static StereoMPXGenerator* s_mpxGen = nullptr;
+        static uint32_t s_lastMpxSampleRate = 0;
+        if (!s_mpxGen || m_sampleRate != s_lastMpxSampleRate) {
+            delete s_mpxGen;
+            s_mpxGen = new StereoMPXGenerator(44100.0f, static_cast<float>(m_sampleRate), 75e-6f);
+            s_lastMpxSampleRate = m_sampleRate;
+        }
+        std::vector<float> mpx_signal = s_mpxGen->process(stereo_buffer.data(), (got > 0 ? got : stereo_floats_needed));
+
+        if (mpx_signal.empty()) {
+            std::memset(buffer, 0, length);
+            return 0;
         }
 
-        // FM modulation + resampling with persistent state.
-        static FrequencyModulator* s_modulator = nullptr;
-        static RationalResampler* s_resampler = nullptr;
-        static float s_lastModIndex = -1.0f;
-        static float s_lastFilterSize = -1.0f;
-        static unsigned s_lastResampInterp = 0;
-        static unsigned s_lastResampDecim = 0;
-
+        // FM modulate the MPX composite (already at TX sample rate)
+        static FrequencyModulator* s_fmMod = nullptr;
+        static float s_lastFmModIndex = -1.0f;
         float curModIndex = modulation_index.load();
-        float curFilterSize = filter_size.load();
-
-        // Calculate correct resampler ratio based on input sample rate
-        unsigned resampInterp, resampDecim;
-        if (m_useAudioFileRing.load()) {
-            // MPX mode: input is 192 kHz, output is m_sampleRate
-            // Reduce ratio using GCD for efficiency
-            // e.g. 2000000/192000 → GCD=8000 → 250/24 → GCD=2 → 125/12
-            unsigned sr = m_sampleRate;
-            unsigned mpx = 192000;
-            // Find GCD
-            unsigned a = sr, b = mpx;
-            while (b > 0) { unsigned t = b; b = a % b; a = t; }
-            unsigned gcd = a;
-            resampInterp = sr / gcd;
-            resampDecim = mpx / gcd;
-        } else {
-            // Legacy stream_tx mode: use GUI parameters
-            resampInterp = static_cast<unsigned>(interpolation.load());
-            resampDecim = static_cast<unsigned>(std::max(decimation.load(), 1));
+        if (!s_fmMod || curModIndex != s_lastFmModIndex) {
+            delete s_fmMod;
+            s_fmMod = new FrequencyModulator(curModIndex, false); // no pre-emphasis (MPX handles it)
+            s_lastFmModIndex = curModIndex;
         }
 
-        if (!s_modulator || curModIndex != s_lastModIndex) {
-            delete s_modulator;
-            s_modulator = new FrequencyModulator(curModIndex, !m_useAudioFileRing.load());
-            s_lastModIndex = curModIndex;
-        }
+        // Apply amplitude
+        float amp = amplitude.load();
+        for (auto& s : mpx_signal) s *= amp;
 
-        if (!s_resampler || curFilterSize != s_lastFilterSize ||
-            resampInterp != s_lastResampInterp || resampDecim != s_lastResampDecim) {
-            delete s_resampler;
-            s_resampler = new RationalResampler(
-                std::max(resampInterp, 1u), std::max(resampDecim, 1u), curFilterSize);
-            s_lastFilterSize = curFilterSize;
-            s_lastResampInterp = resampInterp;
-            s_lastResampDecim = resampDecim;
-        }
+        std::vector<std::complex<float>> iq_signal(mpx_signal.size());
+        s_fmMod->work(mpx_signal.size(), mpx_signal, iq_signal);
 
-        std::vector<std::complex<float>> modulated_signal(float_buffer.size());
-        s_modulator->work(float_buffer.size(), float_buffer, modulated_signal);
-
-        // Resampling with persistent filter + interpolation state
-        std::vector<std::complex<float>> resampled_signal = s_resampler->resample(modulated_signal);
-
-        // Buffer boyutu kontrolü
-        size_t output_samples = std::min(static_cast<size_t>(length / 2), resampled_signal.size());
-
-        // IQ verilerini buffer'a yaz
+        // Write IQ directly to output buffer (no resampler needed!)
+        size_t output_samples = std::min(static_cast<size_t>(length / 2), iq_signal.size());
         for (size_t i = 0; i < output_samples; ++i) {
             buffer[2 * i] = static_cast<int8_t>(
-                std::max(-127.0f, std::min(127.0f, std::real(resampled_signal[i]) * 127.0f))
-                );
+                std::max(-127.0f, std::min(127.0f, iq_signal[i].real() * 127.0f)));
             buffer[2 * i + 1] = static_cast<int8_t>(
-                std::max(-127.0f, std::min(127.0f, std::imag(resampled_signal[i]) * 127.0f))
-                );
+                std::max(-127.0f, std::min(127.0f, iq_signal[i].imag() * 127.0f)));
         }
-
-        // Kalan buffer'ı sıfırla
         if (output_samples * 2 < length) {
             std::memset(buffer + output_samples * 2, 0, length - output_samples * 2);
         }
-
         return 0;
     }
     catch (const std::exception& e) {
@@ -870,68 +714,6 @@ void HackRfDevice::setSampleRate(uint32_t sample_rate)
 void HackRfDevice::setInterpolation(float newInterpolation)
 {
     interpolation.store(newInterpolation);
-}
-
-void HackRfDevice::setMicEnabled(bool enable)
-{
-    if(!m_audioInput && enable)
-    {
-        // Stop file input if running
-        if (m_audioFileInput) {
-            m_audioFileInput->stop();
-            delete m_audioFileInput; m_audioFileInput = nullptr;
-        }
-
-        // Reset and enable ring buffer for mic
-        ringReset();
-        m_useAudioFileRing.store(true); // Same ring buffer path for both mic and file
-
-        m_audioInput = std::make_unique<PortAudioInput>(*this);
-        if (!m_audioInput->start()) {
-            std::cerr << "Failed to start PortAudioInput" << std::endl;
-            m_useAudioFileRing.store(false);
-        }
-    }
-    else if (m_audioInput && !enable) {
-        m_audioInput->stop();
-        m_audioInput.reset();
-        m_useAudioFileRing.store(false);
-    }
-}
-
-void HackRfDevice::setAudioFileEnabled(bool enable, const std::string& filePath, bool loop)
-{
-    if (enable && !filePath.empty())
-    {
-        // Stop mic if running
-        if (m_audioInput) {
-            m_audioInput->stop();
-            m_audioInput.reset();
-        }
-        // Stop previous file playback if running
-        if (m_audioFileInput) {
-            m_audioFileInput->stop();
-            delete m_audioFileInput; m_audioFileInput = nullptr;
-        }
-
-        // Reset and enable ring buffer
-        ringReset();
-        m_useAudioFileRing.store(true);
-
-        m_audioFileInput = new AudioFileInput(*this);
-        if (!m_audioFileInput->start(filePath, loop)) {
-            std::cerr << "Failed to start AudioFileInput: " << filePath << std::endl;
-            delete m_audioFileInput; m_audioFileInput = nullptr;
-            m_useAudioFileRing.store(false);
-        }
-    }
-    else {
-        m_useAudioFileRing.store(false);
-        if (m_audioFileInput) {
-            m_audioFileInput->stop();
-            delete m_audioFileInput; m_audioFileInput = nullptr;
-        }
-    }
 }
 
 void HackRfDevice::setDecimation(int newDecimation)
@@ -998,28 +780,4 @@ void HackRfDevice::setAmpEnable(bool enable)
 void HackRfDevice::setDataCallback(DataCallback callback)
 {
     m_dataCallback = callback;
-}
-
-// PortAudioInput callback — mono mic input → stereo interleaved ring buffer (L=R=sample)
-int PortAudioInput::audioCallback(const void *inputBuffer, void * /*outputBuffer*/, unsigned long framesPerBuffer,
-                                   const PaStreamCallbackTimeInfo * /*timeInfo*/, PaStreamCallbackFlags /*statusFlags*/, void *userData)
-{
-    PortAudioInput *paInput = static_cast<PortAudioInput*>(userData);
-    if (paInput && paInput->m_device && inputBuffer) {
-        const float* mono = static_cast<const float*>(inputBuffer);
-        // Convert mono to stereo interleaved: L=sample, R=sample
-        // Use stack buffer for small frames, heap for large
-        const size_t stereoFloats = framesPerBuffer * 2;
-        float stereoStack[8192]; // enough for 4096 frames
-        float* stereo = (stereoFloats <= 8192) ? stereoStack : new float[stereoFloats];
-
-        for (unsigned long i = 0; i < framesPerBuffer; i++) {
-            stereo[i * 2]     = mono[i]; // L
-            stereo[i * 2 + 1] = mono[i]; // R (same as L for mono mic)
-        }
-        paInput->m_device->ringWrite(stereo, stereoFloats);
-
-        if (stereo != stereoStack) delete[] stereo;
-    }
-    return paContinue;
 }
