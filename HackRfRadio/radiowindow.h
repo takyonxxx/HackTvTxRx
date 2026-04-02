@@ -107,6 +107,7 @@ private:
     bool m_micStarted = false;
     uint32_t m_sampleRate = 2000000;
     float m_squelchLevel = 0.0f;
+    float m_lastSignalLevel = 0.0f;
 
     QByteArray m_iqAccumulator;
     static constexpr int IQ_PROCESS_THRESHOLD = 32768;

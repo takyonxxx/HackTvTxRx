@@ -67,6 +67,12 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
     // 8. DC removal
     removeDC(audio);
 
+    // 9. Soft limiter - prevents clipping distortion on strong signals
+    for (auto& s : audio) {
+        if (s > 0.95f) s = 0.95f + 0.05f * std::tanh((s - 0.95f) * 10.0f);
+        else if (s < -0.95f) s = -0.95f + 0.05f * std::tanh((s + 0.95f) * 10.0f);
+    }
+
     return audio;
 }
 
@@ -159,21 +165,15 @@ void FMDemodulator::rebuildChain()
 
     // Audio filter and output gain
     if (isNBFM) {
-        // Yaesu FT-60 NFM: audio 300Hz-3kHz, deviation +-5kHz
-        // Audio LPF at 3.0kHz matches FT-60 receive audio passband
-        m_audioFilterTaps = designLPF(31, 3000.0f, 48000.0f);
-        // Gain: FM demod phase delta is proportional to deviation
-        // For +-5kHz deviation at 200kHz IF rate: delta_max = 2*pi*5000/200000 = 0.157 rad
-        // We want ~0.7 output peak, so gain = 0.7/0.157 = ~4.5
-        // NOTE: Don't override m_outputGain here - user controls it via RX Gain slider
+        // NFM voice: 300Hz-3.5kHz passband
+        // Use more taps for sharper cutoff to reject out-of-band noise
+        m_audioFilterTaps = designLPF(51, 3500.0f, 48000.0f);
         if (m_outputGain <= 0.0f) {
-            m_outputGain = 4.5f;  // only set default if not yet initialized
+            m_outputGain = 4.5f;
         }
-        // NOTE: Don't override m_deemphTau here - user controls it via DeEmph slider
     } else {
         // WBFM: 15 kHz audio bandwidth
         m_audioFilterTaps = designLPF(31, 15000.0f, 48000.0f);
-        // NOTE: Don't override m_outputGain or m_deemphTau - user controls them
         if (m_outputGain <= 0.0f) {
             m_outputGain = 0.5f;
         }
@@ -184,15 +184,16 @@ void FMDemodulator::rebuildChain()
 
     float filterBW;
     if (isNBFM) {
-        // FT-60 NFM: +-5kHz deviation = 10kHz signal BW
-        // Use 15kHz filter for clean edges without cutting sidebands
-        filterBW = static_cast<float>(std::min(15000.0, postDecimRate * 0.45));
+        // NFM: use exactly the user-set bandwidth for IQ filtering
+        // More taps = sharper filter = less adjacent channel interference
+        filterBW = static_cast<float>(std::min(m_bandwidth, postDecimRate * 0.45));
     } else {
         filterBW = static_cast<float>(std::min(m_bandwidth, postDecimRate * 0.45));
     }
 
+    int iqFilterTaps = isNBFM ? 51 : 31;  // more taps for NFM
     if (filterBW > 0) {
-        m_iqBandwidthTaps = designLPF(31, filterBW, static_cast<float>(postDecimRate));
+        m_iqBandwidthTaps = designLPF(iqFilterTaps, filterBW, static_cast<float>(postDecimRate));
     } else {
         m_iqBandwidthTaps.clear();
     }

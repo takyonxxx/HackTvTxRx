@@ -648,6 +648,7 @@ void RadioWindow::processIqBuffer()
         level = std::clamp(level, 0.0f, 1.0f);
         m_signalMeter->setLevel(level);
         m_signalMeter->setRxDbm(signalDbm);
+        m_lastSignalLevel = level;  // store for squelch
     }
 
     std::vector<float> audio;
@@ -657,14 +658,13 @@ void RadioWindow::processIqBuffer()
     }
 
     if (!audio.empty()) {
-        // Squelch: use audio RMS to gate playback
-        float sumSq = 0.0f;
-        for (const auto& s : audio) sumSq += s * s;
-        float audioRms = std::sqrt(sumSq / audio.size());
-
-        // Squelch threshold comparison (audio-based, independent of meter)
-        if (audioRms >= m_squelchLevel * 0.5f)
+        // Squelch based on IQ signal level (0.0-1.0 from FFT)
+        // SQ slider 0-100% maps to signal level threshold
+        // SQ=0: squelch OFF, all audio passes
+        // SQ=50: only signals above 50% of meter scale pass
+        if (m_squelchLevel <= 0.001f || m_lastSignalLevel >= m_squelchLevel) {
             m_audioPlayback->enqueueAudio(audio);
+        }
     }
 }
 
