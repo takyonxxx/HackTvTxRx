@@ -274,7 +274,7 @@ void CPlotter::drawSpectrum(QPainter &painter, int w, int specH)
         }
     }
 
-    // Fill under curve — deep blue solid fill like SDR++
+    // Fill under curve — SDRuno style: solid opaque white→blue gradient fill
     if (m_FftFill) {
         QPainterPath fillPath = specPath;
         fillPath.lineTo(xmax - 1, specH);
@@ -282,28 +282,31 @@ void CPlotter::drawSpectrum(QPainter &painter, int w, int specH)
         fillPath.closeSubpath();
 
         QLinearGradient grad(0, 0, 0, specH);
-        grad.setColorAt(0.0, QColor(60, 150, 255, 210));
-        grad.setColorAt(0.15, QColor(35, 110, 240, 190));
-        grad.setColorAt(0.4, QColor(20, 70, 210, 170));
-        grad.setColorAt(0.7, QColor(10, 40, 170, 150));
-        grad.setColorAt(1.0, QColor(5, 20, 130, 130));
+        grad.setColorAt(0.0,  QColor(245, 250, 255, 255));  // pure white at peaks
+        grad.setColorAt(0.02, QColor(200, 225, 255, 255));  // white-blue
+        grad.setColorAt(0.08, QColor(120, 180, 255, 255));  // light blue
+        grad.setColorAt(0.20, QColor(50, 120, 240, 255));   // sharp to medium blue
+        grad.setColorAt(0.40, QColor(20, 70, 200, 255));    // deep blue
+        grad.setColorAt(0.60, QColor(8, 40, 150, 255));     // dark blue
+        grad.setColorAt(0.80, QColor(3, 18, 80, 255));      // very dark navy
+        grad.setColorAt(1.0,  QColor(1, 6, 35, 255));       // almost black at bottom
 
         painter.setPen(Qt::NoPen);
         painter.setBrush(grad);
         painter.drawPath(fillPath);
     }
 
-    // Draw spectrum line — thin cyan like SDR++
-    // Subtle glow
-    QPen glowPen(QColor(100, 220, 255, 25));
-    glowPen.setWidthF(2.5);
+    // Draw spectrum line — white like SDRuno
+    // Subtle glow under the white line
+    QPen glowPen(QColor(180, 210, 255, 50));
+    glowPen.setWidthF(3.0);
     painter.setPen(glowPen);
     painter.setBrush(Qt::NoBrush);
     painter.drawPath(specPath);
 
-    // Main thin line
-    QPen mainPen(QColor(120, 230, 255));
-    mainPen.setWidthF(0.9);
+    // Main white line
+    QPen mainPen(QColor(240, 248, 255));
+    mainPen.setWidthF(1.2);
     painter.setPen(mainPen);
     painter.drawPath(specPath);
 

@@ -168,7 +168,7 @@ MainWindow::~MainWindow()
 void MainWindow::setupUi()
 {
     sliderStyle = ""; // Use global stylesheet from main.cpp
-    labelStyle = "QLabel { background-color: #ad6d0a ; color: white; border-radius: 3px; font-weight: bold; padding: 1px 4px; font-size: 11px; }";
+    labelStyle = "QLabel { background-color: #ad6d0a; color: #fff8ee; border-radius: 3px; font-weight: bold; padding: 2px 6px; font-size: 11px; }";
 
     setWindowTitle("HackTvRxTx");
 
@@ -361,12 +361,21 @@ void MainWindow::updatePlotter(float* fft_data, int size)
 
 void MainWindow::addOutputGroup()
 {
-    // Output device group - compact single-row layout
+    // Output device group - professional layout
     outputGroup = new QGroupBox("Device Settings", this);
+    outputGroup->setStyleSheet(
+        "QGroupBox { border: 1px solid #0096c8; border-radius: 6px; margin-top: 1.2em; "
+        "padding-top: 1em; background-color: rgba(0, 40, 60, 30); }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 8px; "
+        "color: #00ffcc; font-weight: bold; text-transform: uppercase; font-size: 11px; }"
+    );
+
     QGridLayout *outputLayout = new QGridLayout(outputGroup);
-    outputLayout->setVerticalSpacing(4);
+    outputLayout->setVerticalSpacing(8);
     outputLayout->setHorizontalSpacing(8);
-    outputLayout->setContentsMargins(8, 16, 8, 6);
+    outputLayout->setContentsMargins(14, 24, 14, 10);
+
+    QString settingsLabelStyle = "QLabel { color: #90c8e0; font-size: 11px; font-weight: bold; }";
 
     QVector<QPair<QString, QString>> devices = {
                                                 {"HackRF", "hackrf"},
@@ -374,31 +383,40 @@ void MainWindow::addOutputGroup()
                                                 };
 
     QLabel *outputLabel = new QLabel("Device:", this);
+    outputLabel->setStyleSheet(settingsLabelStyle);
     outputCombo = new QComboBox(this);
     for (const auto &device : devices) {
         outputCombo->addItem(device.first, device.second);
     }
     outputCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    outputCombo->setMinimumWidth(120);
 
     QLabel *rxtxLabel = new QLabel("Mode:", this);
+    rxtxLabel->setStyleSheet(settingsLabelStyle);
     rxtxCombo = new QComboBox(this);
     rxtxCombo->addItem("RX", "rx");
     rxtxCombo->addItem("TX", "tx");
+    rxtxCombo->setMinimumWidth(70);
 
     ampEnabled = new QCheckBox("Amp", this);
+    ampEnabled->setMinimumWidth(65);
     colorDisabled = new QCheckBox("No Color", this);
-    colorDisabled->setMinimumWidth(85);
+    colorDisabled->setMinimumWidth(95);
 
     channelLabel = new QLabel("Ch:", this);
+    channelLabel->setStyleSheet(settingsLabelStyle);
     channelCombo = new QComboBox(this);
     channelCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
     QLabel *freqLabel = new QLabel("Freq (Hz):", this);
+    freqLabel->setStyleSheet(settingsLabelStyle);
     frequencyEdit = new QLineEdit(this);
     frequencyEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
     QLabel *sampleRateLabel = new QLabel("BW:", this);
+    sampleRateLabel->setStyleSheet(settingsLabelStyle);
     sampleRateCombo = new QComboBox(this);
+    sampleRateCombo->setMinimumWidth(80);
 
     std::map<int, QString> sortedSampleRates {
         {2000000, "2"},
@@ -413,38 +431,50 @@ void MainWindow::addOutputGroup()
         sampleRateCombo->addItem(displayText + " MHz", rate);
     }
 
-    // Row 0: Device | Mode | Amp | NoColor
-    outputLayout->addWidget(outputLabel, 0, 0);
-    outputLayout->addWidget(outputCombo, 0, 1);
-    outputLayout->addWidget(rxtxLabel, 0, 2);
-    outputLayout->addWidget(rxtxCombo, 0, 3);
-    outputLayout->addWidget(ampEnabled, 0, 4);
-    outputLayout->addWidget(colorDisabled, 0, 5, 1, 2);
+    // 8-column grid: Label(0) Widget(1) Spacer(2) Label(3) Widget(4) Spacer(5) Label/Check(6) Widget/Check(7)
+    // Row 0: Device [____combo____]  |  Mode [_combo_]  |  Amp  NoColor
+    outputLayout->addWidget(outputLabel,    0, 0);
+    outputLayout->addWidget(outputCombo,    0, 1);
+    outputLayout->addWidget(rxtxLabel,      0, 3);
+    outputLayout->addWidget(rxtxCombo,      0, 4);
+    outputLayout->addWidget(ampEnabled,     0, 6);
+    outputLayout->addWidget(colorDisabled,  0, 7);
 
-    // Row 1: Freq | BW | Ch (Freq+BW left under Device, Ch right side for TX only)
-    outputLayout->addWidget(freqLabel, 1, 0);
-    outputLayout->addWidget(frequencyEdit, 1, 1);
-    outputLayout->addWidget(sampleRateLabel, 1, 2);
-    outputLayout->addWidget(sampleRateCombo, 1, 3);
-    outputLayout->addWidget(channelLabel, 1, 4);
-    outputLayout->addWidget(channelCombo, 1, 5, 1, 2);
+    // Row 1: Freq (Hz) [____edit____]  |  BW [_combo_]  |  Ch [_combo_]
+    outputLayout->addWidget(freqLabel,       1, 0);
+    outputLayout->addWidget(frequencyEdit,   1, 1);
+    outputLayout->addWidget(sampleRateLabel, 1, 3);
+    outputLayout->addWidget(sampleRateCombo, 1, 4);
+    outputLayout->addWidget(channelLabel,    1, 6);
+    outputLayout->addWidget(channelCombo,    1, 7);
 
-    // Set stretch
-    outputLayout->setColumnStretch(1, 3); // freq edit
-    outputLayout->setColumnStretch(3, 1); // BW combo
-    outputLayout->setColumnStretch(5, 2); // channel combo
-    int col = 7; // for TX controls row reference
+    // Column stretches: wide-narrow-spacer pattern
+    outputLayout->setColumnStretch(0, 0);   // "Device:" label
+    outputLayout->setColumnStretch(1, 5);   // Device combo — widest
+    outputLayout->setColumnStretch(2, 0);   // spacer col
+    outputLayout->setColumnStretch(3, 0);   // "Mode:" label
+    outputLayout->setColumnStretch(4, 2);   // Mode/BW combo
+    outputLayout->setColumnStretch(5, 0);   // spacer col
+    outputLayout->setColumnStretch(6, 0);   // Amp/Ch label
+    outputLayout->setColumnStretch(7, 2);   // NoColor/Channel combo
+
+    // Add spacer columns for visual separation
+    outputLayout->setColumnMinimumWidth(2, 12);
+    outputLayout->setColumnMinimumWidth(5, 12);
+
+    int col = 8; // total columns for TX controls row span
 
     // TX Controls layout (hidden in RX mode)
     txControlsLayout = new QGridLayout();
-    txControlsLayout->setSpacing(4);
+    txControlsLayout->setSpacing(6);
+    txControlsLayout->setContentsMargins(0, 4, 0, 0);
 
     // TX Amplitude (same as HackRfRadio: range 1-100, /100 = 0.01-1.00, default 0.50)
     txAmplitudeSlider = new QSlider(Qt::Horizontal);
     txAmplitudeSlider->setRange(1, 100);
     txAmplitudeSlider->setValue(static_cast<int>(tx_amplitude * 100));
     txAmplitudeSpinBox = new QDoubleSpinBox();
-    txAmplitudeSpinBox->setMinimumWidth(55);
+    txAmplitudeSpinBox->setMinimumWidth(60);
     txAmplitudeSpinBox->setRange(0.01, 1.0);
     txAmplitudeSpinBox->setValue(tx_amplitude);
     txAmplitudeSpinBox->setSingleStep(0.01);
@@ -459,7 +489,7 @@ void MainWindow::addOutputGroup()
     txModulationIndexSlider->setRange(1, 500);
     txModulationIndexSlider->setValue(static_cast<int>(tx_modulation_index * 100));
     txModulationIndexSpinBox = new QDoubleSpinBox();
-    txModulationIndexSpinBox->setMinimumWidth(55);
+    txModulationIndexSpinBox->setMinimumWidth(60);
     txModulationIndexSpinBox->setRange(0.01, 5.0);
     txModulationIndexSpinBox->setValue(tx_modulation_index);
     txModulationIndexSpinBox->setSingleStep(0.01);
@@ -474,7 +504,7 @@ void MainWindow::addOutputGroup()
     txAmpSlider->setRange(0, 47);
     txAmpSlider->setValue(m_txAmpGain);
     txAmpSpinBox = new QSpinBox();
-    txAmpSpinBox->setMinimumWidth(55);
+    txAmpSpinBox->setMinimumWidth(60);
     txAmpSpinBox->setRange(0, 47);
     txAmpSpinBox->setValue(m_txAmpGain);
     txAmpSpinBox->setSingleStep(1);
@@ -497,6 +527,7 @@ void MainWindow::addOutputGroup()
     tx_line = new QFrame();
     tx_line->setFrameShape(QFrame::HLine);
     tx_line->setFrameShadow(QFrame::Sunken);
+    tx_line->setStyleSheet("QFrame { color: #0078a0; }");
     tx_line->setFixedHeight(2);
     outputLayout->addWidget(tx_line, 2, 0, 1, col);
     outputLayout->addLayout(txControlsLayout, 3, 0, 1, col);
@@ -696,8 +727,8 @@ void MainWindow::addRxGroup()
     cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
 
-    cPlotter->setFftRange(-100.0f, -10.0f);
-    cPlotter->setPandapterRange(-100.f, -10.f);
+    cPlotter->setFftRange(-110.0f, 0.0f);
+    cPlotter->setPandapterRange(-110.f, 0.f);
     cPlotter->setDemodRanges(-200000, -_KHZ(5), _KHZ(5), 200000, true);
 
     cPlotter->setFreqUnits(1000);
@@ -715,8 +746,8 @@ void MainWindow::addRxGroup()
 
     // Vertical gain slider (dB range control) next to plotter
     QSlider *plotterGainSlider = new QSlider(Qt::Vertical, this);
-    plotterGainSlider->setRange(-120, -30);
-    plotterGainSlider->setValue(-100);
+    plotterGainSlider->setRange(-130, 0);
+    plotterGainSlider->setValue(-110);
     plotterGainSlider->setToolTip("Spectrum floor (dB)");
     plotterGainSlider->setFixedWidth(22);
     plotterGainSlider->setStyleSheet(
@@ -724,8 +755,8 @@ void MainWindow::addRxGroup()
         "QSlider::handle:vertical { background: #FFC300; height: 14px; margin: 0 -4px; border-radius: 7px; }"
     );
     connect(plotterGainSlider, &QSlider::valueChanged, this, [this](int value) {
-        cPlotter->setPandapterRange(static_cast<float>(value), -10.f);
-        cPlotter->setFftRange(static_cast<float>(value), -10.f);
+        cPlotter->setPandapterRange(static_cast<float>(value), 0.f);
+        cPlotter->setFftRange(static_cast<float>(value), 0.f);
     });
 
     connect(cPlotter, &CPlotter::newDemodFreq, this, &MainWindow::on_plotter_newDemodFreq);
@@ -1574,7 +1605,7 @@ void MainWindow::onRxTxTypeChanged(int index)
         }
     }
 
-    // No adjustSize() - window is fixed size (1024x740)
+    // Window is resizable - no adjustSize() needed
     update();
 }
 
