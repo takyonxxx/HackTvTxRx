@@ -45,6 +45,8 @@ private:
     float m_rxModIndex = 1.0f;  // RX modulation index (FM sensitivity multiplier)
     float m_deemphTau;    // de-emphasis time constant in seconds (0 = off)
     float m_deemphPrev;   // de-emphasis filter state
+    float m_hpfPrev = 0.0f;    // HPF filter state
+    float m_hpfPrevIn = 0.0f;  // HPF previous input
 
     std::vector<DecimStage> m_iqStages;
     std::vector<DecimStage> m_realStages;

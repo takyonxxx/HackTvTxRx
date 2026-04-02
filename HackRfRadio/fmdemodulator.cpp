@@ -57,16 +57,14 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
     // 7. High-pass filter at 250 Hz - removes low-freq rumble, improves voice clarity
     {
         // Single-pole HPF: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
-        static float hpfPrev = 0.0f;
-        static float hpfPrevIn = 0.0f;
         float cutoff = 250.0f;
         float rc = 1.0f / (2.0f * static_cast<float>(M_PI) * cutoff);
         float dt = 1.0f / 48000.0f;
         float alpha = rc / (rc + dt);
         for (auto& s : audio) {
-            float filtered = alpha * (hpfPrev + s - hpfPrevIn);
-            hpfPrevIn = s;
-            hpfPrev = filtered;
+            float filtered = alpha * (m_hpfPrev + s - m_hpfPrevIn);
+            m_hpfPrevIn = s;
+            m_hpfPrev = filtered;
             s = filtered;
         }
     }

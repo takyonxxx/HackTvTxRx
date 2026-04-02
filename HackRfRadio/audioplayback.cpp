@@ -1,18 +1,20 @@
 #include "audioplayback.h"
 #include <QDebug>
-#include <QTimer>
 #include <QMediaDevices>
 #include <QAudioDevice>
 #include <cstring>
 #include <cmath>
+#include <algorithm>
 
 AudioPlayback::AudioPlayback(QObject *parent)
     : QObject(parent)
 {
     m_ring.resize(RING_SIZE, 0.0f);
+    m_outputBuffer.resize(CHUNK_SIZE * 2 * sizeof(qint16));
 
-    m_format.setSampleRate(48000);
-    m_format.setChannelCount(1);
+    // Stereo Int16 at 48kHz - matches HackTvGui AudioOutput
+    m_format.setSampleRate(SAMPLE_RATE);
+    m_format.setChannelCount(2);
     m_format.setSampleFormat(QAudioFormat::Int16);
 }
 
@@ -21,10 +23,8 @@ AudioPlayback::~AudioPlayback()
     stop();
 }
 
-bool AudioPlayback::start()
+bool AudioPlayback::initAudioSink()
 {
-    if (m_running.load()) return true;
-
     QAudioDevice outputDevice = QMediaDevices::defaultAudioOutput();
     if (outputDevice.isNull()) {
         qDebug() << "No audio output device found";
@@ -33,44 +33,68 @@ bool AudioPlayback::start()
 
     qDebug() << "Using audio output:" << outputDevice.description();
 
-    m_audioSink = new QAudioSink(outputDevice, m_format, this);
-    m_audioSink->setBufferSize(48000); // 500ms buffer - prevents underruns
+    m_audioSink = std::make_unique<QAudioSink>(outputDevice, m_format);
+    m_audioSink->setBufferSize(2 * 1024 * 1024); // 2MB buffer
 
     m_ioDevice = m_audioSink->start();
-    if (!m_ioDevice) {
-        qDebug() << "Failed to start audio playback";
-        delete m_audioSink;
-        m_audioSink = nullptr;
+    if (!m_ioDevice || !m_ioDevice->isOpen()) {
+        qDebug() << "Failed to start audio sink";
+        m_audioSink.reset();
         return false;
     }
 
+    return true;
+}
+
+bool AudioPlayback::start()
+{
+    if (m_running.load()) return true;
+
+    if (!initAudioSink()) return false;
+
     m_running.store(true);
 
-    // Timer to write audio data periodically
-    m_writeTimer = new QTimer(this);
-    connect(m_writeTimer, &QTimer::timeout, this, &AudioPlayback::processAudioQueue);
-    m_writeTimer->start(10); // 10ms intervals for smoother feeding
+    // Writer thread - uses QThread::create to avoid moveToThread issues
+    m_writerThread.setObjectName("AudioWriter");
+    QObject::connect(&m_writerThread, &QThread::started, [this]() {
+        writerLoop();
+    });
+    m_writerThread.start();
 
-    qDebug() << "Audio playback started at 48000 Hz";
+    qDebug() << "Audio playback started at" << SAMPLE_RATE
+             << "Hz, stereo, buffer:" << m_audioSink->bufferSize();
     return true;
 }
 
 void AudioPlayback::stop()
 {
-    m_running.store(false);
+    if (!m_running.load()) return;
 
-    if (m_writeTimer) {
-        m_writeTimer->stop();
-        delete m_writeTimer;
-        m_writeTimer = nullptr;
+    m_running.store(false);
+    m_queueNotEmpty.wakeAll();
+
+    if (m_writerThread.isRunning()) {
+        m_writerThread.quit();
+        m_writerThread.wait(2000);
+        if (m_writerThread.isRunning()) {
+            m_writerThread.terminate();
+            m_writerThread.wait();
+        }
+    }
+
+    if (m_ioDevice) {
+        m_ioDevice = nullptr;
     }
 
     if (m_audioSink) {
         m_audioSink->stop();
-        delete m_audioSink;
-        m_audioSink = nullptr;
-        m_ioDevice = nullptr;
+        m_audioSink.reset();
     }
+
+    // Reset ring buffer
+    m_writePos = 0;
+    m_readPos = 0;
+    m_bufferSize = 0;
 
     qDebug() << "Audio playback stopped";
 }
@@ -79,21 +103,33 @@ void AudioPlayback::enqueueAudio(const std::vector<float>& samples)
 {
     if (!m_running.load() || samples.empty()) return;
 
-    size_t w = m_writePos.load(std::memory_order_relaxed);
-    size_t r = m_readPos.load(std::memory_order_acquire);
+    QMutexLocker locker(&m_mutex);
 
-    // Check available space (leave 1 sample gap to distinguish full vs empty)
-    size_t used = (w >= r) ? (w - r) : (RING_SIZE - r + w);
-    size_t free = RING_SIZE - used - 1;
+    size_t samplesToAdd = samples.size();
 
-    // If buffer nearly full, skip to prevent overwriting unread data
-    if (samples.size() > free) return;
-
-    for (size_t i = 0; i < samples.size(); i++) {
-        m_ring[w] = samples[i];
-        w = (w + 1) % RING_SIZE;
+    // Overflow: drop oldest data
+    if (m_bufferSize + samplesToAdd > MAX_QUEUE_SIZE) {
+        size_t overflow = (m_bufferSize + samplesToAdd) - MAX_QUEUE_SIZE;
+        m_readPos = (m_readPos + overflow) % RING_SIZE;
+        m_bufferSize -= overflow;
     }
-    m_writePos.store(w, std::memory_order_release);
+
+    // Batch copy into ring (handle wrap)
+    size_t firstChunk = std::min(samplesToAdd, RING_SIZE - m_writePos);
+    std::copy(samples.begin(), samples.begin() + firstChunk,
+              m_ring.begin() + m_writePos);
+
+    if (samplesToAdd > firstChunk) {
+        size_t secondChunk = samplesToAdd - firstChunk;
+        std::copy(samples.begin() + firstChunk, samples.end(),
+                  m_ring.begin());
+        m_writePos = secondChunk;
+    } else {
+        m_writePos = (m_writePos + firstChunk) % RING_SIZE;
+    }
+
+    m_bufferSize += samplesToAdd;
+    m_queueNotEmpty.wakeOne();
 }
 
 void AudioPlayback::setVolume(float vol)
@@ -101,37 +137,101 @@ void AudioPlayback::setVolume(float vol)
     m_volume.store(std::clamp(vol, 0.0f, 1.0f));
 }
 
-void AudioPlayback::processAudioQueue()
+void AudioPlayback::writerLoop()
 {
-    if (!m_ioDevice || !m_running.load()) return;
+    bool bufferPrimed = false;
+    std::vector<float> chunk;
+    chunk.reserve(CHUNK_SIZE);
 
-    size_t w = m_writePos.load(std::memory_order_acquire);
-    size_t r = m_readPos.load(std::memory_order_relaxed);
-    size_t available = (w >= r) ? (w - r) : (RING_SIZE - r + w);
+    while (m_running.load()) {
+        chunk.clear();
 
-    if (available == 0) return;
+        {
+            QMutexLocker locker(&m_mutex);
 
-    // Write up to 2400 samples (50ms at 48kHz) - feed ahead to prevent underrun
-    size_t toWrite = std::min(available, size_t(2400));
+            // Buffer priming - wait for 100ms of data before starting
+            if (!bufferPrimed) {
+                if (m_bufferSize < MIN_BUFFER_SAMPLES) {
+                    m_queueNotEmpty.wait(&m_mutex, 100);
+                    continue;
+                }
+                bufferPrimed = true;
+            }
 
-    // Check how much space the audio sink has
-    size_t sinkFree = m_audioSink->bytesFree() / sizeof(int16_t);
-    if (sinkFree == 0) return;
-    toWrite = std::min(toWrite, sinkFree);
+            // Underrun - re-prime
+            if (m_bufferSize < CHUNK_SIZE) {
+                bufferPrimed = false;
+                m_queueNotEmpty.wait(&m_mutex, 50);
+                continue;
+            }
+
+            // Batch read from ring
+            size_t firstChunk = std::min<size_t>(CHUNK_SIZE, RING_SIZE - m_readPos);
+            chunk.insert(chunk.end(),
+                         m_ring.begin() + m_readPos,
+                         m_ring.begin() + m_readPos + firstChunk);
+
+            if (CHUNK_SIZE > firstChunk) {
+                size_t secondChunk = CHUNK_SIZE - firstChunk;
+                chunk.insert(chunk.end(),
+                             m_ring.begin(),
+                             m_ring.begin() + secondChunk);
+                m_readPos = secondChunk;
+            } else {
+                m_readPos = (m_readPos + firstChunk) % RING_SIZE;
+            }
+
+            m_bufferSize -= CHUNK_SIZE;
+        }
+
+        if (!chunk.empty()) {
+            writeChunk(chunk);
+        }
+    }
+}
+
+void AudioPlayback::writeChunk(const std::vector<float>& audioData)
+{
+    if (!m_ioDevice || !m_audioSink || audioData.empty()) return;
 
     float vol = m_volume.load();
 
-    // Convert float to int16
-    QByteArray outputData(toWrite * sizeof(int16_t), 0);
-    int16_t* out = reinterpret_cast<int16_t*>(outputData.data());
-
-    for (size_t i = 0; i < toWrite; i++) {
-        float sample = m_ring[r] * vol;
-        sample = std::clamp(sample, -1.0f, 1.0f);
-        out[i] = static_cast<int16_t>(sample * 32767.0f);
-        r = (r + 1) % RING_SIZE;
+    // Mono -> Stereo conversion
+    size_t requiredSize = audioData.size() * 2 * sizeof(qint16);
+    if (static_cast<size_t>(m_outputBuffer.size()) < requiredSize) {
+        m_outputBuffer.resize(requiredSize);
     }
-    m_readPos.store(r, std::memory_order_release);
 
-    m_ioDevice->write(outputData);
+    qint16* output = reinterpret_cast<qint16*>(m_outputBuffer.data());
+
+    for (size_t i = 0; i < audioData.size(); ++i) {
+        float sample = std::clamp(audioData[i] * vol, -1.0f, 1.0f);
+        qint16 s16 = static_cast<qint16>(sample * 32767.0f);
+        output[i * 2]     = s16; // Left
+        output[i * 2 + 1] = s16; // Right
+    }
+
+    qint64 bytesToWrite = static_cast<qint64>(requiredSize);
+    qint64 bytesWritten = 0;
+
+    // Blocking write - wait for audio sink space
+    while (bytesWritten < bytesToWrite && m_running.load()) {
+        qint64 remaining = bytesToWrite - bytesWritten;
+        if (m_audioSink->bytesFree() < remaining) {
+            QThread::msleep(5);
+            continue;
+        }
+
+        qint64 written = m_ioDevice->write(
+            m_outputBuffer.constData() + bytesWritten, remaining);
+
+        if (written > 0) {
+            bytesWritten += written;
+        } else if (written < 0) {
+            qCritical() << "Audio write error";
+            break;
+        } else {
+            QThread::msleep(1);
+        }
+    }
 }
