@@ -696,8 +696,8 @@ void MainWindow::addRxGroup()
     cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
 
-    cPlotter->setFftRange(-90.0f, 10.0f);
-    cPlotter->setPandapterRange(-110.f, 10.f);
+    cPlotter->setFftRange(-100.0f, -10.0f);
+    cPlotter->setPandapterRange(-100.f, -10.f);
     cPlotter->setDemodRanges(-200000, -_KHZ(5), _KHZ(5), 200000, true);
 
     cPlotter->setFreqUnits(1000);
@@ -715,8 +715,8 @@ void MainWindow::addRxGroup()
 
     // Vertical gain slider (dB range control) next to plotter
     QSlider *plotterGainSlider = new QSlider(Qt::Vertical, this);
-    plotterGainSlider->setRange(-160, 0);
-    plotterGainSlider->setValue(-110);
+    plotterGainSlider->setRange(-120, -30);
+    plotterGainSlider->setValue(-100);
     plotterGainSlider->setToolTip("Spectrum floor (dB)");
     plotterGainSlider->setFixedWidth(22);
     plotterGainSlider->setStyleSheet(
@@ -724,8 +724,8 @@ void MainWindow::addRxGroup()
         "QSlider::handle:vertical { background: #FFC300; height: 14px; margin: 0 -4px; border-radius: 7px; }"
     );
     connect(plotterGainSlider, &QSlider::valueChanged, this, [this](int value) {
-        cPlotter->setPandapterRange(static_cast<float>(value), 10.f);
-        cPlotter->setFftRange(static_cast<float>(value + 20), 10.f);
+        cPlotter->setPandapterRange(static_cast<float>(value), -10.f);
+        cPlotter->setFftRange(static_cast<float>(value), -10.f);
     });
 
     connect(cPlotter, &CPlotter::newDemodFreq, this, &MainWindow::on_plotter_newDemodFreq);

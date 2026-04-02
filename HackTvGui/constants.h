@@ -76,26 +76,23 @@ inline void getFft(const std::vector<std::complex<float>>& samples, std::vector<
         fft_data[i] *= window;
     }
     fft(fft_data);
-    // FFT çıktısını yeniden düzenle (DC'yi ortaya al)
+    // FFT shift (DC to center)
     std::rotate(fft_data.begin(), fft_data.begin() + fft_size / 2, fft_data.end());
-    float maxPower = 1e-10f;
-    for (int i = 0; i < fft_size; ++i) {
-        float power = std::norm(fft_data[i]);
-        maxPower = std::max(maxPower, power);
-    }
-    float amplificationFactor = 1.5f;
-    float minDisplayPower = maxPower / 1e10f; // Dynamic range (-100 dB) - no visible floor clipping
-    float refLevel = -5.0f;
+
+    // Absolute dBFS: reference = fft_size^2 (full-scale sine wave = 0 dBFS)
+    float refPower = static_cast<float>(fft_size) * static_cast<float>(fft_size);
+    float minPower = 1e-20f; // noise floor clamp
+
     fft_output.resize(fft_size);
     float totalDb = 0.0f;
     for (int i = 0; i < fft_size; ++i) {
         float power = std::norm(fft_data[i]);
-        float db = 10.0f * std::log10(std::max(power, minDisplayPower) / maxPower);
-        fft_output[i] = (db - refLevel) * amplificationFactor;
-        totalDb += fft_output[i];
+        float db = 10.0f * std::log10(std::max(power, minPower) / refPower);
+        fft_output[i] = db;
+        totalDb += db;
     }
 
-    signal_level_dbfs = totalDb / fft_size;;
+    signal_level_dbfs = totalDb / fft_size;
 }
 
 #endif // CONSTANTS_H

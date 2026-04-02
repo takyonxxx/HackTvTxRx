@@ -31,6 +31,7 @@ int gettimeofday(struct timeval * tp, struct timezone * tzp)
 #include <QDebug>
 #include <QFont>
 #include <QPainter>
+#include <QLinearGradient>
 #include <QtGlobal>
 #include <QToolTip>
 #include "cplotter.h"
@@ -1301,7 +1302,15 @@ void CPlotter::draw()
 
         if (m_FftFill)
         {
-            painter2.setBrush(QBrush(m_FftFillCol, Qt::SolidPattern));
+            // SDRuno-style gradient: white/bright at peaks → dark blue at bottom
+            QLinearGradient gradient(0, 0, 0, h);
+            gradient.setColorAt(0.0, QColor(255, 255, 255, 255));  // pure white at top
+            gradient.setColorAt(0.2, QColor(180, 220, 255, 240));  // light blue-white
+            gradient.setColorAt(0.4, QColor(100, 170, 240, 200));  // sky blue
+            gradient.setColorAt(0.6, QColor(40, 110, 200, 170));   // medium blue
+            gradient.setColorAt(0.8, QColor(15, 60, 150, 140));    // dark blue
+            gradient.setColorAt(1.0, QColor(5, 20, 80, 100));      // deep navy
+            painter2.setBrush(gradient);
             if (n < MAX_SCREENSIZE-2)
             {
                 LineBuf[n].setX(xmax-1);
