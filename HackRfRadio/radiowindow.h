@@ -19,7 +19,8 @@
 #include "fmdemodulator.h"
 #include "amdemodulator.h"
 #include "frequencywidget.h"
-#include "signalmeter.h"
+#include "meter.h"
+#include "glplotter.h"
 #include "gainsettingsdialog.h"
 
 class RadioWindow : public QMainWindow
@@ -91,8 +92,9 @@ private:
     QPushButton* m_pttButton;
     QLabel* m_txRxIndicator;
 
-    // Signal
-    SignalMeter* m_signalMeter;
+    // Signal meter & spectrum
+    CMeter* m_cMeter;
+    CPlotter* m_cPlotter;
 
     // Settings dialog
     GainSettingsDialog* m_gainDialog;
@@ -111,6 +113,10 @@ private:
 
     QByteArray m_iqAccumulator;
     static constexpr int IQ_PROCESS_THRESHOLD = 32768;
+    QAtomicInt m_fftUpdatePending{0};
+
+public slots:
+    void updatePlotter(float* fft_data, int size);
 };
 
 #endif // RADIOWINDOW_H

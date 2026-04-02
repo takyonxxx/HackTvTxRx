@@ -1,4 +1,5 @@
 #include "radiowindow.h"
+#include "constants.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -270,11 +271,31 @@ void RadioWindow::setupUi()
     mainLayout->addLayout(modeRow);
 
     // ──────────────────────────────────────────────
-    // SIGNAL METER
+    // SIGNAL METER (CMeter bar) + SPECTRUM (CPlotter, no waterfall)
     // ──────────────────────────────────────────────
-    m_signalMeter = new SignalMeter();
-    m_signalMeter->setMinimumHeight(280);
-    mainLayout->addWidget(m_signalMeter);
+    m_cMeter = new CMeter(this);
+    m_cMeter->setMinimumHeight(35);
+    m_cMeter->setMaximumHeight(45);
+    mainLayout->addWidget(m_cMeter);
+
+    m_cPlotter = new CPlotter(this);
+    m_cPlotter->setSampleRate(m_sampleRate);
+    m_cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
+    m_cPlotter->setCenterFreq(100000000ULL);
+    m_cPlotter->setFftRange(-110.0f, 0.0f);
+    m_cPlotter->setPandapterRange(-110.f, 0.f);
+    m_cPlotter->setPercent2DScreen(100); // spectrum only, no waterfall
+    m_cPlotter->setFftFill(true);
+    m_cPlotter->setFftPlotColor(QColor("#CEECF5"));
+    m_cPlotter->setFreqUnits(1000);
+    m_cPlotter->setFilterBoxEnabled(false);
+    m_cPlotter->setCenterLineEnabled(false);
+    m_cPlotter->setClickResolution(0);
+    m_cPlotter->setFocusPolicy(Qt::NoFocus);
+    m_cPlotter->setMouseTracking(false);
+    m_cPlotter->setMinimumHeight(180);
+    m_cPlotter->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    mainLayout->addWidget(m_cPlotter, 1);
 
     // ──────────────────────────────────────────────
     // Spacer above sliders
@@ -576,79 +597,31 @@ void RadioWindow::processIqBuffer()
         samples[i] = std::complex<float>(iq[i*2] / 128.0f, iq[i*2+1] / 128.0f);
     }
 
-    // ── FFT-based signal power measurement ──
-    // Use a subset of samples for FFT (power of 2)
-    size_t fftSize = 4096;
-    if (n >= fftSize) {
-        // Simple DFT on center portion (or use full FFT if available)
-        // Compute magnitude squared of FFT bins, find peak and total power
-        std::vector<std::complex<float>> fftIn(fftSize);
-        size_t offset = (n - fftSize) / 2;
-        for (size_t i = 0; i < fftSize; i++) {
-            // Apply Hanning window to reduce spectral leakage
-            float window = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(M_PI) * i / (fftSize - 1)));
-            fftIn[i] = samples[offset + i] * window;
+    // ── FFT + spectrum display + signal meter ──
+    int fftSize = 2048;
+    if (static_cast<int>(n) >= fftSize) {
+        std::vector<float> fft_output(fftSize);
+        float signal_level_dbfs;
+        getFft(samples, fft_output, signal_level_dbfs, fftSize);
+
+        // Update CMeter with signal level
+        m_cMeter->setLevel(signal_level_dbfs);
+
+        // Update CPlotter with FFT data (frame-drop guard)
+        if (m_fftUpdatePending.testAndSetAcquire(0, 1)) {
+            float* fft_data = new float[fftSize];
+            std::memcpy(fft_data, fft_output.data(), fftSize * sizeof(float));
+            QMetaObject::invokeMethod(this, "updatePlotter",
+                                      Qt::QueuedConnection,
+                                      Q_ARG(float*, fft_data),
+                                      Q_ARG(int, fftSize));
         }
 
-        // In-place Cooley-Tukey FFT (radix-2 DIT)
-        // Bit-reversal permutation
-        for (size_t i = 1, j = 0; i < fftSize; i++) {
-            size_t bit = fftSize >> 1;
-            for (; j & bit; bit >>= 1) j ^= bit;
-            j ^= bit;
-            if (i < j) std::swap(fftIn[i], fftIn[j]);
-        }
-        // FFT butterfly
-        for (size_t len = 2; len <= fftSize; len <<= 1) {
-            float angle = -2.0f * static_cast<float>(M_PI) / len;
-            std::complex<float> wlen(std::cos(angle), std::sin(angle));
-            for (size_t i = 0; i < fftSize; i += len) {
-                std::complex<float> w(1.0f, 0.0f);
-                for (size_t j = 0; j < len / 2; j++) {
-                    std::complex<float> u = fftIn[i + j];
-                    std::complex<float> v = fftIn[i + j + len/2] * w;
-                    fftIn[i + j] = u + v;
-                    fftIn[i + j + len/2] = u - v;
-                    w *= wlen;
-                }
-            }
-        }
-
-        // Calculate power spectral density
-        // Peak power and total power in band
-        float peakMagSq = 0.0f;
-        float totalMagSq = 0.0f;
-        for (size_t i = 0; i < fftSize; i++) {
-            float magSq = std::norm(fftIn[i]);  // |X[k]|^2
-            totalMagSq += magSq;
-            if (magSq > peakMagSq) peakMagSq = magSq;
-        }
-
-        // Normalize by FFT size squared (Parseval's theorem)
-        float fftSizeF = static_cast<float>(fftSize);
-        float peakPowerDb = 10.0f * std::log10(std::max(peakMagSq / (fftSizeF * fftSizeF), 1e-12f));
-        float avgPowerDb = 10.0f * std::log10(std::max(totalMagSq / (fftSizeF * fftSizeF * fftSizeF), 1e-12f));
-
-        // IQ data from ADC already includes all gain stages.
-        // We just need dBFS to dBm conversion.
-        // HackRF 8-bit ADC: full scale (0 dBFS) ~ +10 dBm at antenna with 0 gain
-        // With gain applied, 0 dBFS corresponds to a weaker input signal.
-        // But since we measure the digitized output, we report relative power.
-        //
-        // Simple calibration: map dBFS range to realistic dBm range
-        // peakPowerDb is typically -30 to -60 dBFS for real signals
-        // Map to S-meter: -35 dBFS -> S9 (-73 dBm), -65 dBFS -> S0 (-127 dBm)
-        float signalDbm = peakPowerDb * 1.8f - 10.0f;  // linear mapping dBFS -> dBm
-
-        // Map dBm to 0.0-1.0 for S-meter
-        // S1 = -121 dBm, S9 = -73 dBm, S9+60 = -13 dBm
-        float minDbm = -130.0f;
-        float maxDbm = -10.0f;
-        float level = (signalDbm - minDbm) / (maxDbm - minDbm);
-        level = std::clamp(level, 0.0f, 1.0f);
-        m_signalMeter->setLevel(level);
-        m_signalMeter->setRxDbm(signalDbm);
-        m_lastSignalLevel = level;  // store for squelch
+        // Squelch level from signal power
+        float minDbm = -100.0f;
+        float maxDbm = 0.0f;
+        float level = (signal_level_dbfs - minDbm) / (maxDbm - minDbm);
+        m_lastSignalLevel = std::clamp(level, 0.0f, 1.0f);
     }
 
     std::vector<float> audio;
@@ -704,9 +677,6 @@ void RadioWindow::onPttPressed()
     // Clamp to realistic HackRF range
     estimatedDbm = std::clamp(estimatedDbm, -60.0f, 15.0f);
 
-    m_signalMeter->setTxMode(true);
-    m_signalMeter->setTxPowerDbm(estimatedDbm);
-
     qDebug() << "TX estimated power:" << estimatedDbm << "dBm (IF=" << ifGain << "amp=" << amplitude << ")";
 
     m_txRxIndicator->setText("TX - Transmitting");
@@ -727,9 +697,6 @@ void RadioWindow::onPttReleased()
 
     // Restore RX params from dialog
     m_gainDialog->sendRxParams();
-
-    // Switch meter back to RX mode
-    m_signalMeter->setTxMode(false);
 
     m_txRxIndicator->setText("RX - Listening");
     m_txRxIndicator->setStyleSheet(
@@ -771,6 +738,7 @@ void RadioWindow::keyReleaseEvent(QKeyEvent *event)
 void RadioWindow::onFrequencyChanged(uint64_t freq)
 {
     if (m_tcpClient->isConnected()) m_tcpClient->setFrequency(freq);
+    m_cPlotter->setCenterFreq(static_cast<quint64>(freq));
     logMessage(QString("Freq: %1 MHz").arg(freq / 1000000.0, 0, 'f', 3));
 }
 
@@ -862,4 +830,11 @@ void RadioWindow::onSquelchChanged(int value)
 void RadioWindow::logMessage(const QString& msg)
 {
     qDebug() << "[Radio]" << msg;
+}
+
+void RadioWindow::updatePlotter(float* fft_data, int size)
+{
+    m_fftUpdatePending.storeRelease(0);
+    m_cPlotter->setNewFttData(fft_data, size);
+    delete[] fft_data;
 }

@@ -1,4 +1,4 @@
-QT += core gui widgets network multimedia
+QT += core gui widgets network multimedia openglwidgets
 
 greaterThan(QT_MAJOR_VERSION, 5): QT += core5compat
 
@@ -15,7 +15,8 @@ SOURCES += \
     fmdemodulator.cpp \
     amdemodulator.cpp \
     frequencywidget.cpp \
-    signalmeter.cpp \
+    meter.cpp \
+    glplotter.cpp \
     gainsettingsdialog.cpp
 
 HEADERS += \
@@ -26,7 +27,9 @@ HEADERS += \
     fmdemodulator.h \
     amdemodulator.h \
     frequencywidget.h \
-    signalmeter.h \
+    meter.h \
+    glplotter.h \
+    constants.h \
     gainsettingsdialog.h
 
 win32 {

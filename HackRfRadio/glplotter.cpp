@@ -660,6 +660,8 @@ qint64 CPlotter::freqFromX(int x)
 
 void CPlotter::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_ClickResolution == 0) return;
+
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     QPoint pt = event->pos();
 #else
@@ -750,6 +752,8 @@ void CPlotter::mouseMoveEvent(QMouseEvent *event)
 
 void CPlotter::mousePressEvent(QMouseEvent *event)
 {
+    if (m_ClickResolution == 0) return; // non-interactive mode
+
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     QPoint pt = event->pos();
 #else
@@ -789,6 +793,7 @@ void CPlotter::mousePressEvent(QMouseEvent *event)
 
 void CPlotter::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (m_ClickResolution == 0) return;
     Q_UNUSED(event);
     m_CursorCaptured = NOCAP;
     setCursor(Qt::CrossCursor);
@@ -796,6 +801,7 @@ void CPlotter::mouseReleaseEvent(QMouseEvent *event)
 
 void CPlotter::wheelEvent(QWheelEvent *event)
 {
+    if (m_ClickResolution == 0) return;
     int delta = m_InvertScrolling ? -event->angleDelta().y() : event->angleDelta().y();
     if (delta != 0)
         emit wheelFreqChange(delta > 0 ? 1 : -1);
