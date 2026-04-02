@@ -51,6 +51,19 @@ RadioWindow::RadioWindow(QWidget *parent)
     connect(m_tcpClient, &TcpClient::controlResponseReceived, this, &RadioWindow::onControlResponse);
     connect(m_tcpClient, &TcpClient::iqDataReceived, this, &RadioWindow::onIqDataReceived);
     connect(m_audioCapture, &AudioCapture::audioDataReady, this, &RadioWindow::onAudioCaptured);
+
+    // Stereo indicator
+    connect(m_fmDemod, &FMDemodulator::stereoStatusChanged, this, [this](bool stereo) {
+        if (m_forceMono) {
+            m_stereoLabel->setText("MONO");
+            m_stereoLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #FF9900;");
+        } else {
+            m_stereoLabel->setText(stereo ? "STEREO" : "");
+            m_stereoLabel->setStyleSheet(stereo
+                ? "font-weight: bold; font-size: 18px; color: #00FF66;"
+                : "font-weight: bold; font-size: 18px; color: #666666;");
+        }
+    });
 }
 
 RadioWindow::~RadioWindow()
@@ -105,6 +118,8 @@ void RadioWindow::saveSettings()
 
     // Window geometry
     s.setValue("geometry", saveGeometry());
+
+    qDebug() << "Settings saved";
 }
 
 void RadioWindow::loadSettings()
@@ -299,6 +314,15 @@ void RadioWindow::setupUi()
     m_modeLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #00FF66;");
     modeRow->addWidget(m_modulationCombo, 1);
     modeRow->addWidget(m_modeLabel);
+
+    // Stereo indicator — clickable to toggle mono/stereo
+    m_stereoLabel = new QLabel("");
+    m_stereoLabel->setAlignment(Qt::AlignCenter);
+    m_stereoLabel->setMinimumWidth(80);
+    m_stereoLabel->setCursor(Qt::PointingHandCursor);
+    m_stereoLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #666666;");
+    m_stereoLabel->installEventFilter(this);
+    modeRow->addWidget(m_stereoLabel);
 
     // RF Amp toggle button
     m_rfAmpBtn = new QPushButton("RF AMP: OFF");
@@ -674,8 +698,19 @@ void RadioWindow::processIqBuffer()
 
     std::vector<float> audio;
     switch (m_currentModulation) {
-    case FM_NB: case FM_WB: audio = m_fmDemod->demodulate(samples); break;
-    case AM: audio = m_amDemod->demodulate(samples); break;
+    case FM_NB: case FM_WB:
+        audio = m_fmDemod->demodulate(samples);  // already interleaved stereo
+        break;
+    case AM: {
+        auto mono = m_amDemod->demodulate(samples);
+        // Convert mono to interleaved stereo [L,R,L,R,...]
+        audio.resize(mono.size() * 2);
+        for (size_t i = 0; i < mono.size(); i++) {
+            audio[i * 2]     = mono[i];
+            audio[i * 2 + 1] = mono[i];
+        }
+        break;
+    }
     }
 
     if (!audio.empty()) {
@@ -914,4 +949,24 @@ void RadioWindow::updatePlotter(float* fft_data, int size)
     m_fftUpdatePending.storeRelease(0);
     m_cPlotter->setNewFttData(fft_data, size);
     delete[] fft_data;
+}
+
+bool RadioWindow::eventFilter(QObject *obj, QEvent *event)
+{
+    if (obj == m_stereoLabel && event->type() == QEvent::MouseButtonPress) {
+        m_forceMono = !m_forceMono;
+        m_fmDemod->setForceMono(m_forceMono);
+        if (m_forceMono) {
+            m_stereoLabel->setText("MONO");
+            m_stereoLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #FF9900;");
+        } else {
+            bool stereo = m_fmDemod->isStereo();
+            m_stereoLabel->setText(stereo ? "STEREO" : "");
+            m_stereoLabel->setStyleSheet(stereo
+                ? "font-weight: bold; font-size: 18px; color: #00FF66;"
+                : "font-weight: bold; font-size: 18px; color: #666666;");
+        }
+        return true;
+    }
+    return QMainWindow::eventFilter(obj, event);
 }

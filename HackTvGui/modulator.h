@@ -41,9 +41,8 @@ public:
         , m_outputGain(0.0f)
         , m_rxModIndex(1.0f)
         , m_deemphTau(0.0f)
-        , m_deemphPrev(0.0f)
-        , m_hpfPrev(0.0f)
-        , m_hpfPrevIn(0.0f)
+        , m_deemphPrevL(0.0f)
+        , m_deemphPrevR(0.0f)
     {
         rebuildChain();
 
@@ -53,9 +52,12 @@ public:
                  << m_realStages.size() << "real";
     }
 
+    // Returns interleaved stereo [L,R,L,R,...] — stereo when pilot detected, mono-dup otherwise
     std::vector<float> demodulate(const std::vector<std::complex<float>>& samples)
     {
         if (samples.empty()) return {};
+
+        bool isWBFM = (m_bandwidth > 25000.0);
 
         // 1. Multi-stage complex IQ decimation
         auto iq = samples;
@@ -68,65 +70,74 @@ public:
             iq = applyComplexFIR(iq, m_iqBandwidthTaps);
         }
 
-        // 3. FM demodulate at narrowband rate (conjugate multiply)
+        // 3. FM demodulate — produces MPX baseband
         double fmRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
-        auto audio = fmDemod(iq, fmRate);
+        auto mpx = fmDemod(iq, fmRate);
 
-        // 4. Real-valued decimation stages
+        // WBFM stereo decode at MPX rate
+        if (isWBFM && fmRate >= 76000.0) {
+            return decodeStereo(mpx, fmRate);
+        }
+
+        // NBFM / mono fallback
         for (const auto& stage : m_realStages) {
-            audio = decimateReal(audio, stage.taps, stage.factor);
+            mpx = decimateReal(mpx, stage.taps, stage.factor);
         }
 
-        // 5. Resample to 48 kHz
-        double lastRate = m_realStages.empty()
-                              ? (m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate)
-                              : m_realStages.back().outputRate;
+        double lastRate = m_realStages.empty() ? fmRate : m_realStages.back().outputRate;
         if (std::abs(lastRate - 48000.0) > 1.0) {
-            audio = resample(audio, lastRate, 48000.0);
+            mpx = resample(mpx, lastRate, 48000.0);
         }
 
-        // 6. Final audio LPF
-        audio = applyFIR(audio, m_audioFilterTaps);
+        mpx = applyFIR(mpx, m_audioFilterTaps);
 
-        // 7. High-pass filter at 250 Hz (removes low-freq rumble)
+        // HPF
         {
             float cutoff = 250.0f;
             float rc = 1.0f / (2.0f * static_cast<float>(M_PI) * cutoff);
             float dt = 1.0f / 48000.0f;
             float alpha = rc / (rc + dt);
-            for (auto& s : audio) {
-                float filtered = alpha * (m_hpfPrev + s - m_hpfPrevIn);
-                m_hpfPrevIn = s;
-                m_hpfPrev = filtered;
-                s = filtered;
+            for (auto& s : mpx) {
+                float f = alpha * (m_hpfPrevL + s - m_hpfPrevInL);
+                m_hpfPrevInL = s; m_hpfPrevL = f; s = f;
             }
         }
 
-        // 8. De-emphasis (user-controlled, 0 = off)
+        // De-emphasis
         if (m_deemphTau > 0.0f) {
             float dt = 1.0f / 48000.0f;
             float alphaD = m_deemphTau / (m_deemphTau + dt);
-            for (auto& s : audio) {
-                m_deemphPrev = alphaD * m_deemphPrev + (1.0f - alphaD) * s;
-                s = m_deemphPrev;
+            for (auto& s : mpx) {
+                m_deemphPrevL = alphaD * m_deemphPrevL + (1.0f - alphaD) * s;
+                s = m_deemphPrevL;
             }
         }
 
-        // 9. DC removal
-        removeDC(audio);
+        removeDC(m_dcX1L, m_dcY1L, mpx);
 
-        // 10. Soft limiter
-        for (auto& s : audio) {
+        // Mono → interleaved stereo
+        std::vector<float> out(mpx.size() * 2);
+        for (size_t i = 0; i < mpx.size(); i++) {
+            float s = mpx[i];
             if (s > 0.9f) s = 0.9f + 0.1f * std::tanh((s - 0.9f) * 8.0f);
             else if (s < -0.9f) s = -0.9f + 0.1f * std::tanh((s + 0.9f) * 8.0f);
+            out[i * 2] = s;
+            out[i * 2 + 1] = s;
         }
 
-        return audio;
+        if (m_stereoDetected) {
+            m_stereoDetected = false;
+            emit stereoStatusChanged(false);
+        }
+        return out;
     }
 
     void setSampleRate(double newRate) {
         m_inputRate = newRate;
         m_lastPhase = 0.0f;
+        m_pilotPhase = 0.0;
+        m_pilotFreq = 19000.0;
+        m_pilotLevel = 0.0f;
         rebuildChain();
         qDebug() << "WBFMDemodulator: rate changed to" << m_inputRate / 1e6 << "MHz";
     }
@@ -138,15 +149,17 @@ public:
     }
 
     double bandwidth() const { return m_bandwidth; }
-
     void setOutputGain(float gain) { m_outputGain = gain; }
     float outputGain() const { return m_outputGain; }
-
     void setRxModIndex(float idx) { m_rxModIndex = idx; }
     float rxModIndex() const { return m_rxModIndex; }
-
     void setDeemphTau(float tauUs) { m_deemphTau = tauUs * 1e-6f; }
     float deemphTauUs() const { return m_deemphTau * 1e6f; }
+    bool isStereo() const { return m_stereoDetected; }
+    void setForceMono(bool mono) { m_forceMono = mono; }
+
+signals:
+    void stereoStatusChanged(bool stereo);
 
 private:
     struct DecimStage {
@@ -161,17 +174,130 @@ private:
     float m_outputGain;
     float m_rxModIndex;
     float m_deemphTau;
-    float m_deemphPrev;
-    float m_hpfPrev;
-    float m_hpfPrevIn;
+    float m_deemphPrevL, m_deemphPrevR;
+    float m_hpfPrevL = 0.0f, m_hpfPrevInL = 0.0f;
+    float m_hpfPrevR = 0.0f, m_hpfPrevInR = 0.0f;
 
     std::vector<DecimStage> m_iqStages;
     std::vector<DecimStage> m_realStages;
     std::vector<float> m_audioFilterTaps;
     std::vector<float> m_iqBandwidthTaps;
+    std::vector<float> m_monoFilterTaps;
+    std::vector<float> m_diffFilterTaps;
 
-    float m_dcX1 = 0.0f;
-    float m_dcY1 = 0.0f;
+    float m_dcX1L = 0.0f, m_dcY1L = 0.0f;
+    float m_dcX1R = 0.0f, m_dcY1R = 0.0f;
+
+    // Stereo PLL state
+    double m_pilotPhase = 0.0;
+    double m_pilotFreq = 19000.0;
+    float m_pilotLevel = 0.0f;
+    bool m_stereoDetected = false;
+    bool m_forceMono = false;
+
+    // ========== Stereo Decode ==========
+    std::vector<float> decodeStereo(const std::vector<float>& mpx, double mpxRate)
+    {
+        const size_t N = mpx.size();
+
+        // Pilot detection via Goertzel at 19 kHz
+        float pilotEnergy = 0.0f;
+        {
+            float k = 19000.0f / static_cast<float>(mpxRate) * N;
+            float w = 2.0f * static_cast<float>(M_PI) * k / N;
+            float coeff = 2.0f * std::cos(w);
+            float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f;
+            for (size_t i = 0; i < N; i++) {
+                s0 = mpx[i] + coeff * s1 - s2;
+                s2 = s1; s1 = s0;
+            }
+            pilotEnergy = (s1 * s1 + s2 * s2 - coeff * s1 * s2) / (N * N);
+        }
+
+        m_pilotLevel = 0.8f * m_pilotLevel + 0.2f * pilotEnergy;
+        bool stereoNow = (m_pilotLevel > 1e-8f);
+
+        if (stereoNow != m_stereoDetected) {
+            m_stereoDetected = stereoNow;
+            emit stereoStatusChanged(stereoNow);
+        }
+
+        bool doStereo = stereoNow && !m_forceMono;
+
+        // L+R extraction
+        auto monoSignal = applyFIR(mpx, m_monoFilterTaps);
+
+        std::vector<float> leftAudio, rightAudio;
+
+        if (doStereo) {
+            // PLL + 38 kHz demod for L-R
+            std::vector<float> diffRaw(N);
+            for (size_t i = 0; i < N; i++) {
+                float ref = static_cast<float>(std::cos(m_pilotPhase * 2.0));
+                diffRaw[i] = mpx[i] * ref * 2.0f;
+
+                float pilotRef = static_cast<float>(std::sin(m_pilotPhase));
+                float pilotError = mpx[i] * pilotRef;
+                double alpha = 50.0 / mpxRate;
+                m_pilotFreq += alpha * pilotError * 0.1;
+                m_pilotFreq = std::clamp(m_pilotFreq, 18900.0, 19100.0);
+                m_pilotPhase += 2.0 * M_PI * m_pilotFreq / mpxRate;
+                if (m_pilotPhase > 2.0 * M_PI) m_pilotPhase -= 2.0 * M_PI;
+            }
+
+            auto diffSignal = applyFIR(diffRaw, m_diffFilterTaps);
+            size_t len = std::min(monoSignal.size(), diffSignal.size());
+            leftAudio.resize(len);
+            rightAudio.resize(len);
+            for (size_t i = 0; i < len; i++) {
+                leftAudio[i]  = monoSignal[i] + diffSignal[i];
+                rightAudio[i] = monoSignal[i] - diffSignal[i];
+            }
+        } else {
+            leftAudio = monoSignal;
+            rightAudio = monoSignal;
+        }
+
+        // Resample to 48 kHz
+        if (std::abs(mpxRate - 48000.0) > 1.0) {
+            leftAudio = resample(leftAudio, mpxRate, 48000.0);
+            rightAudio = resample(rightAudio, mpxRate, 48000.0);
+        }
+
+        // Per-channel de-emphasis
+        if (m_deemphTau > 0.0f) {
+            float dt = 1.0f / 48000.0f;
+            float alphaD = m_deemphTau / (m_deemphTau + dt);
+            for (auto& s : leftAudio) { m_deemphPrevL = alphaD * m_deemphPrevL + (1.0f - alphaD) * s; s = m_deemphPrevL; }
+            for (auto& s : rightAudio) { m_deemphPrevR = alphaD * m_deemphPrevR + (1.0f - alphaD) * s; s = m_deemphPrevR; }
+        }
+
+        // Per-channel HPF
+        {
+            float rc = 1.0f / (2.0f * static_cast<float>(M_PI) * 250.0f);
+            float dt = 1.0f / 48000.0f;
+            float alpha = rc / (rc + dt);
+            for (auto& s : leftAudio) { float f = alpha * (m_hpfPrevL + s - m_hpfPrevInL); m_hpfPrevInL = s; m_hpfPrevL = f; s = f; }
+            for (auto& s : rightAudio) { float f = alpha * (m_hpfPrevR + s - m_hpfPrevInR); m_hpfPrevInR = s; m_hpfPrevR = f; s = f; }
+        }
+
+        removeDC(m_dcX1L, m_dcY1L, leftAudio);
+        removeDC(m_dcX1R, m_dcY1R, rightAudio);
+
+        // Interleave + soft limiter
+        size_t outLen = std::min(leftAudio.size(), rightAudio.size());
+        std::vector<float> out(outLen * 2);
+        for (size_t i = 0; i < outLen; i++) {
+            float l = leftAudio[i], r = rightAudio[i];
+            if (l > 0.9f) l = 0.9f + 0.1f * std::tanh((l - 0.9f) * 8.0f);
+            else if (l < -0.9f) l = -0.9f + 0.1f * std::tanh((l + 0.9f) * 8.0f);
+            if (r > 0.9f) r = 0.9f + 0.1f * std::tanh((r - 0.9f) * 8.0f);
+            else if (r < -0.9f) r = -0.9f + 0.1f * std::tanh((r + 0.9f) * 8.0f);
+            out[i * 2] = l;
+            out[i * 2 + 1] = r;
+        }
+        return out;
+    }
 
     // ========== Chain Builder ==========
     void rebuildChain()
@@ -180,11 +306,12 @@ private:
         m_realStages.clear();
 
         bool isNBFM = m_bandwidth <= 25000.0;
+        bool isWBFM = !isNBFM;
 
         double rate = m_inputRate;
 
-        // Phase 1: IQ decimation
         double iqTarget = isNBFM ? 200000.0 : 300000.0;
+        iqTarget = std::min(iqTarget, 400000.0);
         const int candidates[] = {10, 8, 5, 4, 3, 2};
 
         while (rate > iqTarget * 2.0) {
@@ -206,35 +333,37 @@ private:
             rate = newRate;
         }
 
-        // Phase 2: Real decimation toward ~50 kHz
-        while (rate > 100000.0) {
-            int best = 0;
-            for (int f : candidates) {
-                if (rate / f >= 48000.0) { best = f; break; }
-            }
-            if (best < 2) break;
-
-            double newRate = rate / best;
-            float cutoff = static_cast<float>(newRate * 0.4);
-            int taps = (best >= 8) ? 33 : (best >= 5) ? 21 : 17;
-
-            DecimStage s;
-            s.taps = designLPF(taps, cutoff, static_cast<float>(rate));
-            s.factor = best;
-            s.outputRate = newRate;
-            m_realStages.push_back(std::move(s));
-            rate = newRate;
-        }
-
-        // Audio filter
-        if (isNBFM) {
-            // NFM: 3.5 kHz audio, 51 taps for sharp cutoff
-            m_audioFilterTaps = designLPF(51, 3500.0f, 48000.0f);
-            if (m_outputGain <= 0.0f) m_outputGain = 2.0f;
-        } else {
-            // WFM: 15 kHz audio
+        if (isWBFM) {
+            // No real decimation — stereo decode needs high rate
+            m_monoFilterTaps = designLPF(63, 15000.0f, static_cast<float>(rate));
+            m_diffFilterTaps = designLPF(63, 15000.0f, static_cast<float>(rate));
             m_audioFilterTaps = designLPF(31, 15000.0f, 48000.0f);
             if (m_outputGain <= 0.0f) m_outputGain = 0.5f;
+        } else {
+            // NBFM: real decimation to ~48 kHz
+            while (rate > 100000.0) {
+                int best = 0;
+                for (int f : candidates) {
+                    if (rate / f >= 48000.0) { best = f; break; }
+                }
+                if (best < 2) break;
+
+                double newRate = rate / best;
+                float cutoff = static_cast<float>(newRate * 0.4);
+                int taps = (best >= 8) ? 33 : (best >= 5) ? 21 : 17;
+
+                DecimStage s;
+                s.taps = designLPF(taps, cutoff, static_cast<float>(rate));
+                s.factor = best;
+                s.outputRate = newRate;
+                m_realStages.push_back(std::move(s));
+                rate = newRate;
+            }
+
+            m_audioFilterTaps = designLPF(51, 3500.0f, 48000.0f);
+            if (m_outputGain <= 0.0f) m_outputGain = 2.0f;
+            m_monoFilterTaps.clear();
+            m_diffFilterTaps.clear();
         }
 
         // IQ bandwidth filter
@@ -252,7 +381,7 @@ private:
                  << "postDecim=" << postDecimRate / 1e3 << "kHz";
     }
 
-    // ========== FIR Filter Design (Hamming window) ==========
+    // ========== Utilities ==========
     static std::vector<float> designLPF(int numTaps, float cutoff, float sampleRate)
     {
         std::vector<float> h(numTaps);
@@ -269,132 +398,87 @@ private:
         return h;
     }
 
-    // ========== Complex IQ decimation ==========
     static std::vector<std::complex<float>> decimateComplex(
-        const std::vector<std::complex<float>>& in,
-        const std::vector<float>& taps, int factor)
+        const std::vector<std::complex<float>>& in, const std::vector<float>& taps, int factor)
     {
-        const size_t N = in.size();
-        const size_t T = taps.size();
+        const size_t N = in.size(), T = taps.size();
         const int half = T / 2;
-
         std::vector<std::complex<float>> out;
         out.reserve(N / factor + 1);
-
         for (size_t i = 0; i < N; i += factor) {
-            float sumR = 0.0f, sumI = 0.0f;
+            float sR = 0.0f, sI = 0.0f;
             for (size_t j = 0; j < T; j++) {
                 int idx = static_cast<int>(i) - half + static_cast<int>(j);
-                if (idx >= 0 && idx < static_cast<int>(N)) {
-                    sumR += in[idx].real() * taps[j];
-                    sumI += in[idx].imag() * taps[j];
-                }
+                if (idx >= 0 && idx < static_cast<int>(N)) { sR += in[idx].real() * taps[j]; sI += in[idx].imag() * taps[j]; }
             }
-            out.emplace_back(sumR, sumI);
+            out.emplace_back(sR, sI);
         }
         return out;
     }
 
-    // ========== Complex FIR filter ==========
     static std::vector<std::complex<float>> applyComplexFIR(
-        const std::vector<std::complex<float>>& in,
-        const std::vector<float>& taps)
+        const std::vector<std::complex<float>>& in, const std::vector<float>& taps)
     {
         if (in.empty() || taps.empty()) return in;
-        const size_t N = in.size();
-        const size_t T = taps.size();
+        const size_t N = in.size(), T = taps.size();
         const int half = T / 2;
-
         std::vector<std::complex<float>> out(N);
         for (size_t i = 0; i < N; i++) {
-            float sumR = 0.0f, sumI = 0.0f;
+            float sR = 0.0f, sI = 0.0f;
             for (size_t j = 0; j < T; j++) {
                 int idx = static_cast<int>(i) - half + static_cast<int>(j);
-                if (idx >= 0 && idx < static_cast<int>(N)) {
-                    sumR += in[idx].real() * taps[j];
-                    sumI += in[idx].imag() * taps[j];
-                }
+                if (idx >= 0 && idx < static_cast<int>(N)) { sR += in[idx].real() * taps[j]; sI += in[idx].imag() * taps[j]; }
             }
-            out[i] = {sumR, sumI};
+            out[i] = {sR, sI};
         }
         return out;
     }
 
-    // ========== Real decimation ==========
-    static std::vector<float> decimateReal(
-        const std::vector<float>& in,
-        const std::vector<float>& taps, int factor)
+    static std::vector<float> decimateReal(const std::vector<float>& in, const std::vector<float>& taps, int factor)
     {
-        const size_t N = in.size();
-        const size_t T = taps.size();
+        const size_t N = in.size(), T = taps.size();
         const int half = T / 2;
-
         std::vector<float> out;
         out.reserve(N / factor + 1);
-
         for (size_t i = 0; i < N; i += factor) {
             float sum = 0.0f;
-            for (size_t j = 0; j < T; j++) {
-                int idx = static_cast<int>(i) - half + static_cast<int>(j);
-                if (idx >= 0 && idx < static_cast<int>(N)) {
-                    sum += in[idx] * taps[j];
-                }
-            }
+            for (size_t j = 0; j < T; j++) { int idx = static_cast<int>(i) - half + static_cast<int>(j); if (idx >= 0 && idx < static_cast<int>(N)) sum += in[idx] * taps[j]; }
             out.push_back(sum);
         }
         return out;
     }
 
-    // ========== Apply FIR ==========
     static std::vector<float> applyFIR(const std::vector<float>& in, const std::vector<float>& taps)
     {
         if (in.empty() || taps.empty()) return in;
-        const size_t N = in.size();
-        const size_t T = taps.size();
+        const size_t N = in.size(), T = taps.size();
         const int half = T / 2;
-
         std::vector<float> out(N);
         for (size_t i = 0; i < N; i++) {
             float sum = 0.0f;
-            for (size_t j = 0; j < T; j++) {
-                int idx = static_cast<int>(i) - half + static_cast<int>(j);
-                if (idx >= 0 && idx < static_cast<int>(N)) {
-                    sum += in[idx] * taps[j];
-                }
-            }
+            for (size_t j = 0; j < T; j++) { int idx = static_cast<int>(i) - half + static_cast<int>(j); if (idx >= 0 && idx < static_cast<int>(N)) sum += in[idx] * taps[j]; }
             out[i] = sum;
         }
         return out;
     }
 
-    // ========== FM Demodulation (conjugate multiply + rate normalization) ==========
     std::vector<float> fmDemod(const std::vector<std::complex<float>>& signal, double rate)
     {
         if (signal.empty()) return {};
-
         std::vector<float> out(signal.size());
-
-        // Conjugate multiply: y[n] = angle(x[n] * conj(x[n-1]))
-        // Rate normalization: delta * rate/(2*pi) = frequency deviation in Hz
-        // Divide by reference deviation to normalize to -1..+1
         float rateNorm = static_cast<float>(rate) / (2.0f * static_cast<float>(M_PI));
         float refDeviation = (m_bandwidth <= 25000.0) ? 5000.0f : 75000.0f;
         float scale = (rateNorm / refDeviation) * m_outputGain * m_rxModIndex;
-
         std::complex<float> prevSample(std::cos(m_lastPhase), std::sin(m_lastPhase));
-
         for (size_t i = 0; i < signal.size(); i++) {
             std::complex<float> product = signal[i] * std::conj(prevSample);
-            float delta = std::atan2(product.imag(), product.real());
-            out[i] = delta * scale;
+            out[i] = std::atan2(product.imag(), product.real()) * scale;
             prevSample = signal[i];
         }
-
         m_lastPhase = std::atan2(prevSample.imag(), prevSample.real());
         return out;
     }
 
-    // ========== Resample ==========
     static std::vector<float> resample(const std::vector<float>& in, double inRate, double outRate)
     {
         if (in.empty()) return in;
@@ -406,24 +490,16 @@ private:
             double pos = i * ratio;
             size_t idx = static_cast<size_t>(pos);
             double frac = pos - idx;
-            if (idx + 1 < in.size())
-                out.push_back(static_cast<float>(in[idx] * (1.0 - frac) + in[idx + 1] * frac));
-            else if (idx < in.size())
-                out.push_back(in[idx]);
+            if (idx + 1 < in.size()) out.push_back(static_cast<float>(in[idx] * (1.0 - frac) + in[idx + 1] * frac));
+            else if (idx < in.size()) out.push_back(in[idx]);
         }
         return out;
     }
 
-    // ========== DC removal ==========
-    void removeDC(std::vector<float>& audio)
+    void removeDC(float& dcX1, float& dcY1, std::vector<float>& audio)
     {
         constexpr float alpha = 0.995f;
-        for (auto& s : audio) {
-            float y = s - m_dcX1 + alpha * m_dcY1;
-            m_dcX1 = s;
-            m_dcY1 = y;
-            s = y;
-        }
+        for (auto& s : audio) { float y = s - dcX1 + alpha * dcY1; dcX1 = s; dcY1 = y; s = y; }
     }
 };
 

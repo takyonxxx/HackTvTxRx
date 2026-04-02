@@ -84,6 +84,7 @@ private:
     QComboBox* m_modulationCombo;
     QComboBox* m_bwCombo;
     QLabel* m_modeLabel;
+    QLabel* m_stereoLabel;
 
     // Volume & Squelch & IF BW (on main screen)
     QSlider* m_volumeSlider;    QLabel* m_volumeLabel;
@@ -109,7 +110,11 @@ private:
     bool m_isTx = false;
     bool m_pttHeld = false;
     bool m_micStarted = false;
+    bool m_forceMono = false;
     uint32_t m_sampleRate = 2000000;
+
+protected:
+    bool eventFilter(QObject *obj, QEvent *event) override;
     float m_squelchLevel = 0.0f;
     float m_lastSignalLevel = 0.0f;
 

@@ -194,24 +194,22 @@ void AudioOutput::processAudio(const std::vector<float>& audioData)
 {
     if (!audioDevice || audioData.empty()) return;
 
-    // Use pre-allocated buffer
-    size_t requiredSize = audioData.size() * 2 * sizeof(qint16);
+    // audioData is already interleaved stereo [L,R,L,R,...] from demodulator
+    // Convert float to int16 directly
+    size_t requiredSize = audioData.size() * sizeof(qint16);
     if (outputBuffer.size() < requiredSize) {
         outputBuffer.resize(requiredSize);
     }
 
     qint16* output = reinterpret_cast<qint16*>(outputBuffer.data());
 
-    // FAST CONVERSION - mono to stereo
     for (size_t i = 0; i < audioData.size(); ++i) {
-        qint16 sample = static_cast<qint16>(
+        output[i] = static_cast<qint16>(
             std::clamp(audioData[i], -1.0f, 1.0f) * 32767.0f
-            );
-        output[i * 2] = sample;      // Left
-        output[i * 2 + 1] = sample;  // Right
+        );
     }
 
-    qint64 bytesToWrite = audioData.size() * 2 * sizeof(qint16);
+    qint64 bytesToWrite = audioData.size() * sizeof(qint16);
     qint64 bytesWritten = 0;
 
     // Blocking write

@@ -202,8 +202,9 @@ void AudioPlayback::writeChunk(const std::vector<float>& audioData)
 {
     if (!m_ioDevice || !m_audioSink || audioData.empty()) return;
 
-    // Mono -> Stereo conversion (volume handled by QAudioSink)
-    size_t requiredSize = audioData.size() * 2 * sizeof(qint16);
+    // audioData is already interleaved stereo [L,R,L,R,...] from demodulator
+    // Just convert float → int16
+    size_t requiredSize = audioData.size() * sizeof(qint16);
     if (static_cast<size_t>(m_outputBuffer.size()) < requiredSize) {
         m_outputBuffer.resize(requiredSize);
     }
@@ -212,9 +213,7 @@ void AudioPlayback::writeChunk(const std::vector<float>& audioData)
 
     for (size_t i = 0; i < audioData.size(); ++i) {
         float sample = std::clamp(audioData[i], -1.0f, 1.0f);
-        qint16 s16 = static_cast<qint16>(sample * 32767.0f);
-        output[i * 2]     = s16;
-        output[i * 2 + 1] = s16;
+        output[i] = static_cast<qint16>(sample * 32767.0f);
     }
 
     qint64 bytesToWrite = static_cast<qint64>(requiredSize);

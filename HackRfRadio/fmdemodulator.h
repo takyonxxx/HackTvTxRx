@@ -7,6 +7,7 @@
 #include <cmath>
 #include <numeric>
 #include <algorithm>
+#include <atomic>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -19,6 +20,8 @@ class FMDemodulator : public QObject
 public:
     explicit FMDemodulator(double inputSampleRate, double bandwidth = 12500.0, QObject *parent = nullptr);
 
+    // Returns interleaved stereo samples [L,R,L,R,...] for WBFM when stereo detected
+    // Returns interleaved mono-duplicated [M,M,M,M,...] for NBFM/mono
     std::vector<float> demodulate(const std::vector<std::complex<float>>& samples);
 
     void setSampleRate(double newRate);
@@ -26,10 +29,16 @@ public:
     double bandwidth() const { return m_bandwidth; }
     void setOutputGain(float gain) { m_outputGain = gain; }
     float outputGain() const { return m_outputGain; }
-    void setDeemphTau(float tauUs) { m_deemphTau = tauUs * 1e-6f; } // input in microseconds
+    void setDeemphTau(float tauUs) { m_deemphTau = tauUs * 1e-6f; }
     float deemphTauUs() const { return m_deemphTau * 1e6f; }
     void setRxModIndex(float idx) { m_rxModIndex = idx; }
     float rxModIndex() const { return m_rxModIndex; }
+
+    bool isStereo() const { return m_stereoDetected.load(); }
+    void setForceMono(bool mono) { m_forceMono = mono; }
+
+signals:
+    void stereoStatusChanged(bool stereo);
 
 private:
     struct DecimStage {
@@ -42,19 +51,31 @@ private:
     double m_bandwidth;
     float m_lastPhase;
     float m_outputGain;
-    float m_rxModIndex = 1.0f;  // RX modulation index (FM sensitivity multiplier)
-    float m_deemphTau;    // de-emphasis time constant in seconds (0 = off)
-    float m_deemphPrev;   // de-emphasis filter state
-    float m_hpfPrev = 0.0f;    // HPF filter state
-    float m_hpfPrevIn = 0.0f;  // HPF previous input
+    float m_rxModIndex = 1.0f;
+    float m_deemphTau;
+    float m_deemphPrevL;  // de-emphasis L channel
+    float m_deemphPrevR;  // de-emphasis R channel
+    float m_hpfPrevL = 0.0f, m_hpfPrevInL = 0.0f;  // HPF L
+    float m_hpfPrevR = 0.0f, m_hpfPrevInR = 0.0f;  // HPF R
 
     std::vector<DecimStage> m_iqStages;
-    std::vector<DecimStage> m_realStages;
+    std::vector<DecimStage> m_realStages;  // only for NBFM
     std::vector<float> m_audioFilterTaps;
     std::vector<float> m_iqBandwidthTaps;
 
-    float m_dcX1 = 0.0f;
-    float m_dcY1 = 0.0f;
+    // Stereo decode state
+    double m_pilotPhase = 0.0;       // PLL phase accumulator for 19 kHz pilot
+    double m_pilotFreq = 19000.0;    // PLL frequency estimate
+    float m_pilotLevel = 0.0f;       // pilot energy for detection
+    std::atomic<bool> m_stereoDetected{false};
+    bool m_forceMono = false;
+    std::vector<float> m_monoFilterTaps;   // LPF for L+R (15 kHz)
+    std::vector<float> m_diffFilterTaps;   // LPF for L-R (15 kHz)
+
+    float m_dcX1L = 0.0f, m_dcY1L = 0.0f;
+    float m_dcX1R = 0.0f, m_dcY1R = 0.0f;
+
+    double m_mpxRate = 0.0;  // rate after IQ decimation (before stereo decode)
 
     void rebuildChain();
 
@@ -70,8 +91,9 @@ private:
         const std::vector<float>& taps, int factor);
     static std::vector<float> applyFIR(const std::vector<float>& in, const std::vector<float>& taps);
     std::vector<float> fmDemod(const std::vector<std::complex<float>>& signal, double rate);
+    std::vector<float> decodeStereo(const std::vector<float>& mpx, double mpxRate);
     static std::vector<float> resample(const std::vector<float>& in, double inRate, double outRate);
-    void removeDC(std::vector<float>& audio);
+    void removeDC(float& dcX1, float& dcY1, std::vector<float>& audio);
 };
 
 #endif // FMDEMODULATOR_H

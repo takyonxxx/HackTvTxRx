@@ -110,6 +110,7 @@ private:
     CFreqCtrl *freqCtrl;
     CPlotter *cPlotter;
     CMeter *cMeter;
+    QLabel *m_stereoLabel;
 
     QString sliderStyle, labelStyle;
 
@@ -165,6 +166,7 @@ private:
     std::atomic<bool> m_shuttingDown{false};
     std::atomic<bool> m_isProcessing;
     bool m_initDone = false;  // guard: prevent saveSettings during constructor
+    bool m_forceMono = false;
     QAtomicInt m_fftUpdatePending{0};  // Frame-drop: skip queuing if update already pending
 
     std::unique_ptr<LowPassFilter> lowPassFilter;
@@ -191,6 +193,7 @@ private:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
 };
 

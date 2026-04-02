@@ -300,6 +300,7 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
             auto demodulatedAudio = wbfmDemodulator->demodulate(samples);
 
             if (!demodulatedAudio.empty()) {
+                // demodulatedAudio is interleaved stereo [L,R,L,R,...]
                 for (auto& sample : demodulatedAudio) {
                     sample = std::clamp(sample * audioGain, -0.9f, 0.9f);
                 }
@@ -763,10 +764,19 @@ void MainWindow::addRxGroup()
     rxLayout->setSpacing(2);
     rxLayout->setContentsMargins(4, 14, 4, 4);
 
-    // Top bar: Meter (30%) | FreqCtrl (70%)
+    // Top bar: Meter (30%) | Stereo | FreqCtrl (70%)
     QHBoxLayout *topLayout = new QHBoxLayout();
     topLayout->setSpacing(4);
     topLayout->addWidget(cMeter, 3);
+
+    m_stereoLabel = new QLabel("", rxGroup);
+    m_stereoLabel->setAlignment(Qt::AlignCenter);
+    m_stereoLabel->setMinimumWidth(70);
+    m_stereoLabel->setCursor(Qt::PointingHandCursor);
+    m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #666666; }");
+    m_stereoLabel->installEventFilter(this);
+    topLayout->addWidget(m_stereoLabel, 0);
+
     topLayout->addWidget(freqCtrl, 7);
     rxLayout->addLayout(topLayout);
 
@@ -1246,6 +1256,20 @@ void MainWindow::executeCommand()
             wbfmDemodulator->setOutputGain(rxGain);
             wbfmDemodulator->setRxModIndex(rxModIndex);
             wbfmDemodulator->setDeemphTau(static_cast<float>(rxDeemph));
+            wbfmDemodulator->setForceMono(m_forceMono);
+
+            // Stereo indicator
+            connect(wbfmDemodulator.get(), &WBFMDemodulator::stereoStatusChanged, this, [this](bool stereo) {
+                if (m_forceMono) {
+                    m_stereoLabel->setText("MONO");
+                    m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #FF9900; }");
+                } else {
+                    m_stereoLabel->setText(stereo ? "STEREO" : "");
+                    m_stereoLabel->setStyleSheet(stereo
+                        ? "QLabel { font-weight: bold; font-size: 16px; color: #00FF66; }"
+                        : "QLabel { font-weight: bold; font-size: 16px; color: #666666; }");
+                }
+            });
         }
 
         cPlotter->setSampleRate(m_sampleRate);
@@ -2063,4 +2087,26 @@ void MainWindow::stopFilePlayback()
     }
     m_filePlayPos = 0;
     qDebug() << "File playback stopped";
+}
+
+bool MainWindow::eventFilter(QObject *obj, QEvent *event)
+{
+    if (obj == m_stereoLabel && event->type() == QEvent::MouseButtonPress) {
+        m_forceMono = !m_forceMono;
+        if (wbfmDemodulator) {
+            wbfmDemodulator->setForceMono(m_forceMono);
+        }
+        if (m_forceMono) {
+            m_stereoLabel->setText("MONO");
+            m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #FF9900; }");
+        } else {
+            bool stereo = wbfmDemodulator ? wbfmDemodulator->isStereo() : false;
+            m_stereoLabel->setText(stereo ? "STEREO" : "");
+            m_stereoLabel->setStyleSheet(stereo
+                ? "QLabel { font-weight: bold; font-size: 16px; color: #00FF66; }"
+                : "QLabel { font-weight: bold; font-size: 16px; color: #666666; }");
+        }
+        return true;
+    }
+    return QMainWindow::eventFilter(obj, event);
 }
