@@ -92,7 +92,7 @@ private:
     // Invert checkbox in fourth row
     QComboBox *outputCombo, *channelCombo, *sampleRateCombo, *rxtxCombo, *inputTypeCombo, *modeCombo;
     QCheckBox *ampEnabled, *colorDisabled;
-    QLineEdit *frequencyEdit, *inputFileEdit, *ffmpegOptionsEdit;
+    QLineEdit *inputFileEdit, *ffmpegOptionsEdit;
     QLabel *channelLabel;
     QPushButton *chooseFileButton, *executeButton, *exitButton, *clearButton, *hardResetButton;
     QSlider *txAmplitudeSlider, *txFilterSizeSlider, *txModulationIndexSlider, *txInterpolationSlider;

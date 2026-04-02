@@ -68,7 +68,6 @@ MainWindow::MainWindow(QWidget *parent)
         setCurrentSampleRate(DEFAULT_SAMPLE_RATE);
     }
     if (m_frequency > 0) {
-        frequencyEdit->setText(QString::number(m_frequency));
         freqCtrl->setFrequency(m_frequency);
         cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
     }
@@ -183,7 +182,6 @@ void MainWindow::setupUi()
     addinputTypeGroup();
     setCentralWidget(centralWidget);
 
-    frequencyEdit->setText(QString::number(m_frequency));
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
     cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
     freqCtrl->setFrequency(m_frequency);
@@ -361,7 +359,7 @@ void MainWindow::updatePlotter(float* fft_data, int size)
 
 void MainWindow::addOutputGroup()
 {
-    // Output device group - professional layout
+    // Output device group - compact single-row layout
     outputGroup = new QGroupBox("Device Settings", this);
     outputGroup->setStyleSheet(
         "QGroupBox { border: 1px solid #0096c8; border-radius: 6px; margin-top: 1.2em; "
@@ -372,7 +370,7 @@ void MainWindow::addOutputGroup()
 
     QGridLayout *outputLayout = new QGridLayout(outputGroup);
     outputLayout->setVerticalSpacing(8);
-    outputLayout->setHorizontalSpacing(8);
+    outputLayout->setHorizontalSpacing(10);
     outputLayout->setContentsMargins(14, 24, 14, 10);
 
     QString settingsLabelStyle = "QLabel { color: #90c8e0; font-size: 11px; font-weight: bold; }";
@@ -389,34 +387,16 @@ void MainWindow::addOutputGroup()
         outputCombo->addItem(device.first, device.second);
     }
     outputCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    outputCombo->setMinimumWidth(120);
 
     QLabel *rxtxLabel = new QLabel("Mode:", this);
     rxtxLabel->setStyleSheet(settingsLabelStyle);
     rxtxCombo = new QComboBox(this);
     rxtxCombo->addItem("RX", "rx");
     rxtxCombo->addItem("TX", "tx");
-    rxtxCombo->setMinimumWidth(70);
-
-    ampEnabled = new QCheckBox("Amp", this);
-    ampEnabled->setMinimumWidth(65);
-    colorDisabled = new QCheckBox("No Color", this);
-    colorDisabled->setMinimumWidth(95);
-
-    channelLabel = new QLabel("Ch:", this);
-    channelLabel->setStyleSheet(settingsLabelStyle);
-    channelCombo = new QComboBox(this);
-    channelCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-
-    QLabel *freqLabel = new QLabel("Freq (Hz):", this);
-    freqLabel->setStyleSheet(settingsLabelStyle);
-    frequencyEdit = new QLineEdit(this);
-    frequencyEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
     QLabel *sampleRateLabel = new QLabel("BW:", this);
     sampleRateLabel->setStyleSheet(settingsLabelStyle);
     sampleRateCombo = new QComboBox(this);
-    sampleRateCombo->setMinimumWidth(80);
 
     std::map<int, QString> sortedSampleRates {
         {2000000, "2"},
@@ -431,38 +411,43 @@ void MainWindow::addOutputGroup()
         sampleRateCombo->addItem(displayText + " MHz", rate);
     }
 
-    // 8-column grid: Label(0) Widget(1) Spacer(2) Label(3) Widget(4) Spacer(5) Label/Check(6) Widget/Check(7)
-    // Row 0: Device [____combo____]  |  Mode [_combo_]  |  Amp  NoColor
-    outputLayout->addWidget(outputLabel,    0, 0);
-    outputLayout->addWidget(outputCombo,    0, 1);
-    outputLayout->addWidget(rxtxLabel,      0, 3);
-    outputLayout->addWidget(rxtxCombo,      0, 4);
-    outputLayout->addWidget(ampEnabled,     0, 6);
-    outputLayout->addWidget(colorDisabled,  0, 7);
+    ampEnabled = new QCheckBox("Amp", this);
+    ampEnabled->setMinimumWidth(65);
+    colorDisabled = new QCheckBox("No Color", this);
+    colorDisabled->setMinimumWidth(95);
 
-    // Row 1: Freq (Hz) [____edit____]  |  BW [_combo_]  |  Ch [_combo_]
-    outputLayout->addWidget(freqLabel,       1, 0);
-    outputLayout->addWidget(frequencyEdit,   1, 1);
-    outputLayout->addWidget(sampleRateLabel, 1, 3);
-    outputLayout->addWidget(sampleRateCombo, 1, 4);
-    outputLayout->addWidget(channelLabel,    1, 6);
-    outputLayout->addWidget(channelCombo,    1, 7);
+    channelLabel = new QLabel("Ch:", this);
+    channelLabel->setStyleSheet(settingsLabelStyle);
+    channelCombo = new QComboBox(this);
+    channelCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
-    // Column stretches: wide-narrow-spacer pattern
-    outputLayout->setColumnStretch(0, 0);   // "Device:" label
-    outputLayout->setColumnStretch(1, 5);   // Device combo — widest
-    outputLayout->setColumnStretch(2, 0);   // spacer col
-    outputLayout->setColumnStretch(3, 0);   // "Mode:" label
-    outputLayout->setColumnStretch(4, 2);   // Mode/BW combo
-    outputLayout->setColumnStretch(5, 0);   // spacer col
-    outputLayout->setColumnStretch(6, 0);   // Amp/Ch label
-    outputLayout->setColumnStretch(7, 2);   // NoColor/Channel combo
+    // frequencyEdit removed — m_frequency is the authoritative source
 
-    // Add spacer columns for visual separation
-    outputLayout->setColumnMinimumWidth(2, 12);
-    outputLayout->setColumnMinimumWidth(5, 12);
+    // Single row: Device [___combo___] | Mode [_combo_] | BW [_combo_] | Amp | NoColor | Ch [_combo_]
+    outputLayout->addWidget(outputLabel,     0, 0);
+    outputLayout->addWidget(outputCombo,     0, 1);
+    outputLayout->addWidget(rxtxLabel,       0, 2);
+    outputLayout->addWidget(rxtxCombo,       0, 3);
+    outputLayout->addWidget(sampleRateLabel, 0, 4);
+    outputLayout->addWidget(sampleRateCombo, 0, 5);
+    outputLayout->addWidget(ampEnabled,      0, 6);
+    outputLayout->addWidget(colorDisabled,   0, 7);
+    outputLayout->addWidget(channelLabel,    0, 8);
+    outputLayout->addWidget(channelCombo,    0, 9);
 
-    int col = 8; // total columns for TX controls row span
+    // Column stretches
+    outputLayout->setColumnStretch(0, 0);  // Device label
+    outputLayout->setColumnStretch(1, 4);  // Device combo - widest
+    outputLayout->setColumnStretch(2, 0);  // Mode label
+    outputLayout->setColumnStretch(3, 2);  // Mode combo
+    outputLayout->setColumnStretch(4, 0);  // BW label
+    outputLayout->setColumnStretch(5, 2);  // BW combo
+    outputLayout->setColumnStretch(6, 0);  // Amp
+    outputLayout->setColumnStretch(7, 0);  // NoColor
+    outputLayout->setColumnStretch(8, 0);  // Ch label
+    outputLayout->setColumnStretch(9, 2);  // Ch combo
+
+    int col = 10; // total columns for TX controls row span
 
     // TX Controls layout (hidden in RX mode)
     txControlsLayout = new QGridLayout();
@@ -768,7 +753,6 @@ void MainWindow::addRxGroup()
         cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
         if (m_isProcessing && m_hackTvLib)
             m_hackTvLib->setFrequency(m_frequency);
-        frequencyEdit->setText(QString::number(m_frequency));
         saveSettings();
     });
 
@@ -1153,7 +1137,6 @@ void MainWindow::onFreqCtrl_setFrequency(qint64 freq)
     cPlotter->setCenterFreq(static_cast<quint64>(freq));
     if (m_isProcessing)
         m_hackTvLib->setFrequency(m_frequency);
-    frequencyEdit->setText(QString::number(m_frequency));
     saveSettings();
 }
 
@@ -1163,7 +1146,6 @@ void MainWindow::on_plotter_newDemodFreq(qint64 freq, qint64 delta)
     cPlotter->setCenterFreq(static_cast<quint64>(freq));
     if (m_isProcessing)
         m_hackTvLib->setFrequency(m_frequency);
-    frequencyEdit->setText(QString::number(m_frequency));
     freqCtrl->setFrequency(m_frequency);
     saveSettings();
 }
@@ -1185,9 +1167,8 @@ void MainWindow::executeCommand()
 
     if (executeButton->text() == "START")
     {
-        // CRITICAL: frequencyEdit is the authoritative frequency source.
-        // Sync m_frequency, freqCtrl and cPlotter from it before anything else.
-        m_frequency = frequencyEdit->text().toLongLong();
+        // m_frequency is the authoritative frequency source.
+        // Sync freqCtrl and cPlotter from it before anything else.
         freqCtrl->setFrequency(m_frequency);
 
         // Hard reset: destroy existing instance and create fresh one
@@ -1449,11 +1430,10 @@ QStringList MainWindow::buildCommand()
     }
 
     m_sampleRate =  sampleRateCombo->currentData().toInt();
-    m_frequency = frequencyEdit->text().toLongLong();
 
     auto sample_rate = QString::number(m_sampleRate);
 
-    args << "-f" << frequencyEdit->text()
+    args << "-f" << QString::number(m_frequency)
          << "-s" << sample_rate
          << "-m" << modeCombo->currentData().toString();
 
@@ -1724,9 +1704,9 @@ void MainWindow::populateChannelCombo()
 void MainWindow::onChannelChanged(int index)
 {
     long long frequency = channelCombo->itemData(index).toLongLong();
-    frequencyEdit->setText(QString::number(frequency));
-    freqCtrl->setFrequency(frequency);
     m_frequency = frequency;
+    freqCtrl->setFrequency(frequency);
+    cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
     if(m_isProcessing)
     {
         m_hackTvLib->setFrequency(m_frequency);
@@ -1782,8 +1762,7 @@ void MainWindow::hardReset()
     // 5. Reset UI state
     executeButton->setText("START");
 
-    // 6. Sync frequency from frequencyEdit (authoritative source)
-    m_frequency = frequencyEdit->text().toLongLong();
+    // 6. Sync frequency from m_frequency (authoritative source)
     freqCtrl->setFrequency(m_frequency);
     cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
     cPlotter->setSampleRate(m_sampleRate);
