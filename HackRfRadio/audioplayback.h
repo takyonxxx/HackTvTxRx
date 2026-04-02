@@ -37,10 +37,10 @@ private:
     QIODevice* m_ioDevice = nullptr;
 
     // Ring buffer - large for TCP jitter absorption
-    static constexpr size_t RING_SIZE = 960000;         // 20s at 48kHz
+    static constexpr size_t RING_SIZE = 480000;          // 10s at 48kHz
     static constexpr size_t CHUNK_SIZE = 1024;           // samples per write
-    static constexpr size_t MIN_BUFFER_SAMPLES = 4800;   // 100ms priming
-    static constexpr size_t MAX_QUEUE_SIZE = 480000;     // 10s max
+    static constexpr size_t MIN_BUFFER_SAMPLES = 2400;   // 50ms priming
+    static constexpr size_t MAX_QUEUE_SIZE = 240000;     // 5s max
     static constexpr int SAMPLE_RATE = 48000;
 
     std::vector<float> m_ring;

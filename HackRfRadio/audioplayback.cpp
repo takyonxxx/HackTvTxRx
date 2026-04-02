@@ -34,7 +34,7 @@ bool AudioPlayback::initAudioSink()
     qDebug() << "Using audio output:" << outputDevice.description();
 
     m_audioSink = std::make_unique<QAudioSink>(outputDevice, m_format);
-    m_audioSink->setBufferSize(2 * 1024 * 1024); // 2MB buffer
+    m_audioSink->setBufferSize(48000 * 2 * 2); // 500ms stereo buffer — low latency
 
     m_ioDevice = m_audioSink->start();
     if (!m_ioDevice || !m_ioDevice->isOpen()) {
@@ -53,6 +53,9 @@ bool AudioPlayback::start()
     if (!initAudioSink()) return false;
 
     m_running.store(true);
+
+    // Apply stored volume to the sink
+    m_audioSink->setVolume(static_cast<qreal>(m_volume.load()));
 
     // Writer thread - uses QThread::create to avoid moveToThread issues
     m_writerThread.setObjectName("AudioWriter");
@@ -134,7 +137,12 @@ void AudioPlayback::enqueueAudio(const std::vector<float>& samples)
 
 void AudioPlayback::setVolume(float vol)
 {
-    m_volume.store(std::clamp(vol, 0.0f, 1.0f));
+    vol = std::clamp(vol, 0.0f, 1.0f);
+    m_volume.store(vol);
+    // Apply directly to audio sink for instant response
+    if (m_audioSink) {
+        m_audioSink->setVolume(static_cast<qreal>(vol));
+    }
 }
 
 void AudioPlayback::writerLoop()
@@ -194,9 +202,7 @@ void AudioPlayback::writeChunk(const std::vector<float>& audioData)
 {
     if (!m_ioDevice || !m_audioSink || audioData.empty()) return;
 
-    float vol = m_volume.load();
-
-    // Mono -> Stereo conversion
+    // Mono -> Stereo conversion (volume handled by QAudioSink)
     size_t requiredSize = audioData.size() * 2 * sizeof(qint16);
     if (static_cast<size_t>(m_outputBuffer.size()) < requiredSize) {
         m_outputBuffer.resize(requiredSize);
@@ -205,10 +211,10 @@ void AudioPlayback::writeChunk(const std::vector<float>& audioData)
     qint16* output = reinterpret_cast<qint16*>(m_outputBuffer.data());
 
     for (size_t i = 0; i < audioData.size(); ++i) {
-        float sample = std::clamp(audioData[i] * vol, -1.0f, 1.0f);
+        float sample = std::clamp(audioData[i], -1.0f, 1.0f);
         qint16 s16 = static_cast<qint16>(sample * 32767.0f);
-        output[i * 2]     = s16; // Left
-        output[i * 2 + 1] = s16; // Right
+        output[i * 2]     = s16;
+        output[i * 2 + 1] = s16;
     }
 
     qint64 bytesToWrite = static_cast<qint64>(requiredSize);

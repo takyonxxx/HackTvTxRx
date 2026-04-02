@@ -52,6 +52,7 @@ private slots:
     void onVolumeChanged(int value);
     void onSquelchChanged(int value);
     void onSettingsClicked();
+    void onBwChanged(int index);
 
 private:
     void setupUi();
@@ -81,6 +82,7 @@ private:
 
     // Mode
     QComboBox* m_modulationCombo;
+    QComboBox* m_bwCombo;
     QLabel* m_modeLabel;
 
     // Volume & Squelch & IF BW (on main screen)

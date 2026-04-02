@@ -23,8 +23,7 @@ RadioWindow::RadioWindow(QWidget *parent)
     , m_gainDialog(nullptr)
 {
     setWindowTitle("HackRF Radio");
-    // iPhone 16 Pro: 393 x 852 pt logical resolution
-    setMinimumSize(393, 750);
+    setMinimumSize(320, 600);
     resize(393, 852);
 
     setupUi();
@@ -84,6 +83,7 @@ void RadioWindow::saveSettings()
 
     // Modulation
     s.setValue("modulation", m_modulationCombo->currentIndex());
+    s.setValue("bwIndex", m_bwCombo->currentIndex());
 
     // Volume & Squelch
     s.setValue("volume", m_volumeSlider->value());
@@ -125,6 +125,9 @@ void RadioWindow::loadSettings()
     uint64_t freq = s.value("frequency", 145000000ULL).toULongLong();
     m_freqWidget->setFrequency(freq);
     m_bandPreset->setCurrentIndex(s.value("bandPreset", 0).toInt());
+
+    // Bandwidth (restore before modulation, so onModulationChanged uses correct rate)
+    m_bwCombo->setCurrentIndex(s.value("bwIndex", 0).toInt());
 
     // Modulation
     m_modulationCombo->setCurrentIndex(s.value("modulation", 0).toInt());
@@ -221,7 +224,23 @@ void RadioWindow::setupUi()
     connect(m_freqWidget, &FrequencyWidget::frequencyChanged, this, &RadioWindow::onFrequencyChanged);
     mainLayout->addWidget(m_freqWidget);
 
-    // Band preset selector - touch-friendly
+    // Band preset + BW selector - same row
+    QHBoxLayout* bandBwRow = new QHBoxLayout();
+    bandBwRow->setSpacing(6);
+
+    m_bwCombo = new QComboBox();
+    m_bwCombo->setMinimumHeight(44);
+    m_bwCombo->addItem("2 MHz",   2000000);
+    m_bwCombo->addItem("4 MHz",   4000000);
+    m_bwCombo->addItem("8 MHz",   8000000);
+    m_bwCombo->addItem("10 MHz",  10000000);
+    m_bwCombo->addItem("12.5 MHz",12500000);
+    m_bwCombo->addItem("16 MHz",  16000000);
+    m_bwCombo->addItem("20 MHz",  20000000);
+    m_bwCombo->setCurrentIndex(0);
+    connect(m_bwCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &RadioWindow::onBwChanged);
+
     m_bandPreset = new QComboBox();
     m_bandPreset->setMinimumHeight(44);
     m_bandPreset->addItem("VHF - 2m Amateur (144-148 MHz)", QVariant::fromValue(145000000ULL));
@@ -234,7 +253,10 @@ void RadioWindow::setupUi()
     m_bandPreset->addItem("HF - CB 27 MHz", QVariant::fromValue(27005000ULL));
     m_bandPreset->addItem("Custom", QVariant::fromValue(0ULL));
     connect(m_bandPreset, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &RadioWindow::onBandPresetChanged);
-    mainLayout->addWidget(m_bandPreset);
+
+    bandBwRow->addWidget(m_bwCombo, 0);
+    bandBwRow->addWidget(m_bandPreset, 1);
+    mainLayout->addLayout(bandBwRow);
 
     // ──────────────────────────────────────────────
     // MODE selector row
@@ -274,11 +296,14 @@ void RadioWindow::setupUi()
     // SIGNAL METER (CMeter bar) + SPECTRUM (CPlotter, no waterfall)
     // ──────────────────────────────────────────────
     m_cMeter = new CMeter(this);
-    m_cMeter->setMinimumHeight(35);
-    m_cMeter->setMaximumHeight(45);
+    m_cMeter->setMinimumHeight(55);
+    m_cMeter->setMaximumHeight(65);
     mainLayout->addWidget(m_cMeter);
 
+    mainLayout->addSpacing(10);
+
     m_cPlotter = new CPlotter(this);
+    m_cPlotter->setContentsMargins(0, 12, 8, 0); // top+right padding for labels
     m_cPlotter->setSampleRate(m_sampleRate);
     m_cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
     m_cPlotter->setCenterFreq(100000000ULL);
@@ -795,10 +820,12 @@ void RadioWindow::onModulationChanged(int index)
         m_modeLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #FF6666;");
         break;
     }
-    m_sampleRate = 2000000;
+    m_sampleRate = m_bwCombo->currentData().toUInt();
     if (m_tcpClient->isConnected()) m_tcpClient->setSampleRate(m_sampleRate);
     m_fmDemod->setSampleRate(m_sampleRate);
     m_amDemod->setSampleRate(m_sampleRate);
+    m_cPlotter->setSampleRate(m_sampleRate);
+    m_cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
 
     // Re-apply RX gain after rebuildChain (setBandwidth/setSampleRate resets it)
     float rxGain = m_gainDialog->rxGain() / 10.0f;
@@ -821,6 +848,33 @@ void RadioWindow::onSquelchChanged(int value)
 {
     m_squelchLabel->setText(QString("%1%").arg(value));
     m_squelchLevel = value / 100.0f;
+}
+
+// ============================================================
+// Bandwidth
+// ============================================================
+
+void RadioWindow::onBwChanged(int index)
+{
+    Q_UNUSED(index);
+    m_sampleRate = m_bwCombo->currentData().toUInt();
+
+    if (m_tcpClient->isConnected())
+        m_tcpClient->setSampleRate(m_sampleRate);
+
+    m_fmDemod->setSampleRate(m_sampleRate);
+    m_amDemod->setSampleRate(m_sampleRate);
+    m_cPlotter->setSampleRate(m_sampleRate);
+    m_cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
+
+    // Re-apply RX gain after rebuildChain
+    float rxGain = m_gainDialog->rxGain() / 10.0f;
+    m_fmDemod->setOutputGain(rxGain);
+    m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
+    m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
+
+    saveSettings();
+    qDebug() << "BW changed to" << m_sampleRate / 1e6 << "MHz";
 }
 
 // ============================================================

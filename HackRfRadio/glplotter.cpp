@@ -191,13 +191,14 @@ void CPlotter::drawGrid(QPainter &painter, int w, int h)
     QColor gridCol = PLOTTER_GRID_COLOR;
 
     // Horizontal grid (dB) — draw as filled rects for reliable OpenGL rendering
-    float pixPerDb = (float)plotH / fabs(m_PandMaxdB - m_PandMindB);
+    const int topMargin = 10; // prevent top label clipping
+    float pixPerDb = (float)(plotH - topMargin) / fabs(m_PandMaxdB - m_PandMindB);
     float dbStep = 10.0f;
     if (pixPerDb * dbStep < 20) dbStep = 20.0f;
     if (pixPerDb * dbStep < 20) dbStep = 40.0f;
 
     for (float db = ceil(m_PandMindB / dbStep) * dbStep; db <= m_PandMaxdB; db += dbStep) {
-        int y = (int)((m_PandMaxdB - db) * pixPerDb);
+        int y = topMargin + (int)((m_PandMaxdB - db) * pixPerDb);
         if (y < 0 || y >= plotH) continue;
         painter.fillRect(m_YAxisWidth, y, plotW, 1, gridCol);
         painter.setPen(PLOTTER_TEXT_COLOR);
