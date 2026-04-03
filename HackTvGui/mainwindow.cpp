@@ -117,6 +117,16 @@ MainWindow::MainWindow(QWidget *parent)
         rxDeemphSlider->setValue(rxDeemph);
         rxDeemphLevelLabel->setText(rxDeemph == 0 ? "OFF" : QString("%1us").arg(rxDeemph));
     }
+    if (rxDemodCombo) {
+        rxDemodCombo->setCurrentIndex(m_rxDemodMode);
+    }
+    if (rxBwCombo) {
+        for (int i = 0; i < rxBwCombo->count(); i++) {
+            if (rxBwCombo->itemData(i).toInt() == m_rxBandwidth) {
+                rxBwCombo->setCurrentIndex(i); break;
+            }
+        }
+    }
 
     // Restore checkboxes from settings
     {
@@ -294,10 +304,18 @@ void MainWindow::handleReceivedData(const int8_t *data, size_t len)
 
 void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
 {
-    if (wbfmDemodulator && audioOutput)
+    if (audioOutput)
     {
         try {
-            auto demodulatedAudio = wbfmDemodulator->demodulate(samples);
+            std::vector<float> demodulatedAudio;
+
+            if (m_rxDemodMode == 1 && amDemodulator) {
+                // AM demodulation
+                demodulatedAudio = amDemodulator->demodulate(samples);
+            } else if (wbfmDemodulator) {
+                // FM demodulation (default)
+                demodulatedAudio = wbfmDemodulator->demodulate(samples);
+            }
 
             if (!demodulatedAudio.empty()) {
                 // demodulatedAudio is interleaved stereo [L,R,L,R,...]
@@ -308,7 +326,7 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
             }
         }
         catch (const std::exception& e) {
-            qCritical() << "Exception in FM signal processing:" << e.what();
+            qCritical() << "Exception in signal processing:" << e.what();
         }
     }
 }
@@ -907,8 +925,138 @@ void MainWindow::addRxGroup()
     rtlDirectCombo->setVisible(false);
     rtlOffsetCheck->setVisible(false);
 
-    // Row 2: RX Gain | FM Mod Index | De-Emphasis (FM demodulator controls)
+    // Row 2: Demod Mode | Bandwidth | RX Gain | FM Mod Index | De-Emphasis
     QString rxSliderLabel = "QLabel { color: #c8f0ff; font-size: 11px; font-weight: bold; }";
+
+    // Demod mode selector (FM / AM)
+    QLabel *demodLabel = new QLabel("Demod:", rxGroup);
+    demodLabel->setStyleSheet(rxSliderLabel);
+    rxDemodCombo = new QComboBox(rxGroup);
+    rxDemodCombo->addItem("FM", 0);
+    rxDemodCombo->addItem("AM", 1);
+    rxDemodCombo->setCurrentIndex(m_rxDemodMode);
+    rxDemodCombo->setToolTip("FM for broadcast radio, AM for air band (108-136 MHz)");
+    rxDemodCombo->setFixedWidth(60);
+    controlsGrid->addWidget(demodLabel, 2, 0);
+    controlsGrid->addWidget(rxDemodCombo, 2, 1);
+
+    // Bandwidth selector
+    QLabel *bwLabel = new QLabel("BW:", rxGroup);
+    bwLabel->setStyleSheet(rxSliderLabel);
+    rxBwCombo = new QComboBox(rxGroup);
+    rxBwCombo->addItem("6 kHz", 6000);
+    rxBwCombo->addItem("8 kHz", 8000);
+    rxBwCombo->addItem("10 kHz", 10000);
+    rxBwCombo->addItem("12.5 kHz", 12500);
+    rxBwCombo->addItem("15 kHz", 15000);
+    rxBwCombo->addItem("25 kHz", 25000);
+    rxBwCombo->addItem("50 kHz", 50000);
+    rxBwCombo->addItem("100 kHz", 100000);
+    rxBwCombo->addItem("150 kHz", 150000);
+    rxBwCombo->addItem("200 kHz", 200000);
+    rxBwCombo->setToolTip("Receiver bandwidth (narrow for AM air band, wide for FM broadcast)");
+    rxBwCombo->setFixedWidth(90);
+
+    // Set initial BW from saved m_CutFreq
+    int bwInitIdx = 0;
+    for (int i = 0; i < rxBwCombo->count(); i++) {
+        if (rxBwCombo->itemData(i).toInt() == m_rxBandwidth) {
+            bwInitIdx = i; break;
+        }
+    }
+    rxBwCombo->setCurrentIndex(bwInitIdx);
+
+    controlsGrid->addWidget(bwLabel, 2, 3);
+    controlsGrid->addWidget(rxBwCombo, 2, 4);
+
+    // Connect bandwidth change
+    connect(rxBwCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        m_rxBandwidth = rxBwCombo->currentData().toInt();
+        m_CutFreq = m_rxBandwidth;
+        m_HiCutFreq = m_rxBandwidth;
+        m_LowCutFreq = -m_rxBandwidth;
+
+        // Update plotter filter display
+        cPlotter->setDemodRanges(-m_rxBandwidth * 2, -1000, 1000, m_rxBandwidth * 2, true);
+        cPlotter->setHiLowCutFrequencies(m_LowCutFreq, m_HiCutFreq);
+
+        // Update active demodulator bandwidth
+        if (m_isProcessing) {
+            if (wbfmDemodulator)
+                wbfmDemodulator->setBandwidth(m_rxBandwidth);
+            if (amDemodulator)
+                amDemodulator->setBandwidth(m_rxBandwidth);
+        }
+        if (lowPassFilter)
+            lowPassFilter->designFilter(m_sampleRate, m_CutFreq, 50000);
+
+        qDebug() << "RX bandwidth changed:" << m_rxBandwidth / 1000.0 << "kHz";
+        saveSettings();
+    });
+
+    // Helper lambda to set bandwidth by value (finds closest combo entry)
+    auto setBandwidthCombo = [this](int bwHz) {
+        int bestIdx = 0;
+        int bestDiff = std::abs(rxBwCombo->itemData(0).toInt() - bwHz);
+        for (int i = 1; i < rxBwCombo->count(); i++) {
+            int diff = std::abs(rxBwCombo->itemData(i).toInt() - bwHz);
+            if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+        }
+        rxBwCombo->setCurrentIndex(bestIdx);
+    };
+
+    // Connect demod mode change
+    connect(rxDemodCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, setBandwidthCombo](int index) {
+        m_rxDemodMode = index;
+        bool isAM = (m_rxDemodMode == 1);
+
+        // Auto-set bandwidth for the mode
+        if (isAM) {
+            setBandwidthCombo(10000);   // 10 kHz for AM air band
+        } else {
+            setBandwidthCombo(150000);  // 150 kHz for WBFM broadcast
+        }
+
+        // Hide FM-specific controls in AM mode
+        rxModIndexLabel->setVisible(!isAM);
+        rxModIndexSlider->setVisible(!isAM);
+        rxModIndexLevelLabel->setVisible(!isAM);
+        rxDeemphLabel->setVisible(!isAM);
+        rxDeemphSlider->setVisible(!isAM);
+        rxDeemphLevelLabel->setVisible(!isAM);
+
+        // Update stereo label
+        if (isAM) {
+            m_stereoLabel->setText("AM");
+            m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #FF9900; }");
+        } else {
+            m_stereoLabel->setText("");
+            m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #666666; }");
+        }
+
+        // If currently running, switch demodulator live
+        if (m_isProcessing) {
+            if (isAM) {
+                wbfmDemodulator.reset();
+                amDemodulator = std::make_unique<AMDemodulator>(
+                    static_cast<double>(m_sampleRate),
+                    static_cast<double>(m_CutFreq));
+                amDemodulator->setOutputGain(rxGain);
+                qDebug() << "Switched to AM demod (live), BW:" << m_CutFreq;
+            } else {
+                amDemodulator.reset();
+                wbfmDemodulator = std::make_unique<WBFMDemodulator>(
+                    static_cast<double>(m_sampleRate),
+                    std::max(150000.0, static_cast<double>(m_CutFreq) * 2.0));
+                wbfmDemodulator->setOutputGain(rxGain);
+                wbfmDemodulator->setRxModIndex(rxModIndex);
+                wbfmDemodulator->setDeemphTau(static_cast<float>(rxDeemph));
+                wbfmDemodulator->setForceMono(m_forceMono);
+                qDebug() << "Switched to FM demod (live), BW:" << m_CutFreq;
+            }
+        }
+        saveSettings();
+    });
 
     rxGainLabel = new QLabel("Gain:", rxGroup);
     rxGainLabel->setStyleSheet(rxSliderLabel);
@@ -919,9 +1067,9 @@ void MainWindow::addRxGroup()
     rxGainLevelLabel->setAlignment(Qt::AlignCenter);
     rxGainLevelLabel->setFixedWidth(32);
     rxGainLevelLabel->setStyleSheet(labelStyle);
-    controlsGrid->addWidget(rxGainLabel, 2, 0);
-    controlsGrid->addWidget(rxGainSlider, 2, 1);
-    controlsGrid->addWidget(rxGainLevelLabel, 2, 2);
+    controlsGrid->addWidget(rxGainLabel, 3, 0);
+    controlsGrid->addWidget(rxGainSlider, 3, 1);
+    controlsGrid->addWidget(rxGainLevelLabel, 3, 2);
 
     rxModIndexLabel = new QLabel("ModIdx:", rxGroup);
     rxModIndexLabel->setStyleSheet(rxSliderLabel);
@@ -932,9 +1080,9 @@ void MainWindow::addRxGroup()
     rxModIndexLevelLabel->setAlignment(Qt::AlignCenter);
     rxModIndexLevelLabel->setFixedWidth(32);
     rxModIndexLevelLabel->setStyleSheet(labelStyle);
-    controlsGrid->addWidget(rxModIndexLabel, 2, 3);
-    controlsGrid->addWidget(rxModIndexSlider, 2, 4);
-    controlsGrid->addWidget(rxModIndexLevelLabel, 2, 5);
+    controlsGrid->addWidget(rxModIndexLabel, 3, 3);
+    controlsGrid->addWidget(rxModIndexSlider, 3, 4);
+    controlsGrid->addWidget(rxModIndexLevelLabel, 3, 5);
 
     rxDeemphLabel = new QLabel("DeEm:", rxGroup);
     rxDeemphLabel->setStyleSheet(rxSliderLabel);
@@ -945,15 +1093,16 @@ void MainWindow::addRxGroup()
     rxDeemphLevelLabel->setAlignment(Qt::AlignCenter);
     rxDeemphLevelLabel->setFixedWidth(32);
     rxDeemphLevelLabel->setStyleSheet(labelStyle);
-    controlsGrid->addWidget(rxDeemphLabel, 2, 6);
-    controlsGrid->addWidget(rxDeemphSlider, 2, 7);
-    controlsGrid->addWidget(rxDeemphLevelLabel, 2, 8);
+    controlsGrid->addWidget(rxDeemphLabel, 3, 6);
+    controlsGrid->addWidget(rxDeemphSlider, 3, 7);
+    controlsGrid->addWidget(rxDeemphLevelLabel, 3, 8);
 
     // Connect RX demod sliders
     connect(rxGainSlider, &QSlider::valueChanged, this, [this](int value) {
         rxGain = value / 10.0f;
         rxGainLevelLabel->setText(QString::number(rxGain, 'f', 1));
         if (wbfmDemodulator) wbfmDemodulator->setOutputGain(rxGain);
+        if (amDemodulator) amDemodulator->setOutputGain(rxGain);
         saveSettings();
     });
 
@@ -1077,6 +1226,8 @@ void MainWindow::saveSettings()
     settings.setValue("rxGain_i", static_cast<int>(rxGain * 1000));
     settings.setValue("rxModIndex_i", static_cast<int>(rxModIndex * 1000));
     settings.setValue("rxDeemph", rxDeemph);
+    settings.setValue("rxDemodMode", m_rxDemodMode);
+    settings.setValue("rxBandwidth", m_rxBandwidth);
     settings.setValue("ampEnabled", ampEnabled->isChecked());
     settings.setValue("colorDisabled", colorDisabled->isChecked());
     settings.endGroup();
@@ -1112,6 +1263,8 @@ void MainWindow::loadSettings()
     if (settings.contains("rxModIndex_i"))
         rxModIndex = settings.value("rxModIndex_i").toInt() / 1000.0f;
     rxDeemph = settings.value("rxDeemph", 0).toInt();
+    m_rxDemodMode = settings.value("rxDemodMode", 0).toInt();
+    m_rxBandwidth = settings.value("rxBandwidth", 150000).toInt();
     settings.endGroup();
 }
 
@@ -1159,8 +1312,25 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
     m_LowCutFreq = low;
     m_HiCutFreq = high;
     m_CutFreq = std::abs(high);
+    m_rxBandwidth = m_CutFreq;
+
+    // Sync BW combo (block signals to avoid recursive update)
+    if (rxBwCombo) {
+        rxBwCombo->blockSignals(true);
+        int bestIdx = 0;
+        int bestDiff = std::abs(rxBwCombo->itemData(0).toInt() - m_rxBandwidth);
+        for (int i = 1; i < rxBwCombo->count(); i++) {
+            int diff = std::abs(rxBwCombo->itemData(i).toInt() - m_rxBandwidth);
+            if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+        }
+        rxBwCombo->setCurrentIndex(bestIdx);
+        rxBwCombo->blockSignals(false);
+    }
+
     if (m_isProcessing && wbfmDemodulator)
         wbfmDemodulator->setBandwidth(m_CutFreq);
+    if (m_isProcessing && amDemodulator)
+        amDemodulator->setBandwidth(m_CutFreq);
     if (m_isProcessing && lowPassFilter)
         lowPassFilter->designFilter(m_sampleRate, m_CutFreq, 50000);
     saveSettings();
@@ -1247,29 +1417,48 @@ void MainWindow::executeCommand()
             rationalResampler = std::make_unique<RationalResampler>(rxInterpolation, rxDecimation);
             fmDemodulator = std::make_unique<FMDemodulator>(postLpfRate, rxAudioDecimation);
 
-            // New multi-stage WBFM demodulator (replaces the above chain for actual processing)
-            wbfmDemodulator = std::make_unique<WBFMDemodulator>(
-                static_cast<double>(m_sampleRate),
-                std::max(150000.0, static_cast<double>(m_CutFreq) * 2.0));
+            // New multi-stage demodulator (FM or AM based on mode selection)
+            amDemodulator.reset();
+            wbfmDemodulator.reset();
 
-            // Apply saved demod settings
-            wbfmDemodulator->setOutputGain(rxGain);
-            wbfmDemodulator->setRxModIndex(rxModIndex);
-            wbfmDemodulator->setDeemphTau(static_cast<float>(rxDeemph));
-            wbfmDemodulator->setForceMono(m_forceMono);
+            // Sync bandwidth from combo selection
+            m_CutFreq = m_rxBandwidth;
 
-            // Stereo indicator
-            connect(wbfmDemodulator.get(), &WBFMDemodulator::stereoStatusChanged, this, [this](bool stereo) {
-                if (m_forceMono) {
-                    m_stereoLabel->setText("MONO");
-                    m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #FF9900; }");
-                } else {
-                    m_stereoLabel->setText(stereo ? "STEREO" : "");
-                    m_stereoLabel->setStyleSheet(stereo
-                        ? "QLabel { font-weight: bold; font-size: 16px; color: #00FF66; }"
-                        : "QLabel { font-weight: bold; font-size: 16px; color: #666666; }");
-                }
-            });
+            if (m_rxDemodMode == 1) {
+                // AM demodulator for air band
+                amDemodulator = std::make_unique<AMDemodulator>(
+                    static_cast<double>(m_sampleRate),
+                    static_cast<double>(m_CutFreq));
+                amDemodulator->setOutputGain(rxGain);
+                m_stereoLabel->setText("AM");
+                m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #FF9900; }");
+                qDebug() << "RX: AM demod created - airband mode";
+            } else {
+                // FM demodulator (default)
+                wbfmDemodulator = std::make_unique<WBFMDemodulator>(
+                    static_cast<double>(m_sampleRate),
+                    std::max(150000.0, static_cast<double>(m_CutFreq) * 2.0));
+
+                // Apply saved demod settings
+                wbfmDemodulator->setOutputGain(rxGain);
+                wbfmDemodulator->setRxModIndex(rxModIndex);
+                wbfmDemodulator->setDeemphTau(static_cast<float>(rxDeemph));
+                wbfmDemodulator->setForceMono(m_forceMono);
+
+                // Stereo indicator
+                connect(wbfmDemodulator.get(), &WBFMDemodulator::stereoStatusChanged, this, [this](bool stereo) {
+                    if (m_forceMono) {
+                        m_stereoLabel->setText("MONO");
+                        m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #FF9900; }");
+                    } else {
+                        m_stereoLabel->setText(stereo ? "STEREO" : "");
+                        m_stereoLabel->setStyleSheet(stereo
+                            ? "QLabel { font-weight: bold; font-size: 16px; color: #00FF66; }"
+                            : "QLabel { font-weight: bold; font-size: 16px; color: #666666; }");
+                    }
+                });
+                qDebug() << "RX: FM demod created";
+            }
         }
 
         cPlotter->setSampleRate(m_sampleRate);
@@ -1612,6 +1801,8 @@ void MainWindow::onSampleRateChanged(int index)
         executeButton->setText("START");    lowPassFilter->designFilter(m_sampleRate, m_CutFreq, 10e3);
         if (wbfmDemodulator)
             wbfmDemodulator->setSampleRate(static_cast<double>(m_sampleRate));
+        if (amDemodulator)
+            amDemodulator->setSampleRate(static_cast<double>(m_sampleRate));
         cPlotter->setSampleRate(m_sampleRate);
         cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
         cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
@@ -1772,6 +1963,7 @@ void MainWindow::hardReset()
     rationalResampler.reset();
     fmDemodulator.reset();
     wbfmDemodulator.reset();
+    amDemodulator.reset();
 
     // 5. Reset UI state
     executeButton->setText("START");
@@ -2092,6 +2284,9 @@ void MainWindow::stopFilePlayback()
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 {
     if (obj == m_stereoLabel && event->type() == QEvent::MouseButtonPress) {
+        // In AM mode, stereo label shows "AM" and is not toggleable
+        if (m_rxDemodMode == 1) return true;
+
         m_forceMono = !m_forceMono;
         if (wbfmDemodulator) {
             wbfmDemodulator->setForceMono(m_forceMono);

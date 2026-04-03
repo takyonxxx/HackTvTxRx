@@ -173,6 +173,11 @@ private:
     std::unique_ptr<RationalResampler> rationalResampler;
     std::unique_ptr<FMDemodulator> fmDemodulator;
     std::unique_ptr<WBFMDemodulator> wbfmDemodulator;
+    std::unique_ptr<AMDemodulator> amDemodulator;
+    QComboBox *rxDemodCombo;
+    QComboBox *rxBwCombo;
+    int m_rxDemodMode = 0; // 0=FM, 1=AM
+    int m_rxBandwidth = 150000; // Hz, default WBFM
     QImage currentFrame;
 
     // GUI-side audio capture for FM TX (replaces PortAudio in DLL)
