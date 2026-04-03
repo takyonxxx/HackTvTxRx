@@ -6,26 +6,50 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScroller>
 
 GainSettingsDialog::GainSettingsDialog(TcpClient* tcpClient, FMDemodulator* fmDemod, AMDemodulator* amDemod, QWidget *parent)
-    : QDialog(parent)
+    : QWidget(parent)
     , m_tcpClient(tcpClient)
     , m_fmDemod(fmDemod)
     , m_amDemod(amDemod)
 {
-    setWindowTitle("Gain & TX Parameters");
-    setModal(false);
     setupUi();
 }
 
 void GainSettingsDialog::setupUi()
 {
-    QVBoxLayout* mainLayout = new QVBoxLayout(this);
-    mainLayout->setSpacing(12);
-    mainLayout->setContentsMargins(16, 16, 16, 16);
+    QVBoxLayout* outerLayout = new QVBoxLayout(this);
+    outerLayout->setSpacing(0);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
 
-    setStyleSheet(R"(
-        QDialog { background-color: #1A1A2E; }
+    // Back button at top
+    QPushButton* backBtn = new QPushButton("< Back");
+    backBtn->setObjectName("settingsBackBtn");
+    backBtn->setMinimumHeight(48);
+    backBtn->setStyleSheet(
+        "QPushButton#settingsBackBtn { background-color: #1A1A33; color: #8899CC; "
+        "border: 1px solid #333355; border-radius: 8px; font-weight: bold; font-size: 15px; "
+        "padding: 10px 20px; margin: 8px; }"
+        "QPushButton#settingsBackBtn:pressed { background-color: #2A2A44; }");
+    connect(backBtn, &QPushButton::clicked, this, &GainSettingsDialog::backClicked);
+    outerLayout->addWidget(backBtn);
+
+    // Scrollable content
+    QScrollArea* scroll = new QScrollArea();
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
+    QScroller::grabGesture(scroll->viewport(), QScroller::LeftMouseButtonGesture);
+
+    QWidget* content = new QWidget();
+    QVBoxLayout* mainLayout = new QVBoxLayout(content);
+    mainLayout->setSpacing(12);
+    mainLayout->setContentsMargins(16, 8, 16, 16);
+
+    content->setStyleSheet(R"(
+        QWidget { background-color: #0D0D1A; }
         QGroupBox { color: #AABBCC; font-weight: bold; border: 1px solid #334455;
             border-radius: 8px; margin-top: 10px; padding-top: 16px; font-size: 14px; }
         QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }
@@ -42,6 +66,48 @@ void GainSettingsDialog::setupUi()
             border: 2px solid #556688; background: #2A2A3E; }
         QCheckBox::indicator:checked { background: #CC4422; border-color: #FF6644; }
     )");
+
+    // === Connection ===
+    QGroupBox* connGroup = new QGroupBox("Connection");
+    QGridLayout* connGrid = new QGridLayout(connGroup);
+    connGrid->setVerticalSpacing(10);
+    connGrid->setHorizontalSpacing(10);
+
+    m_hostEdit = new QLineEdit("192.168.1.5");
+    m_hostEdit->setMinimumHeight(44);
+    m_hostEdit->setPlaceholderText("Server IP address");
+    m_hostEdit->setStyleSheet("QLineEdit { background-color: #1A1A2E; color: #EEEEFF; "
+        "border: 1px solid #334455; border-radius: 6px; padding: 8px; font-size: 14px; }");
+    connGrid->addWidget(new QLabel("Host:"), 0, 0);
+    connGrid->addWidget(m_hostEdit, 0, 1);
+
+    m_dataPortSpin = new QSpinBox();
+    m_dataPortSpin->setRange(1, 65535); m_dataPortSpin->setValue(5000);
+    m_dataPortSpin->setMinimumHeight(44);
+    m_dataPortSpin->setStyleSheet("QSpinBox { background-color: #1A1A2E; color: #EEEEFF; "
+        "border: 1px solid #334455; border-radius: 6px; padding: 8px; font-size: 14px; }");
+    connGrid->addWidget(new QLabel("Data Port:"), 1, 0);
+    connGrid->addWidget(m_dataPortSpin, 1, 1);
+
+    m_controlPortSpin = new QSpinBox();
+    m_controlPortSpin->setRange(1, 65535); m_controlPortSpin->setValue(5001);
+    m_controlPortSpin->setMinimumHeight(44);
+    m_controlPortSpin->setStyleSheet("QSpinBox { background-color: #1A1A2E; color: #EEEEFF; "
+        "border: 1px solid #334455; border-radius: 6px; padding: 8px; font-size: 14px; }");
+    connGrid->addWidget(new QLabel("Control Port:"), 2, 0);
+    connGrid->addWidget(m_controlPortSpin, 2, 1);
+
+    m_audioPortSpin = new QSpinBox();
+    m_audioPortSpin->setRange(1, 65535); m_audioPortSpin->setValue(5002);
+    m_audioPortSpin->setMinimumHeight(44);
+    m_audioPortSpin->setStyleSheet("QSpinBox { background-color: #1A1A2E; color: #EEEEFF; "
+        "border: 1px solid #334455; border-radius: 6px; padding: 8px; font-size: 14px; }");
+    connGrid->addWidget(new QLabel("Audio Port:"), 3, 0);
+    connGrid->addWidget(m_audioPortSpin, 3, 1);
+
+    connGrid->setColumnMinimumWidth(0, 100);
+    connGrid->setColumnStretch(1, 1);
+    mainLayout->addWidget(connGroup);
 
     // === RX Parameters ===
     QGroupBox* rxGroup = new QGroupBox("RX Parameters");
@@ -174,14 +240,22 @@ void GainSettingsDialog::setupUi()
     txGrid->setColumnStretch(1, 1);
     mainLayout->addWidget(txGroup);
 
-    // Close button
-    QPushButton* closeBtn = new QPushButton("Close");
-    closeBtn->setMinimumHeight(48);
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
-    mainLayout->addWidget(closeBtn);
-
     mainLayout->addStretch();
+
+    scroll->setWidget(content);
+    outerLayout->addWidget(scroll, 1);
 }
+
+// === Connection Accessors ===
+
+QString GainSettingsDialog::host() const { return m_hostEdit->text(); }
+int GainSettingsDialog::dataPort() const { return m_dataPortSpin->value(); }
+int GainSettingsDialog::controlPort() const { return m_controlPortSpin->value(); }
+int GainSettingsDialog::audioPort() const { return m_audioPortSpin->value(); }
+void GainSettingsDialog::setHost(const QString& h) { m_hostEdit->setText(h); }
+void GainSettingsDialog::setDataPort(int p) { m_dataPortSpin->setValue(p); }
+void GainSettingsDialog::setControlPort(int p) { m_controlPortSpin->setValue(p); }
+void GainSettingsDialog::setAudioPort(int p) { m_audioPortSpin->setValue(p); }
 
 // === Accessors ===
 

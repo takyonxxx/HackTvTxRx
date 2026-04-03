@@ -1,21 +1,33 @@
 #ifndef GAINSETTINGSDIALOG_H
 #define GAINSETTINGSDIALOG_H
 
-#include <QDialog>
+#include <QWidget>
 #include <QSlider>
 #include <QLabel>
 #include <QCheckBox>
+#include <QLineEdit>
+#include <QSpinBox>
 
 class TcpClient;
 class FMDemodulator;
 class AMDemodulator;
 
-class GainSettingsDialog : public QDialog
+class GainSettingsDialog : public QWidget
 {
     Q_OBJECT
 
 public:
     explicit GainSettingsDialog(TcpClient* tcpClient, FMDemodulator* fmDemod, AMDemodulator* amDemod, QWidget *parent = nullptr);
+
+    // Connection accessors
+    QString host() const;
+    int dataPort() const;
+    int controlPort() const;
+    int audioPort() const;
+    void setHost(const QString& h);
+    void setDataPort(int p);
+    void setControlPort(int p);
+    void setAudioPort(int p);
 
     // Accessors for save/load
     int vgaGain() const;
@@ -49,6 +61,7 @@ public:
 signals:
     void ampEnableChanged(bool enabled);
     void settingsChanged();
+    void backClicked();
 
 private:
     void setupUi();
@@ -67,6 +80,12 @@ private:
     QSlider* m_ifBwSlider;      QLabel* m_ifBwLabel;
     QSlider* m_rxModIdxSlider;  QLabel* m_rxModIdxLabel;
     QCheckBox* m_ampEnableCheck;
+
+    // Connection fields
+    QLineEdit* m_hostEdit;
+    QSpinBox* m_dataPortSpin;
+    QSpinBox* m_controlPortSpin;
+    QSpinBox* m_audioPortSpin;
 };
 
 #endif // GAINSETTINGSDIALOG_H

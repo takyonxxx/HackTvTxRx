@@ -3,12 +3,10 @@
 
 #include <QMainWindow>
 #include <QPushButton>
-#include <QComboBox>
 #include <QSlider>
 #include <QLabel>
-#include <QLineEdit>
-#include <QSpinBox>
 #include <QCheckBox>
+#include <QStackedWidget>
 #include <complex>
 #include <vector>
 #include <atomic>
@@ -47,11 +45,11 @@ private slots:
     void onPttReleased();
     void onAudioCaptured(const std::vector<float>& samples);
     void onFrequencyChanged(uint64_t freq);
-    void onBandPresetChanged(int index);
     void onModulationChanged(int index);
     void onVolumeChanged(int value);
     void onSquelchChanged(int value);
     void onSettingsClicked();
+    void onSettingsBack();
     void onBwChanged(int index);
 
 private:
@@ -68,21 +66,28 @@ private:
     FMDemodulator* m_fmDemod;
     AMDemodulator* m_amDemod;
 
-    // Connection
-    QLineEdit* m_hostEdit;
-    QSpinBox* m_dataPortSpin;
-    QSpinBox* m_controlPortSpin;
-    QSpinBox* m_audioPortSpin;
+    // Page switching
+    QStackedWidget* m_stackedWidget;
+
+    // Connection UI
     QPushButton* m_connectBtn;
     QLabel* m_connectionStatus;
 
     // Frequency
     FrequencyWidget* m_freqWidget;
-    QComboBox* m_bandPreset;
 
-    // Mode
-    QComboBox* m_modulationCombo;
-    QComboBox* m_bwCombo;
+    // Band preset (cycling button)
+    QPushButton* m_bandPresetBtn;
+    int m_bandPresetIndex = 0;
+
+    // Mode (cycling button)
+    QPushButton* m_modulationBtn;
+    int m_modulationIndex = 0;
+
+    // BW (cycling button)
+    QPushButton* m_bwBtn;
+    int m_bwIndex = 0;
+
     QLabel* m_modeLabel;
     QLabel* m_stereoLabel;
 
@@ -99,7 +104,7 @@ private:
     CMeter* m_cMeter;
     CPlotter* m_cPlotter;
 
-    // Settings dialog
+    // Settings page
     GainSettingsDialog* m_gainDialog;
     QPushButton* m_settingsBtn;
     QPushButton* m_rfAmpBtn;
@@ -112,6 +117,18 @@ private:
     bool m_micStarted = false;
     bool m_forceMono = false;
     uint32_t m_sampleRate = 2000000;
+
+    // BW data
+    struct BwEntry { QString label; uint32_t rate; };
+    QVector<BwEntry> m_bwEntries;
+
+    // Band preset data
+    struct BandEntry { QString label; uint64_t freq; };
+    QVector<BandEntry> m_bandEntries;
+
+    // Modulation data
+    struct ModEntry { QString label; QString shortLabel; QString color; };
+    QVector<ModEntry> m_modEntries;
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;

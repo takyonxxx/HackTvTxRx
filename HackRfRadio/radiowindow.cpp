@@ -13,6 +13,12 @@
 #include <QFrame>
 #include <cmath>
 
+#ifdef Q_OS_ANDROID
+#include <QCoreApplication>
+#include <QJniObject>
+#include <QJniEnvironment>
+#endif
+
 RadioWindow::RadioWindow(QWidget *parent)
     : QMainWindow(parent)
     , m_tcpClient(new TcpClient(this))
@@ -26,24 +32,76 @@ RadioWindow::RadioWindow(QWidget *parent)
     setMinimumSize(320, 600);
     resize(393, 852);
 
+    // Populate data tables before setupUi
+    m_bwEntries = {
+        {"2 MHz",    2000000},
+        {"4 MHz",    4000000},
+        {"8 MHz",    8000000},
+        {"10 MHz",  10000000},
+        {"12.5 MHz",12500000},
+        {"16 MHz",  16000000},
+        {"20 MHz",  20000000}
+    };
+
+    m_bandEntries = {
+        {"2m (145 MHz)",   145000000ULL},
+        {"Marine (156.8)", 156800000ULL},
+        {"FM (100 MHz)",   100000000ULL},
+        {"PMR446",         446006250ULL},
+        {"70cm (435 MHz)", 435000000ULL},
+        {"FRS (462 MHz)",  462562500ULL},
+        {"LPD433",         433075000ULL},
+        {"CB 27 MHz",      27005000ULL},
+        {"Custom",         0ULL}
+    };
+
+    m_modEntries = {
+        {"NFM 12.5k", "NFM", "#00FF66"},
+        {"WFM 150k",  "WFM", "#FFAA00"},
+        {"AM 10k",    "AM",  "#FF6666"}
+    };
+
     setupUi();
     applyDarkStyle();
 
-    // Create gain settings dialog (non-modal, reusable)
-    m_gainDialog = new GainSettingsDialog(m_tcpClient, m_fmDemod, m_amDemod, this);
+    // Create gain settings page (embedded widget, not dialog)
+    m_gainDialog = new GainSettingsDialog(m_tcpClient, m_fmDemod, m_amDemod);
+    m_stackedWidget->addWidget(m_gainDialog);  // index 1
 
-    // Sync RF Amp: settings dialog -> main screen button
+    // Back button returns to main page
+    connect(m_gainDialog, &GainSettingsDialog::backClicked, this, &RadioWindow::onSettingsBack);
+
+    // Sync RF Amp: settings page -> main screen button
     connect(m_gainDialog, &GainSettingsDialog::ampEnableChanged, [this](bool enabled) {
         m_rfAmpBtn->blockSignals(true);
         m_rfAmpBtn->setChecked(enabled);
-        m_rfAmpBtn->setText(enabled ? "RF AMP: ON (+14dB)" : "RF AMP: OFF");
+        m_rfAmpBtn->setText(enabled ? "AMP ON" : "AMP OFF");
         m_rfAmpBtn->blockSignals(false);
     });
 
-    // Auto-save when any setting changes in dialog
+    // Auto-save when any setting changes
     connect(m_gainDialog, &GainSettingsDialog::settingsChanged, this, &RadioWindow::saveSettings);
 
     loadSettings();
+
+#ifdef Q_OS_ANDROID
+    // Request microphone permission at runtime (required for Android 6+)
+    QJniObject activity = QJniObject::callStaticObjectMethod(
+        "org/qtproject/qt/android/QtNative", "activity",
+        "()Landroid/app/Activity;");
+    if (activity.isValid()) {
+        QJniObject permission = QJniObject::fromString("android.permission.RECORD_AUDIO");
+        QJniObject permissions = QJniEnvironment().findClass("java/lang/String");
+        QJniObject permArray = QJniObject::callStaticObjectMethod(
+            "java/lang/reflect/Array", "newInstance",
+            "(Ljava/lang/Class;I)Ljava/lang/Object;",
+            QJniEnvironment().findClass("java/lang/String"), 1);
+        QJniEnvironment env;
+        jobjectArray arr = env->NewObjectArray(1, env->FindClass("java/lang/String"), nullptr);
+        env->SetObjectArrayElement(arr, 0, permission.object<jstring>());
+        activity.callMethod<void>("requestPermissions", "([Ljava/lang/String;I)V", arr, 1);
+    }
+#endif
 
     connect(m_tcpClient, &TcpClient::connected, this, &RadioWindow::onConnected);
     connect(m_tcpClient, &TcpClient::disconnected, this, &RadioWindow::onDisconnected);
@@ -85,27 +143,28 @@ void RadioWindow::closeEvent(QCloseEvent *event)
 
 void RadioWindow::saveSettings()
 {
+    if (!m_gainDialog) return;
     QSettings s("MarenRobotics", "HackRfRadio");
 
     // Connection
-    s.setValue("host", m_hostEdit->text());
-    s.setValue("dataPort", m_dataPortSpin->value());
-    s.setValue("controlPort", m_controlPortSpin->value());
-    s.setValue("audioPort", m_audioPortSpin->value());
+    s.setValue("host", m_gainDialog->host());
+    s.setValue("dataPort", m_gainDialog->dataPort());
+    s.setValue("controlPort", m_gainDialog->controlPort());
+    s.setValue("audioPort", m_gainDialog->audioPort());
 
     // Frequency
     s.setValue("frequency", QVariant::fromValue(m_freqWidget->frequency()));
-    s.setValue("bandPreset", m_bandPreset->currentIndex());
+    s.setValue("bandPreset", m_bandPresetIndex);
 
     // Modulation
-    s.setValue("modulation", m_modulationCombo->currentIndex());
-    s.setValue("bwIndex", m_bwCombo->currentIndex());
+    s.setValue("modulation", m_modulationIndex);
+    s.setValue("bwIndex", m_bwIndex);
 
     // Volume & Squelch
     s.setValue("volume", m_volumeSlider->value());
     s.setValue("squelch", m_squelchSlider->value());
 
-    // Gain & TX (from dialog)
+    // Gain & TX (from settings page)
     s.setValue("vgaGain", m_gainDialog->vgaGain());
     s.setValue("lnaGain", m_gainDialog->lnaGain());
     s.setValue("txGain", m_gainDialog->txGain());
@@ -128,66 +187,62 @@ void RadioWindow::loadSettings()
 
     if (!s.contains("host")) {
         qDebug() << "No saved settings, using defaults";
+        // Apply defaults
+        onModulationChanged(0);
         return;
     }
 
-    // Block settingsChanged during load to prevent save-during-load corruption
-    m_gainDialog->blockSignals(true);
-    m_bwCombo->blockSignals(true);
-    m_modulationCombo->blockSignals(true);
-    m_volumeSlider->blockSignals(true);
-    m_squelchSlider->blockSignals(true);
-    m_bandPreset->blockSignals(true);
-
     // Connection
-    m_hostEdit->setText(s.value("host", "127.0.0.1").toString());
-    m_dataPortSpin->setValue(s.value("dataPort", 5000).toInt());
-    m_controlPortSpin->setValue(s.value("controlPort", 5001).toInt());
-    m_audioPortSpin->setValue(s.value("audioPort", 5002).toInt());
+    if (m_gainDialog) {
+        m_gainDialog->setHost(s.value("host", "192.168.1.5").toString());
+        m_gainDialog->setDataPort(s.value("dataPort", 5000).toInt());
+        m_gainDialog->setControlPort(s.value("controlPort", 5001).toInt());
+        m_gainDialog->setAudioPort(s.value("audioPort", 5002).toInt());
+    }
 
     // Frequency
     uint64_t freq = s.value("frequency", 145000000ULL).toULongLong();
     m_freqWidget->setFrequency(freq);
-    m_bandPreset->setCurrentIndex(s.value("bandPreset", 0).toInt());
+
+    // Band preset
+    m_bandPresetIndex = s.value("bandPreset", 0).toInt();
+    if (m_bandPresetIndex >= 0 && m_bandPresetIndex < m_bandEntries.size())
+        m_bandPresetBtn->setText(m_bandEntries[m_bandPresetIndex].label);
 
     // Bandwidth
-    m_bwCombo->setCurrentIndex(s.value("bwIndex", 0).toInt());
-    m_sampleRate = m_bwCombo->currentData().toUInt();
-
-    // Modulation
-    m_modulationCombo->setCurrentIndex(s.value("modulation", 0).toInt());
+    m_bwIndex = s.value("bwIndex", 0).toInt();
+    if (m_bwIndex >= 0 && m_bwIndex < m_bwEntries.size()) {
+        m_bwBtn->setText(m_bwEntries[m_bwIndex].label);
+        m_sampleRate = m_bwEntries[m_bwIndex].rate;
+    }
 
     // Volume & Squelch
     m_volumeSlider->setValue(s.value("volume", 50).toInt());
     m_squelchSlider->setValue(s.value("squelch", 10).toInt());
 
-    // Gain & TX (to dialog)
-    m_gainDialog->setVgaGain(s.value("vgaGain", 30).toInt());
-    m_gainDialog->setLnaGain(s.value("lnaGain", 40).toInt());
-    m_gainDialog->setTxGain(s.value("txGain", 47).toInt());
-    m_gainDialog->setAmplitude(s.value("amplitude", 50).toInt());
-    m_gainDialog->setModIndex(s.value("modIndex", 40).toInt());
-    m_gainDialog->setRxGain(s.value("rxGain", 10).toInt());
-    m_gainDialog->setRxModIndex(s.value("rxModIndex", 30).toInt());
-    m_gainDialog->setDeemph(s.value("deemph", 0).toInt());
-    m_gainDialog->setAmpEnabled(s.value("ampEnable", false).toBool());
+    // Gain & TX (to settings page)
+    if (m_gainDialog) {
+        m_gainDialog->blockSignals(true);
+        m_gainDialog->setVgaGain(s.value("vgaGain", 30).toInt());
+        m_gainDialog->setLnaGain(s.value("lnaGain", 40).toInt());
+        m_gainDialog->setTxGain(s.value("txGain", 47).toInt());
+        m_gainDialog->setAmplitude(s.value("amplitude", 50).toInt());
+        m_gainDialog->setModIndex(s.value("modIndex", 40).toInt());
+        m_gainDialog->setRxGain(s.value("rxGain", 10).toInt());
+        m_gainDialog->setRxModIndex(s.value("rxModIndex", 30).toInt());
+        m_gainDialog->setDeemph(s.value("deemph", 0).toInt());
+        m_gainDialog->setAmpEnabled(s.value("ampEnable", false).toBool());
+        m_gainDialog->blockSignals(false);
+    }
     m_rfAmpBtn->setChecked(s.value("ampEnable", false).toBool());
-
-    // Unblock signals
-    m_gainDialog->blockSignals(false);
-    m_bwCombo->blockSignals(false);
-    m_modulationCombo->blockSignals(false);
-    m_volumeSlider->blockSignals(false);
-    m_squelchSlider->blockSignals(false);
-    m_bandPreset->blockSignals(false);
 
     // Window geometry
     if (s.contains("geometry"))
         restoreGeometry(s.value("geometry").toByteArray());
 
-    // Apply local demodulator parameters directly (signals were blocked, apply manually)
-    // Trigger modulation change to set correct IF BW and mode label
-    onModulationChanged(m_modulationCombo->currentIndex());
+    // Modulation (applies BW, demod params, mode label)
+    m_modulationIndex = s.value("modulation", 0).toInt();
+    onModulationChanged(m_modulationIndex);
 
     m_cPlotter->setSampleRate(m_sampleRate);
     m_cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
@@ -200,22 +255,25 @@ void RadioWindow::loadSettings()
     m_squelchLabel->setText(QString("%1%").arg(m_squelchSlider->value()));
 
     qDebug() << "Settings applied - freq:" << freq
-             << "lna:" << m_gainDialog->lnaGain()
-             << "vga:" << m_gainDialog->vgaGain()
              << "bw:" << m_sampleRate
-             << "mod:" << m_modulationCombo->currentIndex();
+             << "mod:" << m_modulationIndex;
 }
 
 // ============================================================
-// UI Setup - Touch-friendly iPhone 16 Pro layout
+// UI Setup - Touch-friendly layout, NO QComboBox (crashes on Android)
 // ============================================================
 
 void RadioWindow::setupUi()
 {
-    QWidget* central = new QWidget(this);
-    QVBoxLayout* mainLayout = new QVBoxLayout(central);
-    mainLayout->setSpacing(4);
-    mainLayout->setContentsMargins(10, 4, 10, 8);
+    // QStackedWidget as central widget - page 0 = radio, page 1 = settings
+    m_stackedWidget = new QStackedWidget(this);
+    setCentralWidget(m_stackedWidget);
+
+    // === PAGE 0: Main radio UI (fixed, no scroll) ===
+    QWidget* mainPage = new QWidget();
+    QVBoxLayout* mainLayout = new QVBoxLayout(mainPage);
+    mainLayout->setSpacing(6);
+    mainLayout->setContentsMargins(8, 4, 8, 4);
 
     // ──────────────────────────────────────────────
     // TOP BAR: Connection status + Settings button
@@ -225,17 +283,17 @@ void RadioWindow::setupUi()
 
     m_connectBtn = new QPushButton("Connect");
     m_connectBtn->setObjectName("connectBtn");
-    m_connectBtn->setMinimumHeight(38);
+    m_connectBtn->setMinimumHeight(48);
     connect(m_connectBtn, &QPushButton::clicked, this, &RadioWindow::onConnectClicked);
 
     m_connectionStatus = new QLabel("Disconnected");
     m_connectionStatus->setObjectName("connStatus");
     m_connectionStatus->setAlignment(Qt::AlignCenter);
-    m_connectionStatus->setStyleSheet("color: #FF4444; font-weight: bold; font-size: 13px;");
+    m_connectionStatus->setStyleSheet("color: #FF4444; font-weight: bold; font-size: 14px;");
 
     m_settingsBtn = new QPushButton("Settings");
     m_settingsBtn->setObjectName("settingsBtn");
-    m_settingsBtn->setMinimumHeight(38);
+    m_settingsBtn->setMinimumHeight(48);
     connect(m_settingsBtn, &QPushButton::clicked, this, &RadioWindow::onSettingsClicked);
 
     topBar->addWidget(m_connectBtn, 1);
@@ -243,79 +301,80 @@ void RadioWindow::setupUi()
     topBar->addWidget(m_settingsBtn, 1);
     mainLayout->addLayout(topBar);
 
-    // Hidden connection fields (shown in settings or auto-used)
-    // Keep them in the widget tree but not displayed
-    m_hostEdit = new QLineEdit("127.0.0.1");
-    m_hostEdit->setVisible(false);
-    m_dataPortSpin = new QSpinBox(); m_dataPortSpin->setRange(1, 65535); m_dataPortSpin->setValue(5000);
-    m_dataPortSpin->setVisible(false);
-    m_controlPortSpin = new QSpinBox(); m_controlPortSpin->setRange(1, 65535); m_controlPortSpin->setValue(5001);
-    m_controlPortSpin->setVisible(false);
-    m_audioPortSpin = new QSpinBox(); m_audioPortSpin->setRange(1, 65535); m_audioPortSpin->setValue(5002);
-    m_audioPortSpin->setVisible(false);
-
     // ──────────────────────────────────────────────
     // FREQUENCY DISPLAY - Large, prominent
     // ──────────────────────────────────────────────
     m_freqWidget = new FrequencyWidget();
     m_freqWidget->setMinimumHeight(130);
+    m_freqWidget->setMaximumHeight(150);
     connect(m_freqWidget, &FrequencyWidget::frequencyChanged, this, &RadioWindow::onFrequencyChanged);
     mainLayout->addWidget(m_freqWidget);
 
-    // Band preset + BW selector - same row
+    // Band preset + BW selector - cycling buttons (no QComboBox)
     QHBoxLayout* bandBwRow = new QHBoxLayout();
     bandBwRow->setSpacing(6);
 
-    m_bwCombo = new QComboBox();
-    m_bwCombo->setMinimumHeight(44);
-    m_bwCombo->addItem("2 MHz",   2000000);
-    m_bwCombo->addItem("4 MHz",   4000000);
-    m_bwCombo->addItem("8 MHz",   8000000);
-    m_bwCombo->addItem("10 MHz",  10000000);
-    m_bwCombo->addItem("12.5 MHz",12500000);
-    m_bwCombo->addItem("16 MHz",  16000000);
-    m_bwCombo->addItem("20 MHz",  20000000);
-    m_bwCombo->setCurrentIndex(0);
-    connect(m_bwCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &RadioWindow::onBwChanged);
+    m_bwBtn = new QPushButton(m_bwEntries[0].label);
+    m_bwBtn->setObjectName("cycleBtn");
+    m_bwBtn->setMinimumHeight(48);
+    connect(m_bwBtn, &QPushButton::clicked, [this]() {
+        m_bwIndex = (m_bwIndex + 1) % m_bwEntries.size();
+        m_bwBtn->setText(m_bwEntries[m_bwIndex].label);
+        onBwChanged(m_bwIndex);
+    });
 
-    m_bandPreset = new QComboBox();
-    m_bandPreset->setMinimumHeight(44);
-    m_bandPreset->addItem("VHF - 2m Amateur (144-148 MHz)", QVariant::fromValue(145000000ULL));
-    m_bandPreset->addItem("VHF - Marine Ch16 (156.800 MHz)", QVariant::fromValue(156800000ULL));
-    m_bandPreset->addItem("VHF - FM Broadcast (88-108 MHz)", QVariant::fromValue(100000000ULL));
-    m_bandPreset->addItem("VHF - PMR446 (446 MHz)", QVariant::fromValue(446006250ULL));
-    m_bandPreset->addItem("UHF - 70cm Amateur (430-440 MHz)", QVariant::fromValue(435000000ULL));
-    m_bandPreset->addItem("UHF - FRS/GMRS (462 MHz)", QVariant::fromValue(462562500ULL));
-    m_bandPreset->addItem("UHF - LPD433 (433 MHz)", QVariant::fromValue(433075000ULL));
-    m_bandPreset->addItem("HF - CB 27 MHz", QVariant::fromValue(27005000ULL));
-    m_bandPreset->addItem("Custom", QVariant::fromValue(0ULL));
-    connect(m_bandPreset, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &RadioWindow::onBandPresetChanged);
+    m_bandPresetBtn = new QPushButton(m_bandEntries[0].label);
+    m_bandPresetBtn->setObjectName("cycleBtn");
+    m_bandPresetBtn->setMinimumHeight(48);
+    connect(m_bandPresetBtn, &QPushButton::clicked, [this]() {
+        m_bandPresetIndex = (m_bandPresetIndex + 1) % m_bandEntries.size();
+        m_bandPresetBtn->setText(m_bandEntries[m_bandPresetIndex].label);
+        // Apply band frequency
+        uint64_t freq = m_bandEntries[m_bandPresetIndex].freq;
+        if (freq > 0) {
+            m_freqWidget->setFrequency(freq);
+            // Auto-select modulation based on band
+            QString name = m_bandEntries[m_bandPresetIndex].label;
+            if (name.contains("FM")) {
+                m_modulationIndex = 1;
+                onModulationChanged(1);
+            } else if (name.contains("CB")) {
+                m_modulationIndex = 2;
+                onModulationChanged(2);
+            } else {
+                m_modulationIndex = 0;
+                onModulationChanged(0);
+            }
+        }
+    });
 
-    bandBwRow->addWidget(m_bwCombo, 0);
-    bandBwRow->addWidget(m_bandPreset, 1);
+    bandBwRow->addWidget(m_bwBtn, 0);
+    bandBwRow->addWidget(m_bandPresetBtn, 1);
     mainLayout->addLayout(bandBwRow);
 
     // ──────────────────────────────────────────────
-    // MODE selector row
+    // MODE selector row - cycling button (no QComboBox)
     // ──────────────────────────────────────────────
     QHBoxLayout* modeRow = new QHBoxLayout();
     modeRow->setSpacing(10);
-    m_modulationCombo = new QComboBox();
-    m_modulationCombo->setMinimumHeight(44);
-    m_modulationCombo->addItem("NFM (Narrow FM - 12.5 kHz)");
-    m_modulationCombo->addItem("WFM (Wide FM - 150 kHz)");
-    m_modulationCombo->addItem("AM (Amplitude Mod)");
-    connect(m_modulationCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &RadioWindow::onModulationChanged);
+
+    m_modulationBtn = new QPushButton(m_modEntries[0].label);
+    m_modulationBtn->setObjectName("cycleBtn");
+    m_modulationBtn->setMinimumHeight(48);
+    connect(m_modulationBtn, &QPushButton::clicked, [this]() {
+        m_modulationIndex = (m_modulationIndex + 1) % m_modEntries.size();
+        onModulationChanged(m_modulationIndex);
+    });
+    modeRow->addWidget(m_modulationBtn, 1);
+
     m_modeLabel = new QLabel("NFM");
     m_modeLabel->setObjectName("modeLabel");
     m_modeLabel->setAlignment(Qt::AlignCenter);
     m_modeLabel->setMinimumWidth(60);
     m_modeLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #00FF66;");
-    modeRow->addWidget(m_modulationCombo, 1);
     modeRow->addWidget(m_modeLabel);
 
-    // Stereo indicator — clickable to toggle mono/stereo
+    // Stereo indicator - clickable to toggle mono/stereo
     m_stereoLabel = new QLabel("");
     m_stereoLabel->setAlignment(Qt::AlignCenter);
     m_stereoLabel->setMinimumWidth(80);
@@ -325,38 +384,38 @@ void RadioWindow::setupUi()
     modeRow->addWidget(m_stereoLabel);
 
     // RF Amp toggle button
-    m_rfAmpBtn = new QPushButton("RF AMP: OFF");
+    m_rfAmpBtn = new QPushButton("AMP OFF");
     m_rfAmpBtn->setObjectName("rfAmpBtn");
     m_rfAmpBtn->setCheckable(true);
     m_rfAmpBtn->setChecked(false);
-    m_rfAmpBtn->setMinimumHeight(38);
+    m_rfAmpBtn->setMinimumHeight(48);
     connect(m_rfAmpBtn, &QPushButton::toggled, [this](bool checked) {
-        m_rfAmpBtn->setText(checked ? "RF AMP: ON (+14dB)" : "RF AMP: OFF");
-        m_gainDialog->setAmpEnabled(checked);
+        m_rfAmpBtn->setText(checked ? "AMP ON" : "AMP OFF");
+        if (m_gainDialog) m_gainDialog->setAmpEnabled(checked);
         if (m_tcpClient->isConnected()) m_tcpClient->setAmpEnable(checked);
     });
     modeRow->addWidget(m_rfAmpBtn);
 
     mainLayout->addLayout(modeRow);
+    mainLayout->addSpacing(6);
 
     // ──────────────────────────────────────────────
-    // SIGNAL METER (CMeter bar) + SPECTRUM (CPlotter, no waterfall)
+    // SIGNAL METER (CMeter bar) + SPECTRUM (CPlotter)
     // ──────────────────────────────────────────────
     m_cMeter = new CMeter(this);
-    m_cMeter->setMinimumHeight(55);
-    m_cMeter->setMaximumHeight(65);
+    m_cMeter->setMinimumHeight(60);
+    m_cMeter->setMaximumHeight(70);
     mainLayout->addWidget(m_cMeter);
-
-    mainLayout->addSpacing(10);
+    mainLayout->addSpacing(4);
 
     m_cPlotter = new CPlotter(this);
-    m_cPlotter->setContentsMargins(0, 12, 8, 0); // top+right padding for labels
+    m_cPlotter->setContentsMargins(0, 8, 8, 0);
     m_cPlotter->setSampleRate(m_sampleRate);
     m_cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
     m_cPlotter->setCenterFreq(100000000ULL);
     m_cPlotter->setFftRange(-110.0f, 0.0f);
     m_cPlotter->setPandapterRange(-110.f, 0.f);
-    m_cPlotter->setPercent2DScreen(100); // spectrum only, no waterfall
+    m_cPlotter->setPercent2DScreen(100);
     m_cPlotter->setFftFill(true);
     m_cPlotter->setFftPlotColor(QColor("#CEECF5"));
     m_cPlotter->setFreqUnits(1000);
@@ -365,20 +424,17 @@ void RadioWindow::setupUi()
     m_cPlotter->setClickResolution(0);
     m_cPlotter->setFocusPolicy(Qt::NoFocus);
     m_cPlotter->setMouseTracking(false);
-    m_cPlotter->setMinimumHeight(180);
+    m_cPlotter->setMinimumHeight(120);
+    m_cPlotter->setMaximumHeight(300);
     m_cPlotter->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     mainLayout->addWidget(m_cPlotter, 1);
+    mainLayout->addSpacing(8);
 
     // ──────────────────────────────────────────────
-    // Spacer above sliders
-    // ──────────────────────────────────────────────
-    mainLayout->addStretch(1);
-
-    // ──────────────────────────────────────────────
-    // VOLUME & SQUELCH - near PTT for quick access
+    // VOLUME & IF BW sliders
     // ──────────────────────────────────────────────
     QGridLayout* sliderGrid = new QGridLayout();
-    sliderGrid->setVerticalSpacing(4);
+    sliderGrid->setVerticalSpacing(6);
     sliderGrid->setHorizontalSpacing(8);
 
     // Volume
@@ -396,28 +452,21 @@ void RadioWindow::setupUi()
     sliderGrid->addWidget(m_volumeSlider, 0, 1);
     sliderGrid->addWidget(m_volumeLabel, 0, 2);
 
-    // Squelch
-    QLabel* sqIcon = new QLabel("SQ");
-    sqIcon->setObjectName("sliderIcon");
+    // Squelch - hidden, kept for compatibility
     m_squelchSlider = new QSlider(Qt::Horizontal);
     m_squelchSlider->setRange(0, 100);
-    m_squelchSlider->setValue(10);
-    m_squelchSlider->setMinimumHeight(36);
-    m_squelchLabel = new QLabel("10%");
-    m_squelchLabel->setMinimumWidth(42);
-    m_squelchLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_squelchLevel = 0.10f;
-    connect(m_squelchSlider, &QSlider::valueChanged, this, &RadioWindow::onSquelchChanged);
-    sliderGrid->addWidget(sqIcon, 1, 0);
-    sliderGrid->addWidget(m_squelchSlider, 1, 1);
-    sliderGrid->addWidget(m_squelchLabel, 1, 2);
+    m_squelchSlider->setValue(0);
+    m_squelchSlider->setVisible(false);
+    m_squelchLabel = new QLabel("");
+    m_squelchLabel->setVisible(false);
+    m_squelchLevel = 0.0f;
 
-    // IF Bandwidth (main screen)
+    // IF Bandwidth
     QLabel* bwIcon = new QLabel("BW");
     bwIcon->setObjectName("sliderIcon");
     m_mainIfBwSlider = new QSlider(Qt::Horizontal);
     m_mainIfBwSlider->setRange(1, 200);
-    m_mainIfBwSlider->setValue(25);  // 12.5 kHz default
+    m_mainIfBwSlider->setValue(25);
     m_mainIfBwSlider->setMinimumHeight(36);
     m_mainIfBwLabel = new QLabel("12.5 kHz");
     m_mainIfBwLabel->setMinimumWidth(60);
@@ -432,20 +481,15 @@ void RadioWindow::setupUi()
             m_mainIfBwLabel->setText(QString("%1 Hz").arg(static_cast<int>(bw)));
         m_fmDemod->setBandwidth(bw);
         m_amDemod->setBandwidth(bw);
-        // Sync settings dialog slider
-        m_gainDialog->setIfBandwidth(v);
+        if (m_gainDialog) m_gainDialog->setIfBandwidth(v);
     });
-    sliderGrid->addWidget(bwIcon, 2, 0);
-    sliderGrid->addWidget(m_mainIfBwSlider, 2, 1);
-    sliderGrid->addWidget(m_mainIfBwLabel, 2, 2);
+    sliderGrid->addWidget(bwIcon, 1, 0);
+    sliderGrid->addWidget(m_mainIfBwSlider, 1, 1);
+    sliderGrid->addWidget(m_mainIfBwLabel, 1, 2);
 
     sliderGrid->setColumnStretch(1, 1);
     mainLayout->addLayout(sliderGrid);
-
-    // ──────────────────────────────────────────────
-    // Spacer below sliders
-    // ──────────────────────────────────────────────
-    mainLayout->addStretch(1);
+    mainLayout->addSpacing(6);
 
     // ──────────────────────────────────────────────
     // TX/RX STATUS INDICATOR
@@ -453,24 +497,27 @@ void RadioWindow::setupUi()
     m_txRxIndicator = new QLabel("RX - Listening");
     m_txRxIndicator->setObjectName("txRxIndicator");
     m_txRxIndicator->setAlignment(Qt::AlignCenter);
-    m_txRxIndicator->setMinimumHeight(44);
+    m_txRxIndicator->setMinimumHeight(36);
+    m_txRxIndicator->setMaximumHeight(40);
     m_txRxIndicator->setStyleSheet(
         "font-size: 18px; font-weight: bold; color: #00FF66; "
         "background-color: #1A3A1A; border: 2px solid #00FF66; border-radius: 10px; padding: 8px;");
     mainLayout->addWidget(m_txRxIndicator);
 
     // ──────────────────────────────────────────────
-    // PTT BUTTON - Large, dominant, bottom of screen
+    // PTT BUTTON
     // ──────────────────────────────────────────────
     m_pttButton = new QPushButton("PTT\nHold to Talk");
     m_pttButton->setObjectName("pttButton");
-    m_pttButton->setMinimumHeight(110);
+    m_pttButton->setMinimumHeight(80);
+    m_pttButton->setMaximumHeight(100);
     m_pttButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     connect(m_pttButton, &QPushButton::pressed, this, &RadioWindow::onPttPressed);
     connect(m_pttButton, &QPushButton::released, this, &RadioWindow::onPttReleased);
     mainLayout->addWidget(m_pttButton);
 
-    setCentralWidget(central);
+    // Add main page as index 0
+    m_stackedWidget->addWidget(mainPage);
 }
 
 void RadioWindow::applyDarkStyle()
@@ -488,26 +535,6 @@ void RadioWindow::applyDarkStyle()
         QLabel#txRxIndicator {
             font-size: 20px; font-weight: bold;
             border-radius: 10px; padding: 10px;
-        }
-
-        QComboBox {
-            background-color: #1A1A2E; color: #EEEEFF;
-            border: 1px solid #334455; border-radius: 8px;
-            padding: 8px 12px; font-size: 13px;
-        }
-        QComboBox::drop-down {
-            border: none; width: 30px;
-        }
-        QComboBox QAbstractItemView {
-            background-color: #1A1A2E; color: #EEEEFF;
-            selection-background-color: #334466;
-            border: 1px solid #445566;
-        }
-
-        QLineEdit, QSpinBox {
-            background-color: #1A1A2E; color: #EEEEFF;
-            border: 1px solid #334455; border-radius: 6px;
-            padding: 6px 8px; font-size: 13px;
         }
 
         QSlider::groove:horizontal {
@@ -541,6 +568,13 @@ void RadioWindow::applyDarkStyle()
         }
         QPushButton#settingsBtn:pressed { background-color: #2A2A44; }
 
+        QPushButton#cycleBtn {
+            background-color: #1A1A2E; color: #EEEEFF;
+            border: 1px solid #334455; border-radius: 8px;
+            padding: 8px 12px; font-size: 13px;
+        }
+        QPushButton#cycleBtn:pressed { background-color: #334466; }
+
         QPushButton#rfAmpBtn {
             background-color: #1A1A2A; color: #667788;
             border: 1px solid #333355; border-radius: 8px;
@@ -567,12 +601,18 @@ void RadioWindow::applyDarkStyle()
     )");
 }
 
+// ============================================================
+// Settings page navigation
+// ============================================================
+
 void RadioWindow::onSettingsClicked()
 {
-    m_gainDialog->resize(380, 500);
-    m_gainDialog->show();
-    m_gainDialog->raise();
-    m_gainDialog->activateWindow();
+    m_stackedWidget->setCurrentIndex(1);
+}
+
+void RadioWindow::onSettingsBack()
+{
+    m_stackedWidget->setCurrentIndex(0);
 }
 
 // ============================================================
@@ -585,9 +625,12 @@ void RadioWindow::onConnectClicked()
         m_tcpClient->disconnectFromServer();
         return;
     }
-    logMessage(QString("Connecting to %1...").arg(m_hostEdit->text()));
-    m_tcpClient->connectToServer(m_hostEdit->text().trimmed(),
-                                  m_dataPortSpin->value(), m_controlPortSpin->value(), m_audioPortSpin->value());
+    QString host = m_gainDialog ? m_gainDialog->host().trimmed() : "192.168.1.5";
+    int dp = m_gainDialog ? m_gainDialog->dataPort() : 5000;
+    int cp = m_gainDialog ? m_gainDialog->controlPort() : 5001;
+    int ap = m_gainDialog ? m_gainDialog->audioPort() : 5002;
+    logMessage(QString("Connecting to %1...").arg(host));
+    m_tcpClient->connectToServer(host, dp, cp, ap);
 }
 
 void RadioWindow::onConnected()
@@ -605,27 +648,30 @@ void RadioWindow::onConnected()
     // Send all current settings to server
     m_tcpClient->setFrequency(m_freqWidget->frequency());
     m_tcpClient->setSampleRate(m_sampleRate);
-    m_tcpClient->setVgaGain(m_gainDialog->vgaGain());
-    m_tcpClient->setLnaGain(m_gainDialog->lnaGain());
-    m_tcpClient->setTxAmpGain(m_gainDialog->txGain());
-    m_tcpClient->setAmplitude(m_gainDialog->amplitude() / 100.0f);
-    m_tcpClient->setModulationIndex(m_gainDialog->modIndex() / 100.0f);
-    m_tcpClient->setAmpEnable(m_gainDialog->ampEnabled());
+    if (m_gainDialog) {
+        m_tcpClient->setVgaGain(m_gainDialog->vgaGain());
+        m_tcpClient->setLnaGain(m_gainDialog->lnaGain());
+        m_tcpClient->setTxAmpGain(m_gainDialog->txGain());
+        m_tcpClient->setAmplitude(m_gainDialog->amplitude() / 100.0f);
+        m_tcpClient->setModulationIndex(m_gainDialog->modIndex() / 100.0f);
+        m_tcpClient->setAmpEnable(m_gainDialog->ampEnabled());
+    }
     m_tcpClient->switchToRx();
 
     // Apply IF bandwidth from slider
-    int bwVal = m_gainDialog->ifBandwidth();
-    float bw;
-    if (bwVal <= 25) bw = bwVal * 500.0f;
-    else bw = 12500.0f + (bwVal - 25) * 1000.0f;
-    m_fmDemod->setBandwidth(bw);
-    m_amDemod->setBandwidth(bw);
+    if (m_gainDialog) {
+        int bwVal = m_gainDialog->ifBandwidth();
+        float bw;
+        if (bwVal <= 25) bw = bwVal * 500.0f;
+        else bw = 12500.0f + (bwVal - 25) * 1000.0f;
+        m_fmDemod->setBandwidth(bw);
+        m_amDemod->setBandwidth(bw);
 
-    // Apply RX gain AFTER bandwidth (setBandwidth->rebuildChain may reset gain)
-    float rxGain = m_gainDialog->rxGain() / 10.0f;
-    m_fmDemod->setOutputGain(rxGain);
-    m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
-    m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
+        float rxGain = m_gainDialog->rxGain() / 10.0f;
+        m_fmDemod->setOutputGain(rxGain);
+        m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
+        m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
+    }
 }
 
 void RadioWindow::onDisconnected()
@@ -669,17 +715,14 @@ void RadioWindow::processIqBuffer()
         samples[i] = std::complex<float>(iq[i*2] / 128.0f, iq[i*2+1] / 128.0f);
     }
 
-    // ── FFT + spectrum display + signal meter ──
     int fftSize = 2048;
     if (static_cast<int>(n) >= fftSize) {
         std::vector<float> fft_output(fftSize);
         float signal_level_dbfs;
         getFft(samples, fft_output, signal_level_dbfs, fftSize);
 
-        // Update CMeter with signal level
         m_cMeter->setLevel(signal_level_dbfs);
 
-        // Update CPlotter with FFT data (frame-drop guard)
         if (m_fftUpdatePending.testAndSetAcquire(0, 1)) {
             float* fft_data = new float[fftSize];
             std::memcpy(fft_data, fft_output.data(), fftSize * sizeof(float));
@@ -689,7 +732,6 @@ void RadioWindow::processIqBuffer()
                                       Q_ARG(int, fftSize));
         }
 
-        // Squelch level from signal power
         float minDbm = -100.0f;
         float maxDbm = 0.0f;
         float level = (signal_level_dbfs - minDbm) / (maxDbm - minDbm);
@@ -699,11 +741,10 @@ void RadioWindow::processIqBuffer()
     std::vector<float> audio;
     switch (m_currentModulation) {
     case FM_NB: case FM_WB:
-        audio = m_fmDemod->demodulate(samples);  // already interleaved stereo
+        audio = m_fmDemod->demodulate(samples);
         break;
     case AM: {
         auto mono = m_amDemod->demodulate(samples);
-        // Convert mono to interleaved stereo [L,R,L,R,...]
         audio.resize(mono.size() * 2);
         for (size_t i = 0; i < mono.size(); i++) {
             audio[i * 2]     = mono[i];
@@ -714,10 +755,6 @@ void RadioWindow::processIqBuffer()
     }
 
     if (!audio.empty()) {
-        // Squelch based on IQ signal level (0.0-1.0 from FFT)
-        // SQ slider 0-100% maps to signal level threshold
-        // SQ=0: squelch OFF, all audio passes
-        // SQ=50: only signals above 50% of meter scale pass
         if (m_squelchLevel <= 0.001f || m_lastSignalLevel >= m_squelchLevel) {
             m_audioPlayback->enqueueAudio(audio);
         }
@@ -743,24 +780,16 @@ void RadioWindow::onPttPressed()
 
     m_tcpClient->switchToTx();
 
-    // Send current TX params from dialog
-    m_gainDialog->sendTxParams();
+    if (m_gainDialog) m_gainDialog->sendTxParams();
 
-    // Calculate estimated TX power in dBm and show on meter
-    // HackRF TX chain:
-    //   Base output (0 gain, full amplitude): ~-40 dBm
-    //   IF amplifier adds 0-47 dB
-    //   Baseband amplitude scales signal: 20*log10(amplitude)
-    //   Formula: txPower = -40 + IF_gain + 20*log10(amplitude)
-    float ifGain = static_cast<float>(m_gainDialog->txGain());          // 0-47
-    float amplitude = m_gainDialog->amplitude() / 100.0f;               // 0.01-1.0
-    float ampDb = 20.0f * std::log10(std::max(amplitude, 0.01f));       // -40 to 0 dB
-    float rfAmpDb = m_gainDialog->ampEnabled() ? 14.0f : 0.0f;         // RF amp: +14 dB
+    float ifGain = m_gainDialog ? static_cast<float>(m_gainDialog->txGain()) : 0.0f;
+    float amplitude = m_gainDialog ? m_gainDialog->amplitude() / 100.0f : 0.5f;
+    float ampDb = 20.0f * std::log10(std::max(amplitude, 0.01f));
+    float rfAmpDb = (m_gainDialog && m_gainDialog->ampEnabled()) ? 14.0f : 0.0f;
     float estimatedDbm = -40.0f + ifGain + ampDb + rfAmpDb;
-    // Clamp to realistic HackRF range
     estimatedDbm = std::clamp(estimatedDbm, -60.0f, 15.0f);
 
-    qDebug() << "TX estimated power:" << estimatedDbm << "dBm (IF=" << ifGain << "amp=" << amplitude << ")";
+    qDebug() << "TX estimated power:" << estimatedDbm << "dBm";
 
     m_txRxIndicator->setText("TX - Transmitting");
     m_txRxIndicator->setStyleSheet(
@@ -778,8 +807,7 @@ void RadioWindow::onPttReleased()
 
     m_tcpClient->switchToRx();
 
-    // Restore RX params from dialog
-    m_gainDialog->sendRxParams();
+    if (m_gainDialog) m_gainDialog->sendRxParams();
 
     m_txRxIndicator->setText("RX - Listening");
     m_txRxIndicator->setStyleSheet(
@@ -815,7 +843,7 @@ void RadioWindow::keyReleaseEvent(QKeyEvent *event)
 }
 
 // ============================================================
-// Frequency & Band
+// Frequency
 // ============================================================
 
 void RadioWindow::onFrequencyChanged(uint64_t freq)
@@ -825,71 +853,64 @@ void RadioWindow::onFrequencyChanged(uint64_t freq)
     logMessage(QString("Freq: %1 MHz").arg(freq / 1000000.0, 0, 'f', 3));
 }
 
-void RadioWindow::onBandPresetChanged(int index)
-{
-    uint64_t freq = m_bandPreset->itemData(index).toULongLong();
-    if (freq > 0) {
-        m_freqWidget->setFrequency(freq);
-        QString name = m_bandPreset->currentText();
-        if (name.contains("FM Broadcast")) m_modulationCombo->setCurrentIndex(1);
-        else if (name.contains("CB")) m_modulationCombo->setCurrentIndex(2);
-        else m_modulationCombo->setCurrentIndex(0);
-    }
-}
-
 // ============================================================
 // Modulation
 // ============================================================
 
 void RadioWindow::onModulationChanged(int index)
 {
+    if (index < 0 || index >= m_modEntries.size()) return;
+
+    m_modulationIndex = index;
+    m_modulationBtn->setText(m_modEntries[index].label);
+    m_modeLabel->setText(m_modEntries[index].shortLabel);
+    m_modeLabel->setStyleSheet(QString("font-weight: bold; font-size: 18px; color: %1;").arg(m_modEntries[index].color));
+
     switch (index) {
     case 0:
         m_currentModulation = FM_NB;
         m_fmDemod->setBandwidth(12500.0);
-        m_gainDialog->setIfBandwidth(25);
+        if (m_gainDialog) m_gainDialog->setIfBandwidth(25);
         m_mainIfBwSlider->blockSignals(true);
         m_mainIfBwSlider->setValue(25);
         m_mainIfBwLabel->setText("12.5 kHz");
         m_mainIfBwSlider->blockSignals(false);
-        m_modeLabel->setText("NFM");
-        m_modeLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #00FF66;");
         break;
     case 1:
         m_currentModulation = FM_WB;
         m_fmDemod->setBandwidth(150000.0);
-        m_gainDialog->setIfBandwidth(163);
+        if (m_gainDialog) m_gainDialog->setIfBandwidth(163);
         m_mainIfBwSlider->blockSignals(true);
         m_mainIfBwSlider->setValue(163);
         m_mainIfBwLabel->setText("150.0 kHz");
         m_mainIfBwSlider->blockSignals(false);
-        m_modeLabel->setText("WFM");
-        m_modeLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #FFAA00;");
         break;
     case 2:
         m_currentModulation = AM;
         m_amDemod->setBandwidth(10000.0);
-        m_gainDialog->setIfBandwidth(20);
+        if (m_gainDialog) m_gainDialog->setIfBandwidth(20);
         m_mainIfBwSlider->blockSignals(true);
         m_mainIfBwSlider->setValue(20);
         m_mainIfBwLabel->setText("10.0 kHz");
         m_mainIfBwSlider->blockSignals(false);
-        m_modeLabel->setText("AM");
-        m_modeLabel->setStyleSheet("font-weight: bold; font-size: 18px; color: #FF6666;");
         break;
     }
-    m_sampleRate = m_bwCombo->currentData().toUInt();
+
+    m_sampleRate = m_bwEntries[m_bwIndex].rate;
     if (m_tcpClient->isConnected()) m_tcpClient->setSampleRate(m_sampleRate);
     m_fmDemod->setSampleRate(m_sampleRate);
     m_amDemod->setSampleRate(m_sampleRate);
     m_cPlotter->setSampleRate(m_sampleRate);
     m_cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
 
-    // Re-apply RX gain after rebuildChain (setBandwidth/setSampleRate resets it)
-    float rxGain = m_gainDialog->rxGain() / 10.0f;
-    m_fmDemod->setOutputGain(rxGain);
-    m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
-    m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
+    if (m_gainDialog) {
+        float rxGain = m_gainDialog->rxGain() / 10.0f;
+        m_fmDemod->setOutputGain(rxGain);
+        m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
+        m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
+    }
+
+    saveSettings();
 }
 
 // ============================================================
@@ -915,7 +936,7 @@ void RadioWindow::onSquelchChanged(int value)
 void RadioWindow::onBwChanged(int index)
 {
     Q_UNUSED(index);
-    m_sampleRate = m_bwCombo->currentData().toUInt();
+    m_sampleRate = m_bwEntries[m_bwIndex].rate;
 
     if (m_tcpClient->isConnected())
         m_tcpClient->setSampleRate(m_sampleRate);
@@ -925,11 +946,12 @@ void RadioWindow::onBwChanged(int index)
     m_cPlotter->setSampleRate(m_sampleRate);
     m_cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
 
-    // Re-apply RX gain after rebuildChain
-    float rxGain = m_gainDialog->rxGain() / 10.0f;
-    m_fmDemod->setOutputGain(rxGain);
-    m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
-    m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
+    if (m_gainDialog) {
+        float rxGain = m_gainDialog->rxGain() / 10.0f;
+        m_fmDemod->setOutputGain(rxGain);
+        m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
+        m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
+    }
 
     saveSettings();
     qDebug() << "BW changed to" << m_sampleRate / 1e6 << "MHz";
