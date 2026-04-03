@@ -43,7 +43,7 @@ private:
 
     int digitAtPosition(int x) const;
     void adjustFrequency(int delta);
-    int freqFontSize() const { return 38; }
+    int freqFontSize() const { return 44; }
 };
 
 #endif // FREQUENCYWIDGET_H

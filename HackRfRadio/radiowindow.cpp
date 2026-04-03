@@ -212,7 +212,7 @@ void RadioWindow::loadSettings()
     // Bandwidth
     m_bwIndex = s.value("bwIndex", 0).toInt();
     if (m_bwIndex >= 0 && m_bwIndex < m_bwEntries.size()) {
-        m_bwBtn->setText(m_bwEntries[m_bwIndex].label);
+        m_bwLabel->setText(m_bwEntries[m_bwIndex].label);
         m_sampleRate = m_bwEntries[m_bwIndex].rate;
     }
 
@@ -314,14 +314,39 @@ void RadioWindow::setupUi()
     QHBoxLayout* bandBwRow = new QHBoxLayout();
     bandBwRow->setSpacing(6);
 
-    m_bwBtn = new QPushButton(m_bwEntries[0].label);
-    m_bwBtn->setObjectName("cycleBtn");
-    m_bwBtn->setMinimumHeight(48);
-    connect(m_bwBtn, &QPushButton::clicked, [this]() {
-        m_bwIndex = (m_bwIndex + 1) % m_bwEntries.size();
-        m_bwBtn->setText(m_bwEntries[m_bwIndex].label);
-        onBwChanged(m_bwIndex);
+    m_bwMinusBtn = new QPushButton("-");
+    m_bwMinusBtn->setObjectName("bwPmBtn");
+    m_bwMinusBtn->setMinimumHeight(48);
+    m_bwMinusBtn->setFixedWidth(48);
+    connect(m_bwMinusBtn, &QPushButton::clicked, [this]() {
+        if (m_bwIndex > 0) {
+            m_bwIndex--;
+            m_bwLabel->setText(m_bwEntries[m_bwIndex].label);
+            onBwChanged(m_bwIndex);
+        }
     });
+
+    m_bwLabel = new QLabel(m_bwEntries[0].label);
+    m_bwLabel->setAlignment(Qt::AlignCenter);
+    m_bwLabel->setMinimumHeight(48);
+    m_bwLabel->setStyleSheet("color: #EEEEFF; font-size: 14px; font-weight: bold; "
+        "background-color: #1A1A2E; border: 1px solid #334455; border-radius: 8px; padding: 4px 8px;");
+
+    m_bwPlusBtn = new QPushButton("+");
+    m_bwPlusBtn->setObjectName("bwPmBtn");
+    m_bwPlusBtn->setMinimumHeight(48);
+    m_bwPlusBtn->setFixedWidth(48);
+    connect(m_bwPlusBtn, &QPushButton::clicked, [this]() {
+        if (m_bwIndex < m_bwEntries.size() - 1) {
+            m_bwIndex++;
+            m_bwLabel->setText(m_bwEntries[m_bwIndex].label);
+            onBwChanged(m_bwIndex);
+        }
+    });
+
+    bandBwRow->addWidget(m_bwMinusBtn, 0);
+    bandBwRow->addWidget(m_bwLabel, 0);
+    bandBwRow->addWidget(m_bwPlusBtn, 0);
 
     m_bandPresetBtn = new QPushButton(m_bandEntries[0].label);
     m_bandPresetBtn->setObjectName("cycleBtn");
@@ -348,7 +373,6 @@ void RadioWindow::setupUi()
         }
     });
 
-    bandBwRow->addWidget(m_bwBtn, 0);
     bandBwRow->addWidget(m_bandPresetBtn, 1);
     mainLayout->addLayout(bandBwRow);
 
@@ -574,6 +598,13 @@ void RadioWindow::applyDarkStyle()
             padding: 8px 12px; font-size: 13px;
         }
         QPushButton#cycleBtn:pressed { background-color: #334466; }
+
+        QPushButton#bwPmBtn {
+            background-color: #1A2A44; color: #55BBFF;
+            border: 1px solid #334466; border-radius: 8px;
+            font-size: 20px; font-weight: bold;
+        }
+        QPushButton#bwPmBtn:pressed { background-color: #334466; }
 
         QPushButton#rfAmpBtn {
             background-color: #1A1A2A; color: #667788;
@@ -819,7 +850,44 @@ void RadioWindow::onPttReleased()
 void RadioWindow::onAudioCaptured(const std::vector<float>& samples)
 {
     if (!m_isTx || !m_tcpClient->isConnected()) return;
+
+    // Always send audio immediately - never block TX
     m_tcpClient->sendAudioData(samples.data(), samples.size());
+
+    // Accumulate mic samples for FFT display
+    static std::vector<float> micFftBuf;
+    static constexpr int MIC_FFT_SIZE = 1024;
+
+    micFftBuf.insert(micFftBuf.end(), samples.begin(), samples.end());
+
+    // Only do FFT when we have enough samples AND plotter is ready
+    if (static_cast<int>(micFftBuf.size()) < MIC_FFT_SIZE) return;
+    if (!m_fftUpdatePending.testAndSetAcquire(0, 1)) {
+        // Plotter busy - keep only last MIC_FFT_SIZE samples to stay current
+        if (static_cast<int>(micFftBuf.size()) > MIC_FFT_SIZE * 2)
+            micFftBuf.erase(micFftBuf.begin(), micFftBuf.end() - MIC_FFT_SIZE);
+        return;
+    }
+
+    // Convert real audio to complex
+    std::vector<std::complex<float>> cplx(MIC_FFT_SIZE);
+    for (int i = 0; i < MIC_FFT_SIZE; i++) {
+        cplx[i] = std::complex<float>(micFftBuf[i], 0.0f);
+    }
+    micFftBuf.erase(micFftBuf.begin(), micFftBuf.begin() + MIC_FFT_SIZE);
+
+    std::vector<float> fft_output(MIC_FFT_SIZE);
+    float signal_level_dbfs;
+    getFft(cplx, fft_output, signal_level_dbfs, MIC_FFT_SIZE);
+
+    m_cMeter->setLevel(signal_level_dbfs);
+
+    float* fft_data = new float[MIC_FFT_SIZE];
+    std::memcpy(fft_data, fft_output.data(), MIC_FFT_SIZE * sizeof(float));
+    QMetaObject::invokeMethod(this, "updatePlotter",
+                              Qt::QueuedConnection,
+                              Q_ARG(float*, fft_data),
+                              Q_ARG(int, MIC_FFT_SIZE));
 }
 
 // ============================================================

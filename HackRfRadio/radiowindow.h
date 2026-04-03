@@ -85,7 +85,9 @@ private:
     int m_modulationIndex = 0;
 
     // BW (cycling button)
-    QPushButton* m_bwBtn;
+    QLabel* m_bwLabel;
+    QPushButton* m_bwMinusBtn;
+    QPushButton* m_bwPlusBtn;
     int m_bwIndex = 0;
 
     QLabel* m_modeLabel;
