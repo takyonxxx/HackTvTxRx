@@ -1,8 +1,7 @@
 #ifndef GLPLOTTER_H
 #define GLPLOTTER_H
 
-#include <QOpenGLWidget>
-#include <QOpenGLFunctions>
+#include <QWidget>
 #include <QTimer>
 #include <QFont>
 #include <QMap>
@@ -22,7 +21,7 @@
 #define PEAK_CLICK_MAX_V_DISTANCE   20
 #define PEAK_H_TOLERANCE            2
 
-class CPlotter : public QOpenGLWidget, protected QOpenGLFunctions
+class CPlotter : public QWidget
 {
     Q_OBJECT
 
@@ -146,9 +145,8 @@ public slots:
     }
 
 protected:
-    void initializeGL() override;
-    void resizeGL(int w, int h) override;
-    void paintGL() override;
+    void paintEvent(QPaintEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
     void mouseMoveEvent(QMouseEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;

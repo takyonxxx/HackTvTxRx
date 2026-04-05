@@ -194,7 +194,7 @@ void RadioWindow::loadSettings()
 
     // Connection
     if (m_gainDialog) {
-        m_gainDialog->setHost(s.value("host", "192.168.1.5").toString());
+        m_gainDialog->setHost(s.value("host", "192.168.1.8").toString());
         m_gainDialog->setDataPort(s.value("dataPort", 5000).toInt());
         m_gainDialog->setControlPort(s.value("controlPort", 5001).toInt());
         m_gainDialog->setAudioPort(s.value("audioPort", 5002).toInt());
@@ -656,7 +656,7 @@ void RadioWindow::onConnectClicked()
         m_tcpClient->disconnectFromServer();
         return;
     }
-    QString host = m_gainDialog ? m_gainDialog->host().trimmed() : "192.168.1.5";
+    QString host = m_gainDialog ? m_gainDialog->host().trimmed() : "192.168.1.8";
     int dp = m_gainDialog ? m_gainDialog->dataPort() : 5000;
     int cp = m_gainDialog ? m_gainDialog->controlPort() : 5001;
     int ap = m_gainDialog ? m_gainDialog->audioPort() : 5002;

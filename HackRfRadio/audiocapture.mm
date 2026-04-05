@@ -1,6 +1,51 @@
 #include "audiocapture.h"
 #include <QDebug>
 
+#if defined(Q_OS_IOS)
+#include <AVFoundation/AVFoundation.h>
+
+static bool setupiOSAudioSession()
+{
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    NSError *error = nil;
+
+    // Set category to PlayAndRecord to enable mic input alongside speaker output
+    [session setCategory:AVAudioSessionCategoryPlayAndRecord
+             withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker |
+                         AVAudioSessionCategoryOptionAllowBluetooth
+                   error:&error];
+    if (error) {
+        qDebug() << "AVAudioSession setCategory failed:" << error.localizedDescription.UTF8String;
+        return false;
+    }
+
+    // Set preferred sample rate to 48kHz to match playback
+    [session setPreferredSampleRate:48000.0 error:&error];
+    if (error) {
+        qDebug() << "AVAudioSession setPreferredSampleRate failed:" << error.localizedDescription.UTF8String;
+        // Not fatal, continue
+    }
+
+    // Set preferred IO buffer duration (smaller = lower latency)
+    [session setPreferredIOBufferDuration:0.01 error:&error]; // 10ms
+
+    [session setActive:YES error:&error];
+    if (error) {
+        qDebug() << "AVAudioSession setActive failed:" << error.localizedDescription.UTF8String;
+        return false;
+    }
+
+    qDebug() << "AVAudioSession configured: PlayAndRecord, sampleRate:"
+             << session.sampleRate << "inputChannels:" << session.inputNumberOfChannels;
+    return true;
+}
+
+static double getiOSSessionSampleRate()
+{
+    return [AVAudioSession sharedInstance].sampleRate;
+}
+#endif
+
 AudioCapture::AudioCapture(QObject *parent)
     : QObject(parent)
 {
@@ -19,6 +64,13 @@ bool AudioCapture::start()
 {
     if (m_running.load()) return true;
 
+#if defined(Q_OS_IOS)
+    if (!setupiOSAudioSession()) {
+        qDebug() << "Failed to setup iOS audio session";
+        return false;
+    }
+#endif
+
     QAudioDevice inputDevice = QMediaDevices::defaultAudioInput();
     if (inputDevice.isNull()) {
         qDebug() << "No audio input device found";
@@ -27,11 +79,31 @@ bool AudioCapture::start()
 
     qDebug() << "Using audio input:" << inputDevice.description();
 
-    // On iOS, AudioUnit is very picky about formats.
-    // Use the device's preferred format exactly as reported.
-    // We handle channel/format conversion in onReadyRead().
+    // On iOS, we must match the AVAudioSession's actual sample rate.
+    // The device preferred format may report a different rate than what
+    // the session is actually configured to use, causing AudioUnitRender -50.
+#if defined(Q_OS_IOS)
+    double sessionRate = getiOSSessionSampleRate();
+    m_format.setSampleRate(static_cast<int>(sessionRate));
+    m_format.setChannelCount(1);
+    m_format.setSampleFormat(QAudioFormat::Int16);
+    qDebug() << "iOS: using AVAudioSession sampleRate:" << sessionRate;
+
+    // Verify this format is supported, if not try Float32
+    if (!inputDevice.isFormatSupported(m_format)) {
+        m_format.setSampleFormat(QAudioFormat::Float);
+        qDebug() << "iOS: Int16 not supported, trying Float32";
+        if (!inputDevice.isFormatSupported(m_format)) {
+            // Last resort: use device preferred format entirely
+            m_format = inputDevice.preferredFormat();
+            qDebug() << "iOS: using device preferred as last resort:" 
+                     << m_format.sampleRate() << "Hz" << m_format.channelCount() << "ch";
+        }
+    }
+#else
     m_format = inputDevice.preferredFormat();
-    qDebug() << "Using device preferred format:" << m_format.sampleRate() << "Hz"
+#endif
+    qDebug() << "Audio capture format:" << m_format.sampleRate() << "Hz"
              << m_format.channelCount() << "ch"
              << m_format.sampleFormat();
 

@@ -58,12 +58,12 @@ static inline quint64 time_ms(void)
 // ============================================================================
 
 CPlotter::CPlotter(QWidget *parent)
-    : QOpenGLWidget(parent)
+    : QWidget(parent)
 {
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
-    setUpdateBehavior(QOpenGLWidget::PartialUpdate);
+    setAttribute(Qt::WA_OpaquePaintEvent, true);
 
     // QPainter handles antialiasing internally, no need for MSAA
     // which can cause crashes on some GPU drivers
@@ -95,15 +95,11 @@ QSize CPlotter::sizeHint() const { return QSize(400, 300); }
 // OpenGL lifecycle
 // ============================================================================
 
-void CPlotter::initializeGL()
+void CPlotter::resizeEvent(QResizeEvent *event)
 {
-    initializeOpenGLFunctions();
-    glClearColor(0.0f, 0.031f, 0.078f, 1.0f);
-}
-
-void CPlotter::resizeGL(int w, int h)
-{
-    Q_UNUSED(w); Q_UNUSED(h);
+    QWidget::resizeEvent(event);
+    int w = width();
+    int h = height();
     // Waterfall image management
     int wfH = (100 - m_Percent2DScreen) * h / 100;
     if (wfH < 1) wfH = 1;
@@ -120,8 +116,9 @@ void CPlotter::resizeGL(int w, int h)
 // Main paint — QPainter on OpenGL for smooth antialiased rendering
 // ============================================================================
 
-void CPlotter::paintGL()
+void CPlotter::paintEvent(QPaintEvent *event)
 {
+    Q_UNUSED(event);
     const int w = width();
     const int h = height();
     if (w < 10 || h < 10) return;

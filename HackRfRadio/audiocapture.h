@@ -41,7 +41,10 @@ private:
     std::vector<float> m_accumulator;
     std::mutex m_accMutex;
 
-    static constexpr size_t SEND_THRESHOLD = 441; // 10ms at 44100 Hz
+    int m_inputChannels = 1;
+    QAudioFormat::SampleFormat m_inputSampleFormat = QAudioFormat::Int16;
+
+    static constexpr size_t SEND_THRESHOLD = 480; // 10ms at 48000 Hz
 };
 
 #endif // AUDIOCAPTURE_H
