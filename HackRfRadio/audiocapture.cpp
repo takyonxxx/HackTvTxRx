@@ -1,6 +1,36 @@
 #include "audiocapture.h"
 #include <QDebug>
 
+#if defined(Q_OS_IOS)
+#include <AVFoundation/AVFoundation.h>
+
+static bool setupiOSAudioSession()
+{
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    NSError *error = nil;
+
+    // Set category to PlayAndRecord to enable mic input alongside speaker output
+    [session setCategory:AVAudioSessionCategoryPlayAndRecord
+             withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker |
+                         AVAudioSessionCategoryOptionAllowBluetooth
+                   error:&error];
+    if (error) {
+        qDebug() << "AVAudioSession setCategory failed:" << error.localizedDescription.UTF8String;
+        return false;
+    }
+
+    [session setActive:YES error:&error];
+    if (error) {
+        qDebug() << "AVAudioSession setActive failed:" << error.localizedDescription.UTF8String;
+        return false;
+    }
+
+    qDebug() << "AVAudioSession configured: PlayAndRecord, sampleRate:"
+             << session.sampleRate << "inputChannels:" << session.inputNumberOfChannels;
+    return true;
+}
+#endif
+
 AudioCapture::AudioCapture(QObject *parent)
     : QObject(parent)
 {
@@ -19,6 +49,13 @@ bool AudioCapture::start()
 {
     if (m_running.load()) return true;
 
+#if defined(Q_OS_IOS)
+    if (!setupiOSAudioSession()) {
+        qDebug() << "Failed to setup iOS audio session";
+        return false;
+    }
+#endif
+
     QAudioDevice inputDevice = QMediaDevices::defaultAudioInput();
     if (inputDevice.isNull()) {
         qDebug() << "No audio input device found";
@@ -27,13 +64,29 @@ bool AudioCapture::start()
 
     qDebug() << "Using audio input:" << inputDevice.description();
 
-    // On iOS, AudioUnit is very picky about formats.
-    // Use the device's preferred format exactly as reported.
-    // We handle channel/format conversion in onReadyRead().
+    // Try device preferred format first
     m_format = inputDevice.preferredFormat();
     qDebug() << "Using device preferred format:" << m_format.sampleRate() << "Hz"
              << m_format.channelCount() << "ch"
              << m_format.sampleFormat();
+
+    // If preferred format is invalid (macOS sometimes returns Unknown),
+    // use a known-good format
+    if (m_format.sampleFormat() == QAudioFormat::Unknown || !m_format.isValid()) {
+        m_format.setSampleRate(48000);
+        m_format.setChannelCount(1);
+        m_format.setSampleFormat(QAudioFormat::Float);
+        if (!inputDevice.isFormatSupported(m_format)) {
+            m_format.setSampleFormat(QAudioFormat::Int16);
+            if (!inputDevice.isFormatSupported(m_format)) {
+                m_format.setChannelCount(2);
+                m_format.setSampleFormat(QAudioFormat::Float);
+            }
+        }
+        qDebug() << "Corrected format:" << m_format.sampleRate() << "Hz"
+                 << m_format.channelCount() << "ch"
+                 << m_format.sampleFormat();
+    }
 
     m_inputChannels = m_format.channelCount();
     m_inputSampleFormat = m_format.sampleFormat();
