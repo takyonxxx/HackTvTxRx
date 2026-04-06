@@ -2153,3 +2153,14 @@ void HackTvLib::writeExternalAudio(const float* data, size_t count)
         hackRfDevice->ringWrite(stereo.data(), stereoCount);
     }
 }
+
+void HackTvLib::setTxModulationType(int type)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setTxModulationType(
+            static_cast<HackRfDevice::TxModulationType>(type));
+        fprintf(stderr, "TX modulation type set to: %d (%s)\n", type,
+                type == 0 ? "NFM" : type == 1 ? "WFM" : "AM");
+        fflush(stderr);
+    }
+}

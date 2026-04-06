@@ -21,6 +21,7 @@ SdrDevice::SdrDevice(QObject *parent)
     , m_currentAmpEnable(false)
     , m_currentModulationIndex(0.40f)
     , m_currentAmplitude(0.10f)
+    , m_currentModulationType(0)
     , m_isTxMode(false)
     , m_dataPort(5000)
     , m_controlPort(5001)
@@ -171,9 +172,11 @@ bool SdrDevice::reinitialize(const std::string& mode)
         m_hackTvLib->setAmplitude(m_currentAmplitude);
         m_hackTvLib->setTxAmpGain(m_currentTxAmpGain);
         m_hackTvLib->setAmpEnable(m_currentAmpEnable);
+        m_hackTvLib->setTxModulationType(m_currentModulationType);
 
         qDebug() << "TX ready - modIdx=" << m_currentModulationIndex
                  << "amp=" << m_currentAmplitude
+                 << "modType=" << m_currentModulationType
                  << "ampEnabled=1";
     } else {
         m_hackTvLib->setVgaGain(m_currentVgaGain);
@@ -675,6 +678,19 @@ void SdrDevice::processControlCommand(QTcpSocket* client, const QString& command
             response = "ERROR: Invalid amplitude (0.0 - 2.0)\n";
         }
     }
+    else if (cmd == "SET_MODULATION_TYPE" && parts.size() == 2) {
+        bool ok;
+        int type = parts[1].toInt(&ok);
+        if (ok && type >= 0 && type <= 2) {
+            setTxModulationType(type);
+            m_currentModulationType = type;
+            QString typeName = (type == 0) ? "NFM" : (type == 1) ? "WFM" : "AM";
+            response = QString("OK: TX modulation type set to %1 (%2)\n").arg(type).arg(typeName);
+            emit parameterChanged("ModulationType", typeName);
+        } else {
+            response = "ERROR: Invalid modulation type (0=NFM, 1=WFM, 2=AM)\n";
+        }
+    }
     else if (cmd == "SWITCH_RX") {
         if (switchToRx()) {
             response = "OK: Switched to RX mode\n";
@@ -703,6 +719,7 @@ void SdrDevice::processControlCommand(QTcpSocket* client, const QString& command
             "  SET_TX_AMP_GAIN:<value>       - Set TX amp gain 0-47\n"
             "  SET_MODULATION_INDEX:<value>  - Set FM modulation index 0.1-20.0\n"
             "  SET_AMPLITUDE:<value>         - Set TX amplitude 0.0-2.0\n"
+            "  SET_MODULATION_TYPE:<value>   - Set TX modulation 0=NFM, 1=WFM, 2=AM\n"
             "  SWITCH_RX                     - Switch to receive mode\n"
             "  SWITCH_TX                     - Switch to transmit mode\n"
             "  GET_STATUS                    - Get current settings\n"
@@ -730,10 +747,11 @@ QString SdrDevice::getCurrentStatus()
                "  RF Amp:         %10\n"
                "  Mod Index:      %11\n"
                "  Amplitude:      %12\n"
-               "  Data Clients:   %13\n"
-               "  Control Clients: %14\n"
-               "  Audio Clients:  %15\n"
-               "  Data Sent:      %16 MB\n"
+               "  Mod Type:       %13\n"
+               "  Data Clients:   %14\n"
+               "  Control Clients: %15\n"
+               "  Audio Clients:  %16\n"
+               "  Data Sent:      %17 MB\n"
                ).arg(m_isTxMode ? "TX" : "RX")
         .arg(m_currentFrequency)
         .arg(m_currentFrequency / 1000000.0, 0, 'f', 3)
@@ -746,6 +764,7 @@ QString SdrDevice::getCurrentStatus()
         .arg(m_currentAmpEnable ? "ON" : "OFF")
         .arg(m_currentModulationIndex)
         .arg(m_currentAmplitude)
+        .arg(m_currentModulationType == 0 ? "NFM" : m_currentModulationType == 1 ? "WFM" : "AM")
         .arg(m_clients.size())
         .arg(m_controlClients.size())
         .arg(m_audioClients.size())
@@ -881,6 +900,16 @@ void SdrDevice::setAmplitude(float amp)
     if (m_hackTvLib) {
         m_hackTvLib->setAmplitude(amp);
         qDebug() << "Amplitude set to:" << amp;
+    }
+}
+
+void SdrDevice::setTxModulationType(int type)
+{
+    m_currentModulationType = type;
+    if (m_hackTvLib) {
+        m_hackTvLib->setTxModulationType(type);
+        qDebug() << "TX modulation type set to:" << type
+                 << (type == 0 ? "NFM" : type == 1 ? "WFM" : "AM");
     }
 }
 

@@ -44,8 +44,12 @@ private:
     float m_dcX1 = 0.0f;
     float m_dcY1 = 0.0f;
 
-    // AGC state
+    // AGC state (inspired by BK4819 AM_fix firmware)
     float m_agcGain = 1.0f;
+    float m_agcPeak = 0.0f;          // smoothed peak envelope
+    int   m_agcHoldCounter = 0;      // hold gain after reduction
+    float m_agcAttackAlpha = 0.0f;   // fast attack
+    float m_agcDecayAlpha = 0.0f;    // slow decay
 
     void rebuildChain();
 

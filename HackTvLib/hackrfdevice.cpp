@@ -551,10 +551,18 @@ int HackRfDevice::_tx_callback(hackrf_transfer *transfer)
     }
 
     try {
-        return device->apply_fm_modulation(
-            reinterpret_cast<int8_t*>(transfer->buffer),
-            transfer->valid_length
-            );
+        int modType = device->m_txModType.load();
+        if (modType == HackRfDevice::TX_MOD_AM) {
+            return device->apply_am_modulation(
+                reinterpret_cast<int8_t*>(transfer->buffer),
+                transfer->valid_length
+                );
+        } else {
+            return device->apply_fm_modulation(
+                reinterpret_cast<int8_t*>(transfer->buffer),
+                transfer->valid_length
+                );
+        }
     }
     catch (...) {
         return -1;
@@ -598,17 +606,9 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
         size_t output_iq_needed = length / 2;
 
         if (!m_useAudioFileRing.load()) {
-            // No audio source active - send silence
             std::memset(buffer, 0, length);
             return 0;
         }
-
-        // Ring buffer: stereo interleaved at 44100 Hz
-        // MPX generator upsamples directly to m_sampleRate (e.g. 2 MHz)
-        // No separate resampler needed!
-        //
-        // audio_frames needed = output_iq_needed / upsample_ratio
-        // upsample_ratio = m_sampleRate / 44100
 
         float upsampleRatio = static_cast<float>(m_sampleRate) / 44100.0f;
         size_t audio_frames_needed = static_cast<size_t>(output_iq_needed / upsampleRatio) + 2;
@@ -623,39 +623,70 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
         }
         got = got & ~1;
 
-        // Generate MPX directly at TX sample rate
-        static StereoMPXGenerator* s_mpxGen = nullptr;
-        static uint32_t s_lastMpxSampleRate = 0;
-        if (!s_mpxGen || m_sampleRate != s_lastMpxSampleRate) {
-            delete s_mpxGen;
-            s_mpxGen = new StereoMPXGenerator(44100.0f, static_cast<float>(m_sampleRate), 75e-6f);
-            s_lastMpxSampleRate = m_sampleRate;
-        }
-        std::vector<float> mpx_signal = s_mpxGen->process(stereo_buffer.data(), (got > 0 ? got : stereo_floats_needed));
+        int modType = m_txModType.load();
+        float curModIndex = modulation_index.load();
+        float amp = amplitude.load();
 
-        if (mpx_signal.empty()) {
+        std::vector<float> baseband;
+
+        if (modType == TX_MOD_WFM) {
+            // ── WFM: Stereo MPX with 19 kHz pilot ──
+            static StereoMPXGenerator* s_mpxGen = nullptr;
+            static uint32_t s_lastMpxSampleRate = 0;
+            if (!s_mpxGen || m_sampleRate != s_lastMpxSampleRate) {
+                delete s_mpxGen;
+                s_mpxGen = new StereoMPXGenerator(44100.0f, static_cast<float>(m_sampleRate), 75e-6f);
+                s_lastMpxSampleRate = m_sampleRate;
+            }
+            baseband = s_mpxGen->process(stereo_buffer.data(), (got > 0 ? got : stereo_floats_needed));
+        } else {
+            // ── NFM: Mono, no pilot, no MPX, simple upsample ──
+            size_t mono_count = got / 2;
+            std::vector<float> mono(mono_count);
+            for (size_t i = 0; i < mono_count; i++) {
+                mono[i] = (stereo_buffer[i * 2] + stereo_buffer[i * 2 + 1]) * 0.5f;
+            }
+
+            // Upsample mono to TX sample rate (linear interpolation)
+            baseband.reserve(output_iq_needed + 1);
+            for (size_t i = 0; i + 1 < mono_count; i++) {
+                float startPos = i * upsampleRatio;
+                float endPos = (i + 1) * upsampleRatio;
+                int samplesThisFrame = static_cast<int>(endPos) - static_cast<int>(startPos);
+                if (samplesThisFrame < 1) samplesThisFrame = 1;
+                for (int j = 0; j < samplesThisFrame; j++) {
+                    float t = static_cast<float>(j) / static_cast<float>(samplesThisFrame);
+                    baseband.push_back(mono[i] + (mono[i + 1] - mono[i]) * t);
+                }
+            }
+        }
+
+        if (baseband.empty()) {
             std::memset(buffer, 0, length);
             return 0;
         }
 
-        // FM modulate the MPX composite (already at TX sample rate)
+        // FM modulate the baseband signal
+        // For WFM: MPX already has pre-emphasis, so disable it in modulator
+        // For NFM: enable pre-emphasis in modulator
         static FrequencyModulator* s_fmMod = nullptr;
         static float s_lastFmModIndex = -1.0f;
-        float curModIndex = modulation_index.load();
-        if (!s_fmMod || curModIndex != s_lastFmModIndex) {
+        static int s_lastFmModType = -1;
+        if (!s_fmMod || curModIndex != s_lastFmModIndex || modType != s_lastFmModType) {
             delete s_fmMod;
-            s_fmMod = new FrequencyModulator(curModIndex, false); // no pre-emphasis (MPX handles it)
+            bool preEmph = (modType == TX_MOD_NFM); // NFM needs pre-emphasis in modulator
+            s_fmMod = new FrequencyModulator(curModIndex, preEmph);
             s_lastFmModIndex = curModIndex;
+            s_lastFmModType = modType;
         }
 
         // Apply amplitude
-        float amp = amplitude.load();
-        for (auto& s : mpx_signal) s *= amp;
+        for (auto& s : baseband) s *= amp;
 
-        std::vector<std::complex<float>> iq_signal(mpx_signal.size());
-        s_fmMod->work(mpx_signal.size(), mpx_signal, iq_signal);
+        std::vector<std::complex<float>> iq_signal(baseband.size());
+        s_fmMod->work(baseband.size(), baseband, iq_signal);
 
-        // Write IQ directly to output buffer (no resampler needed!)
+        // Write IQ to output buffer
         size_t output_samples = std::min(static_cast<size_t>(length / 2), iq_signal.size());
         for (size_t i = 0; i < output_samples; ++i) {
             buffer[2 * i] = static_cast<int8_t>(
@@ -671,20 +702,145 @@ int HackRfDevice::apply_fm_modulation(int8_t* buffer, uint32_t length)
     catch (const std::exception& e) {
         fprintf(stderr, "Exception in apply_fm_modulation: %s\n", e.what());
         fflush(stderr);
-        // On error, send silence (don't stop the stream)
         std::memset(buffer, 0, length);
         return 0;
     }
     catch (...) {
         fprintf(stderr, "Unknown exception in apply_fm_modulation\n");
         fflush(stderr);
-        // On error, send silence
         std::memset(buffer, 0, length);
         return 0;
     }
 }
 
-// Thread-safe setter implementasyonları
+// ============================================================
+// AM TX Modulation (DSB-AM)
+// Ring buffer contains STEREO interleaved at 44100 Hz (mono duplicated by writeExternalAudio).
+// AM baseband IQ at carrier center: I = envelope, Q = 0
+// envelope = amplitude * (1 + modDepth * normalizedAudio)
+//
+// Key difference from FM: audio level directly controls modulation depth,
+// so we must normalize the audio to ensure visible sidebands.
+// FM is self-normalizing (phase deviation), AM is not.
+// ============================================================
+int HackRfDevice::apply_am_modulation(int8_t* buffer, uint32_t length)
+{
+    if (!m_isRunning.load() || !buffer || length == 0) {
+        return -1;
+    }
+
+    try {
+        size_t output_iq_needed = length / 2;
+
+        if (!m_useAudioFileRing.load()) {
+            std::memset(buffer, 0, length);
+            return 0;
+        }
+
+        // Upsample ratio: txSampleRate / audioSampleRate (44100 Hz stereo in ring)
+        float upsampleRatio = static_cast<float>(m_sampleRate) / 44100.0f;
+        size_t audio_frames_needed = static_cast<size_t>(output_iq_needed / upsampleRatio) + 2;
+        size_t stereo_needed = audio_frames_needed * 2;
+
+        std::vector<float> stereo_buffer(stereo_needed, 0.0f);
+        size_t got = ringRead(stereo_buffer.data(), stereo_needed);
+        if (got < 2) {
+            // No audio — send pure carrier (I = amplitude, Q = 0)
+            float amp = amplitude.load();
+            int8_t carrier = static_cast<int8_t>(std::max(-127.0f, std::min(127.0f, amp * 127.0f)));
+            for (size_t i = 0; i < length / 2; i++) {
+                buffer[2 * i]     = carrier;
+                buffer[2 * i + 1] = 0;
+            }
+            return 0;
+        }
+        got = got & ~1;
+        size_t mono_count = got / 2;
+
+        // Convert stereo back to mono
+        std::vector<float> mono(mono_count);
+        float peakLevel = 0.0f;
+        for (size_t i = 0; i < mono_count; i++) {
+            mono[i] = (stereo_buffer[i * 2] + stereo_buffer[i * 2 + 1]) * 0.5f;
+            float absVal = std::fabs(mono[i]);
+            if (absVal > peakLevel) peakLevel = absVal;
+        }
+
+        // Normalize audio to [-1, +1] range so modulation depth is meaningful.
+        // Mic audio is typically very low (-0.01 ~ +0.01), without normalization
+        // AM envelope stays near 1.0 with no audible sidebands.
+        // Use AGC-like normalization with a floor to avoid amplifying silence.
+        static float s_agcGain = 1.0f;
+        float targetPeak = 0.8f;
+        float noiseFloor = 0.005f; // below this = silence, don't amplify
+
+        if (peakLevel > noiseFloor) {
+            float desiredGain = targetPeak / peakLevel;
+            // Slow attack, fast release AGC
+            if (desiredGain < s_agcGain) {
+                s_agcGain = s_agcGain * 0.95f + desiredGain * 0.05f; // fast attack
+            } else {
+                s_agcGain = s_agcGain * 0.999f + desiredGain * 0.001f; // slow release
+            }
+            s_agcGain = std::min(s_agcGain, 200.0f); // cap max gain
+        }
+
+        for (size_t i = 0; i < mono_count; i++) {
+            mono[i] *= s_agcGain;
+            mono[i] = std::max(-1.0f, std::min(1.0f, mono[i]));
+        }
+
+        // Upsample mono to TX sample rate (linear interpolation)
+        std::vector<float> upsampled;
+        upsampled.reserve(output_iq_needed + 1);
+        for (size_t i = 0; i + 1 < mono_count; i++) {
+            float startPos = i * upsampleRatio;
+            float endPos = (i + 1) * upsampleRatio;
+            int samplesThisFrame = static_cast<int>(endPos) - static_cast<int>(startPos);
+            if (samplesThisFrame < 1) samplesThisFrame = 1;
+            for (int j = 0; j < samplesThisFrame; j++) {
+                float t = static_cast<float>(j) / static_cast<float>(samplesThisFrame);
+                upsampled.push_back(mono[i] + (mono[i + 1] - mono[i]) * t);
+            }
+        }
+
+        // DSB-AM: I = amplitude * (1 + modDepth * audio), Q = 0
+        // modDepth is modulation_index (0.0-1.0 for standard AM, >1.0 for over-modulation)
+        // For aviation AM (like 119.1 MHz) modDepth ~0.8-1.0 is typical.
+        float amp = amplitude.load();
+        float modDepth = modulation_index.load();
+        // Clamp modDepth to useful AM range — FM modIndex values (e.g. 0.4) work fine here
+        // since audio is now normalized to [-1,+1]
+
+        size_t output_samples = std::min(static_cast<size_t>(length / 2), upsampled.size());
+        for (size_t i = 0; i < output_samples; ++i) {
+            float envelope = 1.0f + modDepth * upsampled[i];
+            if (envelope < 0.0f) envelope = 0.0f; // prevent negative envelope (over-modulation clipping)
+            float I = amp * envelope;
+            I = std::max(-1.0f, std::min(1.0f, I));
+            buffer[2 * i]     = static_cast<int8_t>(I * 127.0f);
+            buffer[2 * i + 1] = 0; // Q = 0 for DSB-AM at baseband center
+        }
+        if (output_samples * 2 < length) {
+            std::memset(buffer + output_samples * 2, 0, length - output_samples * 2);
+        }
+        return 0;
+    }
+    catch (const std::exception& e) {
+        fprintf(stderr, "Exception in apply_am_modulation: %s\n", e.what());
+        fflush(stderr);
+        std::memset(buffer, 0, length);
+        return 0;
+    }
+    catch (...) {
+        fprintf(stderr, "Unknown exception in apply_am_modulation\n");
+        fflush(stderr);
+        std::memset(buffer, 0, length);
+        return 0;
+    }
+}
+
+// Thread-safe setter implementasyonlari
 void HackRfDevice::setFrequency(uint64_t frequency_hz)
 {
     if (m_deviceMutex) {

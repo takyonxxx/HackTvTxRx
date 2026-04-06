@@ -126,6 +126,12 @@ void TcpClient::setAmplitude(float amp)
     sendCommand(QString("SET_AMPLITUDE:%1").arg(amp));
 }
 
+void TcpClient::setModulationType(int type)
+{
+    // 0=NFM, 1=WFM, 2=AM
+    sendCommand(QString("SET_MODULATION_TYPE:%1").arg(type));
+}
+
 void TcpClient::switchToRx()
 {
     sendCommand("SWITCH_RX");

@@ -30,6 +30,7 @@ public:
     void setAmpEnable(bool enable);
     void setModulationIndex(float index);
     void setAmplitude(float amp);
+    void setModulationType(int type); // 0=NFM, 1=WFM, 2=AM
     void switchToRx();
     void switchToTx();
     void requestStatus();

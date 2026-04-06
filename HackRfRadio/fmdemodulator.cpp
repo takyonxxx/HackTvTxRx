@@ -58,12 +58,22 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
         mpx = resample(mpx, lastRate, 48000.0);
     }
 
-    // 6. Audio LPF
+    // 6. De-emphasis (BEFORE audio LPF — GNU Radio standard for NFM)
+    if (m_deemphTau > 0.0f) {
+        float dt = 1.0f / 48000.0f;
+        float alphaD = m_deemphTau / (m_deemphTau + dt);
+        for (auto& s : mpx) {
+            m_deemphPrevL = alphaD * m_deemphPrevL + (1.0f - alphaD) * s;
+            s = m_deemphPrevL;
+        }
+    }
+
+    // 7. Audio LPF
     mpx = applyFIR(mpx, m_audioFilterTaps);
 
-    // 7. HPF 250 Hz
+    // 8. HPF 100 Hz (remove DC offset and sub-bass rumble)
     {
-        float cutoff = 250.0f;
+        float cutoff = 100.0f;
         float rc = 1.0f / (2.0f * static_cast<float>(M_PI) * cutoff);
         float dt = 1.0f / 48000.0f;
         float alpha = rc / (rc + dt);
@@ -72,16 +82,6 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
             m_hpfPrevInL = s;
             m_hpfPrevL = filtered;
             s = filtered;
-        }
-    }
-
-    // 8. De-emphasis
-    if (m_deemphTau > 0.0f) {
-        float dt = 1.0f / 48000.0f;
-        float alphaD = m_deemphTau / (m_deemphTau + dt);
-        for (auto& s : mpx) {
-            m_deemphPrevL = alphaD * m_deemphPrevL + (1.0f - alphaD) * s;
-            s = m_deemphPrevL;
         }
     }
 
@@ -291,19 +291,22 @@ void FMDemodulator::rebuildChain()
     bool isWBFM = !isNBFM;
 
     // IQ decimation target:
-    // NBFM: target 200 kHz
+    // NBFM: target 50 kHz — aggressive decimation removes most noise
+    //        before FM demod, dramatically improving SNR
     // WBFM: target 400 kHz (must be >= 76 kHz for stereo decode at 38 kHz)
     double iqTarget;
     if (isNBFM) {
-        iqTarget = 200000.0;
+        // For 12.5 kHz channel: 50 kHz gives 4x oversampling, plenty for FM demod
+        iqTarget = std::max(m_bandwidth * 4.0, 50000.0);
+        iqTarget = std::min(iqTarget, 200000.0);
     } else {
         iqTarget = std::max(m_bandwidth * 2.0, 300000.0);
+        iqTarget = std::min(iqTarget, 400000.0);
     }
-    iqTarget = std::min(iqTarget, 400000.0);
 
     const int candidates[] = {10, 8, 5, 4, 3, 2};
 
-    while (rate > iqTarget * 2.0) {
+    while (rate > iqTarget * 1.5) {
         int best = 0;
         for (int f : candidates) {
             if (rate / f >= iqTarget) { best = f; break; }
@@ -311,6 +314,7 @@ void FMDemodulator::rebuildChain()
         if (best < 2) break;
 
         double newRate = rate / best;
+        // Tighter cutoff for better noise rejection
         float cutoff = static_cast<float>(newRate * 0.4);
         int taps = (best >= 8) ? 33 : (best >= 5) ? 21 : 17;
 
@@ -326,13 +330,8 @@ void FMDemodulator::rebuildChain()
 
     if (isWBFM) {
         // WBFM: NO real decimation here — stereo decode needs high rate
-        // Stereo decode will resample to 48 kHz internally
-
-        // 15 kHz LPF for mono (L+R) and diff (L-R) extraction at MPX rate
         m_monoFilterTaps = designLPF(63, 15000.0f, static_cast<float>(rate));
         m_diffFilterTaps = designLPF(63, 15000.0f, static_cast<float>(rate));
-
-        // Audio filter at 48 kHz (used as fallback)
         m_audioFilterTaps = designLPF(31, 15000.0f, 48000.0f);
         if (m_outputGain <= 0.0f) m_outputGain = 0.5f;
     } else {
@@ -356,17 +355,20 @@ void FMDemodulator::rebuildChain()
             rate = newRate;
         }
 
-        m_audioFilterTaps = designLPF(51, 3500.0f, 48000.0f);
+        // Voice audio filter
+        m_audioFilterTaps = designLPF(31, 5000.0f, 48000.0f);
         if (m_outputGain <= 0.0f) m_outputGain = 4.5f;
 
         m_monoFilterTaps.clear();
         m_diffFilterTaps.clear();
     }
 
-    // IQ bandwidth filter
+    // IQ bandwidth filter — applied after decimation, before FM demod
     double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
+    // Use exact bandwidth for clean channel isolation
     float filterBW = static_cast<float>(std::min(m_bandwidth, postDecimRate * 0.45));
-    int iqFilterTaps = isNBFM ? 51 : 31;
+    // NFM at 50 kHz: 71 taps gives very sharp cutoff for maximum noise rejection
+    int iqFilterTaps = isNBFM ? 71 : 31;
     if (filterBW > 0) {
         m_iqBandwidthTaps = designLPF(iqFilterTaps, filterBW, static_cast<float>(postDecimRate));
     } else {
@@ -486,9 +488,19 @@ std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>
 
     std::vector<float> out(signal.size());
 
-    float rateNorm = static_cast<float>(rate) / (2.0f * static_cast<float>(M_PI));
-    float refDeviation = (m_bandwidth <= 25000.0) ? 5000.0f : 75000.0f;
-    float scale = (rateNorm / refDeviation) * m_outputGain * m_rxModIndex;
+    // FM demod: phase difference between consecutive IQ samples
+    // atan2 output range: [-π, +π]
+    //
+    // For proper normalization:
+    //   max phase delta per sample = 2π × deviation / sampleRate
+    //   NFM ±5 kHz at 50 kHz rate: max delta = 2π × 5000/50000 = 0.628 rad
+    //   WFM ±75 kHz at 400 kHz rate: max delta = 2π × 75000/400000 = 1.178 rad
+    //
+    // We normalize so that full deviation maps to ±1.0, then apply gain
+
+    float maxDeviation = (m_bandwidth <= 25000.0) ? 5000.0f : 75000.0f;
+    float maxDelta = 2.0f * static_cast<float>(M_PI) * maxDeviation / static_cast<float>(rate);
+    float scale = (1.0f / maxDelta) * m_outputGain * m_rxModIndex;
 
     std::complex<float> prevSample(std::cos(m_lastPhase), std::sin(m_lastPhase));
 

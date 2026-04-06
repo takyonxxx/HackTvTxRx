@@ -63,8 +63,8 @@ void AMDemodulator::setBandwidth(double bandwidthHz)
     m_bandwidth = std::clamp(bandwidthHz, 2000.0, 500000.0);
 
     double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
-    float cutoff = static_cast<float>(std::min(m_bandwidth, postDecimRate * 0.45));
-    m_iqBandwidthTaps = designLPF(31, cutoff, static_cast<float>(postDecimRate));
+    float cutoff = static_cast<float>(std::min(m_bandwidth * 1.5, postDecimRate * 0.45));
+    m_iqBandwidthTaps = designLPF(51, cutoff, static_cast<float>(postDecimRate));
 }
 
 void AMDemodulator::rebuildChain()
@@ -74,12 +74,15 @@ void AMDemodulator::rebuildChain()
 
     double rate = m_inputRate;
 
-    double iqTarget = std::max(m_bandwidth * 4.0, 50000.0);
+    // AM needs wider IQ bandwidth than FM — carrier + both sidebands
+    // Aviation AM: 8.33 kHz spacing, but signal can be up to 10 kHz wide
+    // Use less aggressive decimation to preserve signal
+    double iqTarget = std::max(m_bandwidth * 6.0, 60000.0);
     iqTarget = std::min(iqTarget, 200000.0);
 
     const int candidates[] = {10, 8, 5, 4, 3, 2};
 
-    while (rate > iqTarget * 2.0) {
+    while (rate > iqTarget * 1.5) {
         int best = 0;
         for (int f : candidates) {
             if (rate / f >= iqTarget) {
@@ -123,14 +126,16 @@ void AMDemodulator::rebuildChain()
         rate = newRate;
     }
 
-    // AM audio is narrower - 5 kHz LPF
-    float audioCutoff = std::min(5000.0f, static_cast<float>(m_bandwidth / 2.0));
+    // AM audio: voice is 300-3400 Hz, use 4 kHz cutoff
+    float audioCutoff = std::min(4000.0f, static_cast<float>(m_bandwidth / 2.0));
     m_audioFilterTaps = designLPF(31, audioCutoff, 48000.0f);
 
+    // IQ bandwidth filter — wider than FM to capture both AM sidebands
+    // Use 1.5x bandwidth to avoid cutting sideband edges
     double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
-    float defaultBW = static_cast<float>(std::min(m_bandwidth, postDecimRate * 0.45));
+    float defaultBW = static_cast<float>(std::min(m_bandwidth * 1.5, postDecimRate * 0.45));
     if (defaultBW > 0) {
-        m_iqBandwidthTaps = designLPF(31, defaultBW, static_cast<float>(postDecimRate));
+        m_iqBandwidthTaps = designLPF(51, defaultBW, static_cast<float>(postDecimRate));
     } else {
         m_iqBandwidthTaps.clear();
     }
@@ -142,19 +147,61 @@ std::vector<float> AMDemodulator::amDemod(const std::vector<std::complex<float>>
 
     std::vector<float> out(signal.size());
 
-    // Envelope detection: |I + jQ| = sqrt(I^2 + Q^2)
-    // With simple AGC
+    // AM envelope detection with adaptive AGC
+    // Fast attack to prevent clipping, slow decay to prevent pumping
+
+    const float sampleRate = m_iqStages.empty()
+        ? static_cast<float>(m_inputRate) : static_cast<float>(m_iqStages.back().outputRate);
+    const float attackAlpha = 1.0f - std::exp(-1.0f / (sampleRate * 0.001f));  // 1ms attack
+    const float decayAlpha = 1.0f - std::exp(-1.0f / (sampleRate * 0.100f));   // 100ms decay
+
+    const float targetLevel = 0.5f;
+    const float maxGain = 5000.0f;    // very high for weak aviation signals
+    const float minGain = 0.01f;
+
+    // First pass: compute DC level (average envelope) for this block
+    float dcSum = 0.0f;
+    for (size_t i = 0; i < signal.size(); i++) {
+        float envelope = std::sqrt(signal[i].real() * signal[i].real() +
+                                   signal[i].imag() * signal[i].imag());
+        dcSum += envelope;
+    }
+    float dcLevel = dcSum / static_cast<float>(signal.size());
+
+    // Second pass: demodulate with DC removal and AGC
     for (size_t i = 0; i < signal.size(); i++) {
         float envelope = std::sqrt(signal[i].real() * signal[i].real() +
                                    signal[i].imag() * signal[i].imag());
 
-        // Simple AGC
-        float target = 0.3f;
-        float error = target - envelope * m_agcGain;
-        m_agcGain += error * 0.001f;
-        m_agcGain = std::clamp(m_agcGain, 0.01f, 100.0f);
+        // Remove carrier (DC component) — this extracts the audio modulation
+        float audio = envelope - dcLevel;
 
-        out[i] = envelope * m_agcGain;
+        // Peak follower for AGC
+        float absAudio = std::fabs(audio);
+        if (absAudio > m_agcPeak) {
+            m_agcPeak += attackAlpha * (absAudio - m_agcPeak);
+        } else {
+            m_agcPeak += decayAlpha * (absAudio - m_agcPeak);
+        }
+
+        // Compute gain from peak level
+        if (m_agcPeak > 0.00001f) {
+            float desiredGain = targetLevel / m_agcPeak;
+            desiredGain = std::clamp(desiredGain, minGain, maxGain);
+
+            if (desiredGain < m_agcGain) {
+                // Fast attack
+                m_agcGain += attackAlpha * (desiredGain - m_agcGain);
+                m_agcHoldCounter = static_cast<int>(sampleRate * 0.030f); // 30ms hold
+            } else if (m_agcHoldCounter > 0) {
+                m_agcHoldCounter--;
+            } else {
+                // Slow decay
+                m_agcGain += decayAlpha * (desiredGain - m_agcGain);
+            }
+        }
+
+        out[i] = audio * m_agcGain;
     }
 
     return out;

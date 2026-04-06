@@ -178,7 +178,7 @@ void RadioWindow::saveSettings()
     // Window geometry
     s.setValue("geometry", saveGeometry());
 
-    qDebug() << "Settings saved";
+    // Settings saved silently
 }
 
 void RadioWindow::loadSettings()
@@ -503,9 +503,15 @@ void RadioWindow::setupUi()
             m_mainIfBwLabel->setText(QString("%1 kHz").arg(bw / 1000.0f, 0, 'f', 1));
         else
             m_mainIfBwLabel->setText(QString("%1 Hz").arg(static_cast<int>(bw)));
+        if (m_gainDialog) m_gainDialog->setIfBandwidth(v);
+    });
+    connect(m_mainIfBwSlider, &QSlider::sliderReleased, [this]() {
+        int v = m_mainIfBwSlider->value();
+        float bw;
+        if (v <= 25) bw = v * 500.0f;
+        else bw = 12500.0f + (v - 25) * 1000.0f;
         m_fmDemod->setBandwidth(bw);
         m_amDemod->setBandwidth(bw);
-        if (m_gainDialog) m_gainDialog->setIfBandwidth(v);
     });
     sliderGrid->addWidget(bwIcon, 1, 0);
     sliderGrid->addWidget(m_mainIfBwSlider, 1, 1);
@@ -687,6 +693,7 @@ void RadioWindow::onConnected()
         m_tcpClient->setModulationIndex(m_gainDialog->modIndex() / 100.0f);
         m_tcpClient->setAmpEnable(m_gainDialog->ampEnabled());
     }
+    m_tcpClient->setModulationType(static_cast<int>(m_currentModulation));
     m_tcpClient->switchToRx();
 
     // Apply IF bandwidth from slider
@@ -809,6 +816,7 @@ void RadioWindow::onPttPressed()
         m_micStarted = true;
     }
 
+    m_tcpClient->setModulationType(static_cast<int>(m_currentModulation));
     m_tcpClient->switchToTx();
 
     if (m_gainDialog) m_gainDialog->sendTxParams();
@@ -938,7 +946,23 @@ void RadioWindow::onModulationChanged(int index)
     case 0:
         m_currentModulation = FM_NB;
         m_fmDemod->setBandwidth(12500.0);
-        if (m_gainDialog) m_gainDialog->setIfBandwidth(25);
+        if (m_gainDialog) {
+            m_gainDialog->setIfBandwidth(25);
+            // TX presets (NOT blocked — must reach server)
+            m_gainDialog->setAmplitude(50);
+            m_gainDialog->setModIndex(40);
+            // RX presets (blocked — only local)
+            m_gainDialog->blockSignals(true);
+            m_gainDialog->setVgaGain(20);
+            m_gainDialog->setLnaGain(20);
+            m_gainDialog->setRxGain(20);       // 2.0
+            m_gainDialog->setRxModIndex(15);   // 1.5
+            m_gainDialog->setDeemph(0);        // OFF
+            m_gainDialog->blockSignals(false);
+            m_fmDemod->setOutputGain(2.0f);
+            m_fmDemod->setRxModIndex(1.5f);
+            m_fmDemod->setDeemphTau(0.0f);
+        }
         m_mainIfBwSlider->blockSignals(true);
         m_mainIfBwSlider->setValue(25);
         m_mainIfBwLabel->setText("12.5 kHz");
@@ -947,7 +971,23 @@ void RadioWindow::onModulationChanged(int index)
     case 1:
         m_currentModulation = FM_WB;
         m_fmDemod->setBandwidth(150000.0);
-        if (m_gainDialog) m_gainDialog->setIfBandwidth(163);
+        if (m_gainDialog) {
+            m_gainDialog->setIfBandwidth(163);
+            // TX presets (NOT blocked — must reach server)
+            m_gainDialog->setAmplitude(50);
+            m_gainDialog->setModIndex(40);
+            // RX presets (blocked — only local)
+            m_gainDialog->blockSignals(true);
+            m_gainDialog->setVgaGain(20);
+            m_gainDialog->setLnaGain(40);
+            m_gainDialog->setRxGain(15);       // 1.5
+            m_gainDialog->setRxModIndex(15);   // 1.5
+            m_gainDialog->setDeemph(0);        // OFF
+            m_gainDialog->blockSignals(false);
+            m_fmDemod->setOutputGain(1.5f);
+            m_fmDemod->setRxModIndex(1.5f);
+            m_fmDemod->setDeemphTau(0.0f);
+        }
         m_mainIfBwSlider->blockSignals(true);
         m_mainIfBwSlider->setValue(163);
         m_mainIfBwLabel->setText("150.0 kHz");
@@ -956,7 +996,20 @@ void RadioWindow::onModulationChanged(int index)
     case 2:
         m_currentModulation = AM;
         m_amDemod->setBandwidth(10000.0);
-        if (m_gainDialog) m_gainDialog->setIfBandwidth(20);
+        if (m_gainDialog) {
+            m_gainDialog->setIfBandwidth(20);
+            // TX presets (NOT blocked — must reach server)
+            m_gainDialog->setAmplitude(50);    // 0.50 carrier level
+            m_gainDialog->setModIndex(85);     // 0.85 = %85 modulation depth
+            // RX presets - AM (LNA slightly higher for weak aviation signals)
+            m_gainDialog->blockSignals(true);
+            m_gainDialog->setVgaGain(20);
+            m_gainDialog->setLnaGain(30);
+            m_gainDialog->setRxGain(10);       // 1.0
+            m_gainDialog->setRxModIndex(10);   // 1.0
+            m_gainDialog->setDeemph(0);        // OFF
+            m_gainDialog->blockSignals(false);
+        }
         m_mainIfBwSlider->blockSignals(true);
         m_mainIfBwSlider->setValue(20);
         m_mainIfBwLabel->setText("10.0 kHz");
@@ -965,7 +1018,10 @@ void RadioWindow::onModulationChanged(int index)
     }
 
     m_sampleRate = m_bwEntries[m_bwIndex].rate;
-    if (m_tcpClient->isConnected()) m_tcpClient->setSampleRate(m_sampleRate);
+    if (m_tcpClient->isConnected()) {
+        m_tcpClient->setSampleRate(m_sampleRate);
+        m_tcpClient->setModulationType(static_cast<int>(m_currentModulation));
+    }
     m_fmDemod->setSampleRate(m_sampleRate);
     m_amDemod->setSampleRate(m_sampleRate);
     m_cPlotter->setSampleRate(m_sampleRate);

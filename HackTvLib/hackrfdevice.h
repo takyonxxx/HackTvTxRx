@@ -75,6 +75,14 @@ public:
     // FM TX modulation (called from tx_callback when external audio ring is active)
     int apply_fm_modulation(int8_t* buffer, uint32_t length);
 
+    // AM TX modulation
+    int apply_am_modulation(int8_t* buffer, uint32_t length);
+
+    // Modulation type selection for TX
+    enum TxModulationType { TX_MOD_NFM = 0, TX_MOD_WFM = 1, TX_MOD_AM = 2 };
+    void setTxModulationType(TxModulationType type) { m_txModType.store(static_cast<int>(type)); }
+    TxModulationType txModulationType() const { return static_cast<TxModulationType>(m_txModType.load()); }
+
 private:
     // Callback functions
     static int _tx_callback(hackrf_transfer *transfer);
@@ -121,6 +129,9 @@ private:
     bool m_ampEnable;
     uint32_t m_basebandFilterBandwidth;
     bool m_antennaEnable;
+
+    // TX modulation type (atomic for tx_callback thread safety)
+    std::atomic<int> m_txModType{0}; // 0=NFM, 1=WFM, 2=AM
 
 public:
     // Ring buffer for external audio (GUI feeds audio here for FM TX)

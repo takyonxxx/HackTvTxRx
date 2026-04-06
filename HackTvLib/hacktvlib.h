@@ -144,6 +144,9 @@ public:
     void enableExternalAudioRing();
     void writeExternalAudio(const float* data, size_t count);
 
+    // Set TX modulation type: 0=NFM, 1=WFM, 2=AM
+    void setTxModulationType(int type);
+
     bool isInitialized() const {
         return (s != nullptr);
     }

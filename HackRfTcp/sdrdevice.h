@@ -45,6 +45,7 @@ public:
     // TX Configuration
     void setModulationIndex(float index);
     void setAmplitude(float amp);
+    void setTxModulationType(int type); // 0=NFM, 1=WFM, 2=AM
 
     // Mode switching
     bool switchToRx();
@@ -116,6 +117,7 @@ private:
     bool m_currentAmpEnable;
     float m_currentModulationIndex;
     float m_currentAmplitude;
+    int m_currentModulationType; // 0=NFM, 1=WFM, 2=AM
 
     // Mode tracking
     bool m_isTxMode;
