@@ -20,6 +20,8 @@
 #include <QAudioDecoder>
 #include <QMediaDevices>
 #include <QAudioDevice>
+#include <QLabel>
+#include <QKeyEvent>
 
 #include <memory>
 #include <vector>
@@ -39,156 +41,153 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
-    struct AtomicGuard {
-        QAtomicInt& counter;
-        // CRITICAL: Kilit açma işlemini sadece yıkıcı (destructor) içinde yapıyoruz.
-        AtomicGuard(QAtomicInt& c) : counter(c) {}
-        ~AtomicGuard() { counter.storeRelease(0); }
-    };
-
 public slots:
     void updatePlotter(float* fft_data, int size);
 
+protected:
+    void keyPressEvent(QKeyEvent *event) override;
+    void keyReleaseEvent(QKeyEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
+    bool eventFilter(QObject *obj, QEvent *event) override;
+
 private slots:
-    void executeCommand();
+    void onStartStopClicked();
+    void onPttPressed();
+    void onPttReleased();
     void chooseFile();
-    void onInputTypeChanged(int index);
-    void onRxTxTypeChanged(int index);
+    void onOperatingModeChanged(int index);
     void onSampleRateChanged(int index);
     void onChannelChanged(int index);
     void onFreqCtrl_setFrequency(qint64 freq);
     void on_plotter_newDemodFreq(qint64 freq, qint64 delta);
     void on_plotter_newFilterFreq(int low, int high);
-    void handleSamples(const std::vector<std::complex<float>>& samples);
     void updateLogDisplay();
-    void onVolumeSliderValueChanged(int value);
-    void onLnaSliderValueChanged(int value);
-    void onVgaSliderValueChanged(int value);
-    void onRxAmpSliderValueChanged(int value);
-    void clear();
     void exitApp();
     void hardReset();
 
 private:
     void initializeHackTvLib();
     void setupUi();
-    void addOutputGroup();
-    void addinputTypeGroup();
-    void addModeGroup();
+    void addDeviceGroup();
     void addRxGroup();
+    void addRadioTxGroup();
+    void addTvTxGroup();
     void saveSettings();
     void loadSettings();
     void populateChannelCombo();
-    QStringList buildCommand();
+    QStringList buildRxCommand();
+    QStringList buildTvTxCommand();
     void setCurrentSampleRate(int sampleRate);
     void processFft(const std::vector<std::complex<float>>& samples);
-    void processDemod(const std::vector<std::complex<float>>& samples);    
-    void handleLog(const std::string& logMessage);
+    void processDemod(const std::vector<std::complex<float>>& samples);
     void handleReceivedData(const int8_t *data, size_t len);
-    void updateGainControlsForDevice(const QString& device);
+    void startRx();
+    void stopAll();
+    void switchToTx();
+    void switchToRx();
+    void applyModePresets();
 
     QVBoxLayout *mainLayout;
 
-    // Invert checkbox in fourth row
-    QComboBox *outputCombo, *channelCombo, *sampleRateCombo, *rxtxCombo, *inputTypeCombo, *modeCombo;
-    QCheckBox *ampEnabled, *colorDisabled;
-    QLineEdit *inputFileEdit, *ffmpegOptionsEdit;
-    QLabel *channelLabel;
-    QPushButton *chooseFileButton, *executeButton, *exitButton, *clearButton, *hardResetButton;
-    QSlider *txAmplitudeSlider, *txFilterSizeSlider, *txModulationIndexSlider, *txInterpolationSlider;
-    QDoubleSpinBox *txAmplitudeSpinBox, *txFilterSizeSpinBox, *txModulationIndexSpinBox, *txInterpolationSpinBox;
-    QSpinBox *txAmpSpinBox;
-    QLabel *volumeLabel, *volumeLevelLabel, *lnaLabel, *lnaLevelLabel, *vgaLabel, *vgaLevelLabel,
-        *rxAmpLabel, *rxAmpLevelLabel, *rtlPpmLabel, *rtlDirectLabel,
-        *rxGainLabel, *rxGainLevelLabel, *rxModIndexLabel, *rxModIndexLevelLabel, *rxDeemphLabel, *rxDeemphLevelLabel;
-    QSlider *volumeSlider, *lnaSlider, *vgaSlider, *txAmpSlider, *rxAmpSlider,
-        *rxGainSlider, *rxModIndexSlider, *rxDeemphSlider;
-    QSpinBox *rtlPpmSpinBox;
-    QComboBox *rtlDirectCombo;
-    QCheckBox *rtlOffsetCheck;
-    QFileDialog *fileDialog;
+    // Device group
+    QComboBox *outputCombo, *sampleRateCombo;
+    QCheckBox *ampEnabled;
+
+    // Operating mode
+    // 0=NFM Radio, 1=WFM Radio, 2=AM Radio, 3=FM File TX, 4=TV File TX, 5=TV Test TX, 6=TV RTSP TX
+    QComboBox *operatingModeCombo;
+    enum OperatingMode { MODE_NFM=0, MODE_WFM=1, MODE_AM=2, MODE_FM_FILE=3,
+                         MODE_TV_FILE=4, MODE_TV_TEST=5, MODE_TV_RTSP=6 };
+    int m_opMode = MODE_NFM;
+
+    // RX group
     CFreqCtrl *freqCtrl;
     CPlotter *cPlotter;
     CMeter *cMeter;
     QLabel *m_stereoLabel;
+    QSlider *volumeSlider, *lnaSlider, *vgaSlider, *rxAmpSlider;
+    QLabel *volumeLevelLabel, *lnaLevelLabel, *vgaLevelLabel, *rxAmpLevelLabel;
+    QSlider *rxGainSlider, *rxModIndexSlider, *rxDeemphSlider;
+    QLabel *rxGainLevelLabel, *rxModIndexLevelLabel, *rxDeemphLevelLabel;
+    QLabel *rxModIndexLabel, *rxDeemphLabel;
+    QGroupBox *rxGroup;
 
-    QString sliderStyle, labelStyle;
+    // Radio TX group (PTT + TX params)
+    QGroupBox *radioTxGroup;
+    QPushButton *pttButton;
+    QLabel *txRxIndicator;
+    QSlider *txAmplitudeSlider, *txModIndexSlider, *txPowerSlider;
+    QLabel *txAmplitudeLevelLabel, *txModIndexLevelLabel, *txPowerLevelLabel;
 
-    // Layouts and Groups
-    QGridLayout *txControlsLayout;
-    QGroupBox *outputGroup, *inputTypeGroup, *modeGroup, *rxGroup;
+    // TV TX group
+    QGroupBox *tvTxGroup;
+    QComboBox *tvModeCombo, *channelCombo;
+    QLineEdit *inputFileEdit, *ffmpegOptionsEdit;
+    QPushButton *chooseFileButton;
+    QCheckBox *colorDisabled;
 
+    // Bottom buttons
+    QPushButton *startStopButton, *exitButton, *hardResetButton;
 
+    // Log
     QTextBrowser *logBrowser;
-    //std::unique_ptr<HackTvLib> m_hackTvLib;
-    HackTvLib* m_hackTvLib;
-    std::unique_ptr<AudioOutput> audioOutput;
-
-    QThreadPool* m_threadPool;
     QTimer *logTimer;
-    QString m_sSettingsFile;
     QStringList pendingLogs;
 
-    qint64 m_frequency;
-    int m_sampleRate;
+    // HackTvLib
+    HackTvLib* m_hackTvLib = nullptr;
+    std::unique_ptr<AudioOutput> audioOutput;
+    QThreadPool* m_threadPool = nullptr;
+
+    QString m_sSettingsFile;
+
+    // State
+    qint64 m_frequency = 145000000;
+    int m_sampleRate = 2000000;
     int m_volumeLevel = 10;
     int m_lnaGain = 20;
-    int m_vgaGain = 30;
+    int m_vgaGain = 20;
     int m_txAmpGain = 47;
-    int m_rxAmpGain = 11;
-
-    QString mode;
-    bool isTx, isFmTransmit, isFmFile, isFile, isTest, isFFmpeg;
-
+    int m_rxAmpGain = 0;
     float audioGain = 0.75f;
-    float rxGain = 1.0f;
-    float rxModIndex = 2.0f;
+    float rxGain = 2.0f;
+    float rxModIndex = 1.5f;
     int rxDeemph = 0;
-    int m_LowCutFreq = -120e3;
-    int m_HiCutFreq = 120e3;
-    int m_CutFreq = 120e3;
-    int flo = -5000;
-    int fhi = 5000;
-    int click_res = 100;
-    int fftrate = 50;
+    float tx_amplitude = 0.50f;
+    float tx_modulation_index = 0.40f;
 
-    QFrame* tx_line;
-    float tx_amplitude = 0.50;       // HackRfRadio default: 0.50
-    float tx_filter_size = 0;
-    float tx_modulation_index = 0.40; // HackRfRadio default: 0.40
-    float tx_interpolation = 48;
-    double transitionWidth = 50e3;
-    double quadratureRate = 480e3;
-    int audioDecimation = 12;
-    int interpolation = 4;
-    int decimation = 2;
+    int m_LowCutFreq = -12500;
+    int m_HiCutFreq = 12500;
+    int m_CutFreq = 12500;
+    int m_rxBandwidth = 12500;
 
+    bool m_isTx = false;
+    bool m_pttHeld = false;
+    bool m_isRadioMode = true;
     std::atomic<bool> m_shuttingDown{false};
-    std::atomic<bool> m_isProcessing;
-    bool m_initDone = false;  // guard: prevent saveSettings during constructor
+    std::atomic<bool> m_isProcessing{false};
+    bool m_initDone = false;
     bool m_forceMono = false;
-    QAtomicInt m_fftUpdatePending{0};  // Frame-drop: skip queuing if update already pending
+    QAtomicInt m_fftUpdatePending{0};
 
+    // Demod
     std::unique_ptr<LowPassFilter> lowPassFilter;
     std::unique_ptr<RationalResampler> rationalResampler;
     std::unique_ptr<FMDemodulator> fmDemodulator;
     std::unique_ptr<WBFMDemodulator> wbfmDemodulator;
     std::unique_ptr<AMDemodulator> amDemodulator;
-    QComboBox *rxDemodCombo;
-    QComboBox *rxBwCombo;
-    int m_rxDemodMode = 0; // 0=FM, 1=AM
-    int m_rxBandwidth = 150000; // Hz, default WBFM
-    QImage currentFrame;
 
-    // GUI-side audio capture for FM TX (replaces PortAudio in DLL)
+    // Mic capture
     QAudioSource* m_micSource = nullptr;
     QIODevice* m_micDevice = nullptr;
     QTimer* m_micFlushTimer = nullptr;
+    bool m_micStarted = false;
+
+    // File playback
     QTimer* m_filePlayTimer = nullptr;
     QAudioDecoder* m_audioDecoder = nullptr;
     std::vector<float> m_fileAudioData;
     size_t m_filePlayPos = 0;
-    bool m_fileLoop = true;
 
     void startMicCapture();
     void stopMicCapture();
@@ -196,10 +195,8 @@ private:
     void startFilePlaybackTimer();
     void stopFilePlayback();
 
-protected:
-    void closeEvent(QCloseEvent *event) override;
-    bool eventFilter(QObject *obj, QEvent *event) override;
-
+    QFileDialog *fileDialog;
+    QString labelStyle;
 };
 
 #endif // MAINWINDOW_H
