@@ -89,27 +89,28 @@ public:
             mpx = resample(mpx, lastRate, 48000.0);
         }
 
-        mpx = applyFIR(mpx, m_audioFilterTaps);
-
-        // HPF
-        {
-            float cutoff = 250.0f;
-            float rc = 1.0f / (2.0f * static_cast<float>(M_PI) * cutoff);
-            float dt = 1.0f / 48000.0f;
-            float alpha = rc / (rc + dt);
-            for (auto& s : mpx) {
-                float f = alpha * (m_hpfPrevL + s - m_hpfPrevInL);
-                m_hpfPrevInL = s; m_hpfPrevL = f; s = f;
-            }
-        }
-
-        // De-emphasis
+        // De-emphasis BEFORE LPF (GNU Radio standard)
         if (m_deemphTau > 0.0f) {
             float dt = 1.0f / 48000.0f;
             float alphaD = m_deemphTau / (m_deemphTau + dt);
             for (auto& s : mpx) {
                 m_deemphPrevL = alphaD * m_deemphPrevL + (1.0f - alphaD) * s;
                 s = m_deemphPrevL;
+            }
+        }
+
+        // Audio LPF
+        mpx = applyFIR(mpx, m_audioFilterTaps);
+
+        // HPF 100 Hz
+        {
+            float cutoff = 100.0f;
+            float rc = 1.0f / (2.0f * static_cast<float>(M_PI) * cutoff);
+            float dt = 1.0f / 48000.0f;
+            float alpha = rc / (rc + dt);
+            for (auto& s : mpx) {
+                float f = alpha * (m_hpfPrevL + s - m_hpfPrevInL);
+                m_hpfPrevInL = s; m_hpfPrevL = f; s = f;
             }
         }
 
@@ -310,11 +311,20 @@ private:
 
         double rate = m_inputRate;
 
-        double iqTarget = isNBFM ? 200000.0 : 300000.0;
-        iqTarget = std::min(iqTarget, 400000.0);
+        // NFM: target 50 kHz for maximum noise rejection
+        // WFM: target 400 kHz for stereo decode (needs >= 76 kHz)
+        double iqTarget;
+        if (isNBFM) {
+            iqTarget = std::max(m_bandwidth * 4.0, 50000.0);
+            iqTarget = std::min(iqTarget, 200000.0);
+        } else {
+            iqTarget = std::max(m_bandwidth * 2.0, 300000.0);
+            iqTarget = std::min(iqTarget, 400000.0);
+        }
+
         const int candidates[] = {10, 8, 5, 4, 3, 2};
 
-        while (rate > iqTarget * 2.0) {
+        while (rate > iqTarget * 1.5) {
             int best = 0;
             for (int f : candidates) {
                 if (rate / f >= iqTarget) { best = f; break; }
@@ -334,14 +344,13 @@ private:
         }
 
         if (isWBFM) {
-            // No real decimation — stereo decode needs high rate
             m_monoFilterTaps = designLPF(63, 15000.0f, static_cast<float>(rate));
             m_diffFilterTaps = designLPF(63, 15000.0f, static_cast<float>(rate));
             m_audioFilterTaps = designLPF(31, 15000.0f, 48000.0f);
             if (m_outputGain <= 0.0f) m_outputGain = 0.5f;
         } else {
             // NBFM: real decimation to ~48 kHz
-            while (rate > 100000.0) {
+            while (rate > 96000.0) {
                 int best = 0;
                 for (int f : candidates) {
                     if (rate / f >= 48000.0) { best = f; break; }
@@ -360,7 +369,7 @@ private:
                 rate = newRate;
             }
 
-            m_audioFilterTaps = designLPF(51, 3500.0f, 48000.0f);
+            m_audioFilterTaps = designLPF(31, 5000.0f, 48000.0f);
             if (m_outputGain <= 0.0f) m_outputGain = 2.0f;
             m_monoFilterTaps.clear();
             m_diffFilterTaps.clear();
@@ -369,7 +378,7 @@ private:
         // IQ bandwidth filter
         double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
         float filterBW = static_cast<float>(std::min(m_bandwidth, postDecimRate * 0.45));
-        int iqFilterTaps = isNBFM ? 51 : 31;
+        int iqFilterTaps = isNBFM ? 71 : 31;
         if (filterBW > 0) {
             m_iqBandwidthTaps = designLPF(iqFilterTaps, filterBW, static_cast<float>(postDecimRate));
         } else {
@@ -466,9 +475,12 @@ private:
     {
         if (signal.empty()) return {};
         std::vector<float> out(signal.size());
-        float rateNorm = static_cast<float>(rate) / (2.0f * static_cast<float>(M_PI));
-        float refDeviation = (m_bandwidth <= 25000.0) ? 5000.0f : 75000.0f;
-        float scale = (rateNorm / refDeviation) * m_outputGain * m_rxModIndex;
+
+        // Proper normalization: full deviation maps to ±1.0
+        float maxDeviation = (m_bandwidth <= 25000.0) ? 5000.0f : 75000.0f;
+        float maxDelta = 2.0f * static_cast<float>(M_PI) * maxDeviation / static_cast<float>(rate);
+        float scale = (1.0f / maxDelta) * m_outputGain * m_rxModIndex;
+
         std::complex<float> prevSample(std::cos(m_lastPhase), std::sin(m_lastPhase));
         for (size_t i = 0; i < signal.size(); i++) {
             std::complex<float> product = signal[i] * std::conj(prevSample);
@@ -526,12 +538,9 @@ public:
         , m_bandwidth(bandwidth)
         , m_outputGain(1.0f)
         , m_agcGain(1.0f)
-        , m_agcTarget(0.3f)
-        , m_agcAttack(0.01f)
-        , m_agcDecay(0.0001f)
-        , m_dcAlpha(0.995f)
-        , m_dcPrev(0.0f)
-        , m_dcOut(0.0f)
+        , m_agcPeak(0.0f)
+        , m_agcHoldCounter(0)
+        , m_dcX1(0.0f), m_dcY1(0.0f)
     {
         rebuildChain();
 
@@ -541,7 +550,7 @@ public:
                  << "realStages:" << m_realStages.size();
     }
 
-    // Returns interleaved stereo [L,R,L,R,...] (mono duplicated)
+    // Returns mono samples (NOT interleaved stereo — caller duplicates)
     std::vector<float> demodulate(const std::vector<std::complex<float>>& samples)
     {
         if (samples.empty()) return {};
@@ -557,73 +566,45 @@ public:
             iq = applyComplexFIR(iq, m_iqBandwidthTaps);
         }
 
-        // 3. AM envelope detection: magnitude of complex signal
-        std::vector<float> envelope(iq.size());
-        for (size_t i = 0; i < iq.size(); i++) {
-            envelope[i] = std::sqrt(iq[i].real() * iq[i].real() + iq[i].imag() * iq[i].imag());
-        }
+        // 3. AM demod with telsiz-style AGC
+        auto audio = amDemod(iq);
 
-        // 4. DC removal (strip carrier)
-        for (auto& s : envelope) {
-            float y = s - m_dcPrev + m_dcAlpha * m_dcOut;
-            m_dcPrev = s;
-            m_dcOut = y;
-            s = y;
-        }
-
-        // 5. AGC - automatic gain control
-        for (auto& s : envelope) {
-            float absVal = std::abs(s);
-            if (absVal > m_agcTarget) {
-                m_agcGain -= m_agcAttack * (absVal - m_agcTarget);
-            } else {
-                m_agcGain += m_agcDecay * (m_agcTarget - absVal);
-            }
-            m_agcGain = std::clamp(m_agcGain, 0.01f, 50.0f);
-            s *= m_agcGain;
-        }
-
-        // 6. Real-domain decimation to ~48 kHz
+        // 4. Real-domain decimation
         for (const auto& stage : m_realStages) {
-            envelope = decimateReal(envelope, stage.taps, stage.factor);
+            audio = decimateReal(audio, stage.taps, stage.factor);
         }
 
+        // 5. Resample to 48 kHz
         double lastRate = m_realStages.empty()
             ? (m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate)
             : m_realStages.back().outputRate;
-
         if (std::abs(lastRate - 48000.0) > 1.0) {
-            envelope = resample(envelope, lastRate, 48000.0);
+            audio = resample(audio, lastRate, 48000.0);
         }
 
-        // 7. Audio LPF (voice band)
-        envelope = applyFIR(envelope, m_audioFilterTaps);
+        // 6. Audio LPF
+        audio = applyFIR(audio, m_audioFilterTaps);
 
-        // 8. Apply output gain + soft limiter, duplicate to stereo
-        std::vector<float> out(envelope.size() * 2);
-        for (size_t i = 0; i < envelope.size(); i++) {
-            float s = envelope[i] * m_outputGain;
-            if (s > 0.9f) s = 0.9f + 0.1f * std::tanh((s - 0.9f) * 8.0f);
-            else if (s < -0.9f) s = -0.9f + 0.1f * std::tanh((s + 0.9f) * 8.0f);
-            out[i * 2] = s;
-            out[i * 2 + 1] = s;
-        }
+        // 7. DC removal
+        removeDC(audio);
 
-        return out;
+        return audio;
     }
 
     void setSampleRate(double newRate) {
         m_inputRate = newRate;
         m_agcGain = 1.0f;
-        m_dcPrev = 0.0f;
-        m_dcOut = 0.0f;
+        m_agcPeak = 0.0f;
+        m_dcX1 = m_dcY1 = 0.0f;
         rebuildChain();
         qDebug() << "AMDemodulator: rate changed to" << m_inputRate / 1e6 << "MHz";
     }
 
     void setBandwidth(double bandwidthHz) {
         m_bandwidth = std::clamp(bandwidthHz, 2000.0, 50000.0);
-        rebuildChain();
+        double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
+        float cutoff = static_cast<float>(std::min(m_bandwidth * 1.5, postDecimRate * 0.45));
+        m_iqBandwidthTaps = designLPF(51, cutoff, static_cast<float>(postDecimRate));
         qDebug() << "AMDemodulator: BW" << m_bandwidth / 1e3 << "kHz";
     }
 
@@ -642,21 +623,71 @@ private:
     double m_bandwidth;
     float m_outputGain;
 
-    // AGC state
+    // AGC state (telsiz-style)
     float m_agcGain;
-    float m_agcTarget;
-    float m_agcAttack;
-    float m_agcDecay;
+    float m_agcPeak;
+    int m_agcHoldCounter;
 
-    // DC removal state
-    float m_dcAlpha;
-    float m_dcPrev;
-    float m_dcOut;
+    // DC blocker state
+    float m_dcX1, m_dcY1;
 
     std::vector<DecimStage> m_iqStages;
     std::vector<DecimStage> m_realStages;
     std::vector<float> m_audioFilterTaps;
     std::vector<float> m_iqBandwidthTaps;
+
+    std::vector<float> amDemod(const std::vector<std::complex<float>>& signal)
+    {
+        if (signal.empty()) return {};
+
+        std::vector<float> out(signal.size());
+
+        const float sampleRate = m_iqStages.empty()
+            ? static_cast<float>(m_inputRate) : static_cast<float>(m_iqStages.back().outputRate);
+        const float attackAlpha = 1.0f - std::exp(-1.0f / (sampleRate * 0.001f));
+        const float decayAlpha = 1.0f - std::exp(-1.0f / (sampleRate * 0.100f));
+
+        const float targetLevel = 0.5f;
+        const float maxGain = 5000.0f;
+        const float minGain = 0.01f;
+
+        // Block DC level (carrier) for this chunk
+        float dcSum = 0.0f;
+        for (size_t i = 0; i < signal.size(); i++) {
+            dcSum += std::sqrt(signal[i].real() * signal[i].real() +
+                               signal[i].imag() * signal[i].imag());
+        }
+        float dcLevel = dcSum / static_cast<float>(signal.size());
+
+        for (size_t i = 0; i < signal.size(); i++) {
+            float envelope = std::sqrt(signal[i].real() * signal[i].real() +
+                                       signal[i].imag() * signal[i].imag());
+            float audio = envelope - dcLevel;
+
+            float absAudio = std::fabs(audio);
+            if (absAudio > m_agcPeak) {
+                m_agcPeak += attackAlpha * (absAudio - m_agcPeak);
+            } else {
+                m_agcPeak += decayAlpha * (absAudio - m_agcPeak);
+            }
+
+            if (m_agcPeak > 0.00001f) {
+                float desiredGain = targetLevel / m_agcPeak;
+                desiredGain = std::clamp(desiredGain, minGain, maxGain);
+                if (desiredGain < m_agcGain) {
+                    m_agcGain += attackAlpha * (desiredGain - m_agcGain);
+                    m_agcHoldCounter = static_cast<int>(sampleRate * 0.030f);
+                } else if (m_agcHoldCounter > 0) {
+                    m_agcHoldCounter--;
+                } else {
+                    m_agcGain += decayAlpha * (desiredGain - m_agcGain);
+                }
+            }
+
+            out[i] = audio * m_agcGain;
+        }
+        return out;
+    }
 
     void rebuildChain()
     {
@@ -665,11 +696,11 @@ private:
 
         double rate = m_inputRate;
 
-        // AM air band: narrower IQ target than FM
-        double iqTarget = 100000.0;
+        double iqTarget = std::max(m_bandwidth * 6.0, 60000.0);
+        iqTarget = std::min(iqTarget, 200000.0);
         const int candidates[] = {10, 8, 5, 4, 3, 2};
 
-        while (rate > iqTarget * 2.0) {
+        while (rate > iqTarget * 1.5) {
             int best = 0;
             for (int f : candidates) {
                 if (rate / f >= iqTarget) { best = f; break; }
@@ -688,17 +719,7 @@ private:
             rate = newRate;
         }
 
-        // IQ bandwidth filter - narrow for AM voice
-        double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
-        float filterBW = static_cast<float>(std::min(m_bandwidth, postDecimRate * 0.45));
-        if (filterBW > 0) {
-            m_iqBandwidthTaps = designLPF(51, filterBW, static_cast<float>(postDecimRate));
-        } else {
-            m_iqBandwidthTaps.clear();
-        }
-
-        // Real decimation to ~48 kHz
-        while (rate > 100000.0) {
+        while (rate > 96000.0) {
             int best = 0;
             for (int f : candidates) {
                 if (rate / f >= 48000.0) { best = f; break; }
@@ -717,16 +738,33 @@ private:
             rate = newRate;
         }
 
-        // Voice band audio filter: 300-5000 Hz typical for AM air band
-        m_audioFilterTaps = designLPF(51, 5000.0f, 48000.0f);
+        float audioCutoff = std::min(4000.0f, static_cast<float>(m_bandwidth / 2.0));
+        m_audioFilterTaps = designLPF(31, audioCutoff, 48000.0f);
 
-        if (m_outputGain <= 0.0f) m_outputGain = 3.0f;
+        double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
+        float defaultBW = static_cast<float>(std::min(m_bandwidth * 1.5, postDecimRate * 0.45));
+        if (defaultBW > 0) {
+            m_iqBandwidthTaps = designLPF(51, defaultBW, static_cast<float>(postDecimRate));
+        } else {
+            m_iqBandwidthTaps.clear();
+        }
+
+        if (m_outputGain <= 0.0f) m_outputGain = 1.0f;
 
         qDebug() << "AMDemodulator: rebuilt - gain=" << m_outputGain
                  << "postDecim=" << postDecimRate / 1e3 << "kHz";
     }
 
-    // ========== Utilities (same as WBFMDemodulator) ==========
+    void removeDC(std::vector<float>& audio)
+    {
+        constexpr float alpha = 0.995f;
+        for (auto& s : audio) {
+            float y = s - m_dcX1 + alpha * m_dcY1;
+            m_dcX1 = s; m_dcY1 = y; s = y;
+        }
+    }
+
+    // ========== Utilities ==========
     static std::vector<float> designLPF(int numTaps, float cutoff, float sampleRate)
     {
         std::vector<float> h(numTaps);
