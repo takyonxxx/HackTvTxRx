@@ -89,8 +89,9 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
     std::vector<float> stereoOut(mpx.size() * 2);
     for (size_t i = 0; i < mpx.size(); i++) {
         float s = mpx[i] * m_outputGain;
-        if (s > 0.6f) s = 0.6f + 0.4f * std::tanh((s - 0.6f) * 1.5f);
-        else if (s < -0.6f) s = -0.6f + 0.4f * std::tanh((s + 0.6f) * 1.5f);
+        if (s > 1.0f) s = 0.75f;
+        else if (s < -1.0f) s = -0.75f;
+        else s = s - (s * s * s) / 4.0f;
         stereoOut[i * 2]     = s;
         stereoOut[i * 2 + 1] = s;
     }
@@ -248,10 +249,12 @@ std::vector<float> FMDemodulator::decodeStereo(const std::vector<float>& mpx, do
     for (size_t i = 0; i < outLen; i++) {
         float l = leftAudio[i] * m_outputGain;
         float r = rightAudio[i] * m_outputGain;
-        if (l > 0.6f) l = 0.6f + 0.4f * std::tanh((l - 0.6f) * 1.5f);
-        else if (l < -0.6f) l = -0.6f + 0.4f * std::tanh((l + 0.6f) * 1.5f);
-        if (r > 0.6f) r = 0.6f + 0.4f * std::tanh((r - 0.6f) * 1.5f);
-        else if (r < -0.6f) r = -0.6f + 0.4f * std::tanh((r + 0.6f) * 1.5f);
+        if (l > 1.0f) l = 0.75f;
+        else if (l < -1.0f) l = -0.75f;
+        else l = l - (l * l * l) / 4.0f;
+        if (r > 1.0f) r = 0.75f;
+        else if (r < -1.0f) r = -0.75f;
+        else r = r - (r * r * r) / 4.0f;
         stereoOut[i * 2]     = l;
         stereoOut[i * 2 + 1] = r;
     }

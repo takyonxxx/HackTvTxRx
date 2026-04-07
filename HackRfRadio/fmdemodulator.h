@@ -60,6 +60,7 @@ private:
     float m_lastPhase;
     float m_outputGain;
     float m_rxModIndex = 1.0f;
+    float m_prevClipSample = 0.0f;
     float m_audioLpfCutoff = 5000.0f;
     float m_deemphTau;
     float m_deemphPrevL;  // de-emphasis L channel
