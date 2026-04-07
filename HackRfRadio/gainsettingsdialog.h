@@ -39,6 +39,7 @@ public:
     int deemph() const;
     int ifBandwidth() const;
     int rxModIndex() const;
+    int audioLpf() const;
     bool ampEnabled() const;
 
     void setVgaGain(int v);
@@ -50,6 +51,7 @@ public:
     void setDeemph(int v);
     void setIfBandwidth(int v);
     void setRxModIndex(int v);
+    void setAudioLpf(int v);
     void setAmpEnabled(bool en);
 
     // Called on PTT press to push TX params to server
@@ -79,6 +81,7 @@ private:
     QSlider* m_deemphSlider;    QLabel* m_deemphLabel;
     QSlider* m_ifBwSlider;      QLabel* m_ifBwLabel;
     QSlider* m_rxModIdxSlider;  QLabel* m_rxModIdxLabel;
+    QSlider* m_audioLpfSlider;  QLabel* m_audioLpfLabel;
     QCheckBox* m_ampEnableCheck;
 
     // Connection fields

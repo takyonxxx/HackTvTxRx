@@ -185,6 +185,17 @@ void GainSettingsDialog::setupUi()
     });
     rxGrid->addWidget(new QLabel("DeEmph:"), row, 0); rxGrid->addWidget(m_deemphSlider, row, 1); rxGrid->addWidget(m_deemphLabel, row, 2); row++;
 
+    // Audio LPF cutoff slider: 1.0 - 8.0 kHz (slider 10-80, /10)
+    m_audioLpfSlider = new QSlider(Qt::Horizontal); m_audioLpfSlider->setRange(10, 80); m_audioLpfSlider->setValue(50);
+    m_audioLpfLabel = new QLabel("5.0 kHz");
+    connect(m_audioLpfSlider, &QSlider::valueChanged, [this](int v) {
+        float cutoff = v / 10.0f;
+        m_audioLpfLabel->setText(QString("%1 kHz").arg(cutoff, 0, 'f', 1));
+        m_fmDemod->setAudioLPF(cutoff * 1000.0f);
+        emit settingsChanged();
+    });
+    rxGrid->addWidget(new QLabel("Audio LPF:"), row, 0); rxGrid->addWidget(m_audioLpfSlider, row, 1); rxGrid->addWidget(m_audioLpfLabel, row, 2); row++;
+
     rxGrid->setColumnMinimumWidth(0, 80);
     rxGrid->setColumnMinimumWidth(2, 50);
     rxGrid->setColumnStretch(1, 1);
@@ -268,6 +279,7 @@ int GainSettingsDialog::rxGain() const { return m_rxGainSlider->value(); }
 int GainSettingsDialog::deemph() const { return m_deemphSlider->value(); }
 int GainSettingsDialog::ifBandwidth() const { return m_ifBwSlider->value(); }
 int GainSettingsDialog::rxModIndex() const { return m_rxModIdxSlider->value(); }
+int GainSettingsDialog::audioLpf() const { return m_audioLpfSlider->value(); }
 bool GainSettingsDialog::ampEnabled() const { return m_ampEnableCheck->isChecked(); }
 
 void GainSettingsDialog::setVgaGain(int v) { m_vgaGainSlider->setValue(v); }
@@ -279,6 +291,7 @@ void GainSettingsDialog::setRxGain(int v) { m_rxGainSlider->setValue(v); }
 void GainSettingsDialog::setDeemph(int v) { m_deemphSlider->setValue(v); }
 void GainSettingsDialog::setIfBandwidth(int v) { m_ifBwSlider->setValue(v); }
 void GainSettingsDialog::setRxModIndex(int v) { m_rxModIdxSlider->setValue(v); }
+void GainSettingsDialog::setAudioLpf(int v) { m_audioLpfSlider->setValue(v); }
 void GainSettingsDialog::setAmpEnabled(bool en) {
     m_ampEnableCheck->blockSignals(true);
     m_ampEnableCheck->setChecked(en);

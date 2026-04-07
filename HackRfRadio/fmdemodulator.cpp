@@ -294,6 +294,17 @@ void FMDemodulator::setBandwidth(double bandwidthHz)
              << "postDecim" << postDecimRate / 1e3 << "kHz";
 }
 
+void FMDemodulator::setAudioLPF(float cutoffHz)
+{
+    m_audioLpfCutoff = std::clamp(cutoffHz, 1000.0f, 8000.0f);
+    bool isNBFM = (m_bandwidth <= 25000.0);
+    if (isNBFM) {
+        m_audioFilterTaps = designLPF(31, m_audioLpfCutoff, 48000.0f);
+        m_audioFilterHistory.clear();
+    }
+    qDebug() << "FMDemodulator: Audio LPF" << m_audioLpfCutoff / 1000.0f << "kHz";
+}
+
 void FMDemodulator::rebuildChain()
 {
     m_iqStages.clear();
@@ -374,8 +385,8 @@ void FMDemodulator::rebuildChain()
             rate = newRate;
         }
 
-        // Voice audio filter
-        m_audioFilterTaps = designLPF(31, 5000.0f, 48000.0f);
+        // Voice audio filter — cutoff controlled by setAudioLPF / slider
+        m_audioFilterTaps = designLPF(31, m_audioLpfCutoff, 48000.0f);
         if (m_outputGain <= 0.0f) m_outputGain = 4.5f;
 
         m_monoFilterTaps.clear();
@@ -384,17 +395,7 @@ void FMDemodulator::rebuildChain()
 
     // IQ bandwidth filter — applied after decimation, before FM demod
     double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
-    // LPF cutoff = bandwidth * 0.7 (single-sided)
-    // For 12.5 kHz channel: cutoff = 8.75 kHz → passes ±8.75 kHz
-    // Slightly wider than bandwidth/2 to preserve FM sidebands, but much
-    // tighter than the old full-bandwidth cutoff which passed 2x too much noise
-    float filterBW;
-    if (isNBFM) {
-        filterBW = static_cast<float>(m_bandwidth * 0.7);
-        filterBW = std::min(filterBW, static_cast<float>(postDecimRate * 0.45));
-    } else {
-        filterBW = static_cast<float>(std::min(m_bandwidth, postDecimRate * 0.45));
-    }
+    float filterBW = static_cast<float>(std::min(m_bandwidth, postDecimRate * 0.45));
     int iqFilterTaps = isNBFM ? 71 : 31;
     if (filterBW > 0) {
         m_iqBandwidthTaps = designLPF(iqFilterTaps, filterBW, static_cast<float>(postDecimRate));
@@ -583,10 +584,8 @@ void FMDemodulator::applyFIR(
 }
 
 // FM Demodulation — SDR++/GNU Radio Quadrature Demod approach
-// gain = 1 / hzToRads(deviation, sampleRate)
-//      = sampleRate / (2π × deviation)
-// For NBFM 12.5kHz BW at 50kHz rate: deviation = 6250, gain = 50000/(2π×6250) = 1.273
-// Output range: normalized to ±1.0 at full deviation, no extra gain multiplier
+// gain = sampleRate / (2π × deviation)
+// For NBFM 12.5kHz BW at 50kHz rate: deviation = 6250, gain = 1.273
 std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>& signal, double rate)
 {
     if (signal.empty()) return {};
@@ -595,23 +594,14 @@ std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>
 
     bool isNBFM = (m_bandwidth <= 25000.0);
 
-    // SDR++ formula: deviation = bandwidth / 2
-    // gain = 1 / (2π × deviation / sampleRate) = sampleRate / (2π × deviation)
-    float deviation;
-    if (isNBFM) {
-        deviation = static_cast<float>(m_bandwidth * 0.5);  // 12500 → 6250 Hz
-    } else {
-        deviation = 75000.0f;
-    }
+    float deviation = isNBFM ? static_cast<float>(m_bandwidth * 0.5) : 75000.0f;
     float deviationRads = 2.0f * static_cast<float>(M_PI) * deviation / static_cast<float>(rate);
     float gain = 1.0f / deviationRads;
 
-    // Phase tracking — same as SDR++ Quadrature::process()
     for (size_t i = 0; i < signal.size(); i++) {
         float cphase = std::atan2(signal[i].imag(), signal[i].real());
         float delta = cphase - m_lastPhase;
 
-        // Normalize phase difference to [-π, +π]
         if (delta > static_cast<float>(M_PI)) delta -= 2.0f * static_cast<float>(M_PI);
         if (delta < -static_cast<float>(M_PI)) delta += 2.0f * static_cast<float>(M_PI);
 

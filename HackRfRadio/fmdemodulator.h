@@ -33,6 +33,8 @@ public:
     float deemphTauUs() const { return m_deemphTau * 1e6f; }
     void setRxModIndex(float idx) { m_rxModIndex = idx; }
     float rxModIndex() const { return m_rxModIndex; }
+    void setAudioLPF(float cutoffHz);
+    float audioLPF() const { return m_audioLpfCutoff; }
 
     bool isStereo() const { return m_stereoDetected.load(); }
     void setForceMono(bool mono) { m_forceMono = mono; }
@@ -55,6 +57,7 @@ private:
     float m_lastPhase;
     float m_outputGain;
     float m_rxModIndex = 1.0f;
+    float m_audioLpfCutoff = 5000.0f;
     float m_deemphTau;
     float m_deemphPrevL;  // de-emphasis L channel
     float m_deemphPrevR;  // de-emphasis R channel
