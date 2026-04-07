@@ -80,26 +80,12 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
         }
     }
 
-    // 7. Audio LPF
-    // {
-    //     std::vector<float> tmp;
-    //     applyFIR(mpx, tmp, m_audioFilterTaps, m_audioFilterHistory);
-    //     mpx = std::move(tmp);
-    // }
-
-    // 8. HPF 300 Hz (remove DC offset and sub-bass rumble — SDR++ uses 300 Hz)
-    // {
-    //     float cutoff = 300.0f;
-    //     float rc = 1.0f / (2.0f * static_cast<float>(M_PI) * cutoff);
-    //     float dt = 1.0f / 48000.0f;
-    //     float alpha = rc / (rc + dt);
-    //     for (auto& s : mpx) {
-    //         float filtered = alpha * (m_hpfPrevL + s - m_hpfPrevInL);
-    //         m_hpfPrevInL = s;
-    //         m_hpfPrevL = filtered;
-    //         s = filtered;
-    //     }
-    // }
+    // 7-8. Audio LPF (controlled by slider) — HPF skipped (was making sound muffled)
+    {
+        std::vector<float> tmp;
+        applyFIR(mpx, tmp, m_audioFilterTaps, m_audioFilterHistory);
+        mpx = std::move(tmp);
+    }
 
     // 9. DC removal
     removeDC(m_dcX1L, m_dcY1L, mpx);
@@ -303,13 +289,14 @@ void FMDemodulator::setBandwidth(double bandwidthHz)
 
 void FMDemodulator::setAudioLPF(float cutoffHz)
 {
-    m_audioLpfCutoff = std::clamp(cutoffHz, 1000.0f, 8000.0f);
+    float newCutoff = std::clamp(cutoffHz, 1000.0f, 8000.0f);
+    if (std::abs(newCutoff - m_audioLpfCutoff) < 50.0f) return;  // ignore tiny changes
+    m_audioLpfCutoff = newCutoff;
     bool isNBFM = (m_bandwidth <= 25000.0);
     if (isNBFM) {
         m_audioFilterTaps = designLPF(31, m_audioLpfCutoff, 48000.0f);
-        m_audioFilterHistory.clear();
+        // Don't clear history — causes clicks during slider drag
     }
-    qDebug() << "FMDemodulator: Audio LPF" << m_audioLpfCutoff / 1000.0f << "kHz";
 }
 
 void FMDemodulator::rebuildChain()
@@ -603,10 +590,9 @@ std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>
 
     bool isNBFM = (m_bandwidth <= 25000.0);
 
+    // SDR++ Quadrature demod: gain = sampleRate / (2π × deviation)
     // deviation = bandwidth/2 for NBFM, 75kHz for WFM
-    // rxModIndex acts as deviation multiplier (slider range 0.1-5.0, default 2.0)
-    // Higher rxModIndex = assumes wider deviation = less amplification = less distortion
-    // Lower rxModIndex = assumes narrower deviation = more amplification = louder but may clip
+    // rxModIndex multiplies deviation — higher = less gain = cleaner sound
     float deviation = isNBFM ? static_cast<float>(m_bandwidth * 0.5) : 75000.0f;
     deviation *= m_rxModIndex;
     float deviationRads = 2.0f * static_cast<float>(M_PI) * deviation / static_cast<float>(rate);
@@ -695,9 +681,8 @@ void FMDemodulator::fftInPlace(std::vector<std::complex<float>>& x, bool inverse
 }
 
 // ========== FM IF Noise Reduction (SDR++ FMNR style) ==========
-// For each IQ sample: take a _bins-point FFT, keep only the strongest bin,
-// zero everything else, IFFT back. This isolates the FM carrier's
-// instantaneous frequency and strips all noise.
+// For each IQ sample: take a _bins-point FFT, keep the strongest bin
+// plus immediate neighbors for smooth transitions, zero the rest, IFFT back.
 void FMDemodulator::applyFMNR(std::vector<std::complex<float>>& iq)
 {
     if (iq.empty()) return;
@@ -724,7 +709,6 @@ void FMDemodulator::applyFMNR(std::vector<std::complex<float>>& iq)
     work.insert(work.end(), iq.begin(), iq.end());
 
     std::vector<std::complex<float>> fftBuf(bins);
-    std::vector<float> ampBuf(bins);
 
     // Process each sample
     for (size_t i = 0; i < iq.size(); i++) {
@@ -744,7 +728,7 @@ void FMDemodulator::applyFMNR(std::vector<std::complex<float>>& iq)
             if (amp > maxAmp) { maxAmp = amp; maxIdx = j; }
         }
 
-        // Keep only strongest bin, zero rest
+        // Keep only strongest bin (SDR++ original — no neighbors)
         std::vector<std::complex<float>> ifftBuf(bins, {0.0f, 0.0f});
         ifftBuf[maxIdx] = fftBuf[maxIdx];
 

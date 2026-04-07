@@ -965,12 +965,12 @@ void RadioWindow::onModulationChanged(int index)
             m_gainDialog->setVgaGain(15);
             m_gainDialog->setLnaGain(20);
             m_gainDialog->setRxGain(30);       // 3.0
-            m_gainDialog->setRxModIndex(25);   // 2.5 (deviation multiplier)
+            m_gainDialog->setRxModIndex(10);   // 1.0 (deviation multiplier)
             m_gainDialog->setDeemph(0);        // OFF
             m_gainDialog->setAudioLpf(50);     // 5.0 kHz
             m_gainDialog->blockSignals(false);
             m_fmDemod->setOutputGain(3.0f);
-            m_fmDemod->setRxModIndex(2.5f);
+            m_fmDemod->setRxModIndex(1.0f);
             m_fmDemod->setDeemphTau(0.0f);
             m_fmDemod->setAudioLPF(5000.0f);
         }

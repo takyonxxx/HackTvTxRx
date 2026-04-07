@@ -93,7 +93,7 @@ private:
     double m_mpxRate = 0.0;  // rate after IQ decimation (before stereo decode)
 
     // FM IF Noise Reduction (SDR++ style)
-    bool m_fmnrEnabled = true;
+    bool m_fmnrEnabled = false;
     int m_fmnrBins = 32;
     std::vector<std::complex<float>> m_fmnrBuffer;  // delay buffer
     std::vector<float> m_fmnrWindow;                  // Nuttall window
