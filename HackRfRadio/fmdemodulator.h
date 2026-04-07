@@ -60,13 +60,15 @@ private:
     float m_lastPhase;
     float m_outputGain;
     float m_rxModIndex = 1.0f;
-    float m_prevClipSample = 0.0f;
     float m_audioLpfCutoff = 5000.0f;
     float m_deemphTau;
     float m_deemphPrevL;  // de-emphasis L channel
     float m_deemphPrevR;  // de-emphasis R channel
     float m_hpfPrevL = 0.0f, m_hpfPrevInL = 0.0f;  // HPF L
     float m_hpfPrevR = 0.0f, m_hpfPrevInR = 0.0f;  // HPF R
+    float m_prevClipSample = 0.0f;  // NBFM clip smoothing
+    float m_prevClipL = 0.0f;       // WFM L clip smoothing
+    float m_prevClipR = 0.0f;       // WFM R clip smoothing
 
     std::vector<DecimStage> m_iqStages;
     std::vector<DecimStage> m_realStages;  // only for NBFM
@@ -90,6 +92,7 @@ private:
 
     float m_dcX1L = 0.0f, m_dcY1L = 0.0f;
     float m_dcX1R = 0.0f, m_dcY1R = 0.0f;
+    double m_resamplePhase = 0.0;  // fractional position carried between blocks
 
     double m_mpxRate = 0.0;  // rate after IQ decimation (before stereo decode)
 
@@ -123,7 +126,7 @@ private:
         std::vector<float>& history);
     std::vector<float> fmDemod(const std::vector<std::complex<float>>& signal, double rate);
     std::vector<float> decodeStereo(const std::vector<float>& mpx, double mpxRate);
-    static std::vector<float> resample(const std::vector<float>& in, double inRate, double outRate);
+    std::vector<float> resample(const std::vector<float>& in, double inRate, double outRate);
     void removeDC(float& dcX1, float& dcY1, std::vector<float>& audio);
 };
 

@@ -89,9 +89,10 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
     std::vector<float> stereoOut(mpx.size() * 2);
     for (size_t i = 0; i < mpx.size(); i++) {
         float s = mpx[i] * m_outputGain;
-        if (s > 1.0f) s = 0.75f;
-        else if (s < -1.0f) s = -0.75f;
-        else s = s - (s * s * s) / 4.0f;
+        if (s > 1.0f) s = 1.0f;
+        else if (s < -1.0f) s = -1.0f;
+        s = s * 0.5f + m_prevClipSample * 0.5f;
+        m_prevClipSample = s;
         stereoOut[i * 2]     = s;
         stereoOut[i * 2 + 1] = s;
     }
@@ -303,6 +304,7 @@ void FMDemodulator::rebuildChain()
     m_monoFilterHistory.clear();
     m_diffFilterHistory.clear();
     m_fmnrBuffer.clear();
+    m_resamplePhase = 0.0;
 
     double rate = m_inputRate;
     bool isNBFM = (m_bandwidth <= 25000.0);
@@ -602,19 +604,21 @@ std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>
     return out;
 }
 
-// Windowed sinc resampler — 6-point kernel with Blackman-Harris window
+// Stateful windowed sinc resampler — carries fractional phase between blocks
 std::vector<float> FMDemodulator::resample(const std::vector<float>& in, double inRate, double outRate)
 {
     if (in.empty()) return in;
     double ratio = inRate / outRate;
-    size_t outN = static_cast<size_t>(in.size() / ratio);
     std::vector<float> out;
-    out.reserve(outN);
+    out.reserve(static_cast<size_t>(in.size() / ratio) + 1);
+
     const int halfKernel = 3;
-    for (size_t i = 0; i < outN; i++) {
-        double pos = i * ratio;
+    double pos = m_resamplePhase;  // start from where last block ended
+
+    while (pos < static_cast<double>(in.size())) {
         int center = static_cast<int>(pos);
         double frac = pos - center;
+
         float sample = 0.0f;
         float weightSum = 0.0f;
         for (int j = -halfKernel + 1; j <= halfKernel; j++) {
@@ -633,7 +637,13 @@ std::vector<float> FMDemodulator::resample(const std::vector<float>& in, double 
         }
         if (weightSum > 0.0f) sample /= weightSum;
         out.push_back(sample);
+
+        pos += ratio;
     }
+
+    // Save fractional remainder for next block
+    m_resamplePhase = pos - static_cast<double>(in.size());
+
     return out;
 }
 
