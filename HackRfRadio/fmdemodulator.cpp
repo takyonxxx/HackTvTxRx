@@ -85,15 +85,14 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
     // 9. DC removal
     removeDC(m_dcX1L, m_dcY1L, mpx);
 
-    // 10. Volume gain + Soft limiter + mono→stereo interleave
+    // 10. Volume gain + soft limiter + mono→stereo interleave
     std::vector<float> stereoOut(mpx.size() * 2);
     for (size_t i = 0; i < mpx.size(); i++) {
         float s = mpx[i] * m_outputGain;
-        // Full tanh soft compression — no hard knee, no crackling
-        // tanh(1.0) = 0.76, tanh(2.0) = 0.96, tanh(3.0) = 0.995
-        s = std::tanh(s);
-        stereoOut[i * 2]     = s;  // L
-        stereoOut[i * 2 + 1] = s;  // R (mono duplicate)
+        if (s > 0.6f) s = 0.6f + 0.4f * std::tanh((s - 0.6f) * 1.5f);
+        else if (s < -0.6f) s = -0.6f + 0.4f * std::tanh((s + 0.6f) * 1.5f);
+        stereoOut[i * 2]     = s;
+        stereoOut[i * 2 + 1] = s;
     }
 
     if (m_stereoDetected.load()) {
@@ -247,8 +246,12 @@ std::vector<float> FMDemodulator::decodeStereo(const std::vector<float>& mpx, do
     size_t outLen = std::min(leftAudio.size(), rightAudio.size());
     std::vector<float> stereoOut(outLen * 2);
     for (size_t i = 0; i < outLen; i++) {
-        float l = std::tanh(leftAudio[i] * m_outputGain);
-        float r = std::tanh(rightAudio[i] * m_outputGain);
+        float l = leftAudio[i] * m_outputGain;
+        float r = rightAudio[i] * m_outputGain;
+        if (l > 0.6f) l = 0.6f + 0.4f * std::tanh((l - 0.6f) * 1.5f);
+        else if (l < -0.6f) l = -0.6f + 0.4f * std::tanh((l + 0.6f) * 1.5f);
+        if (r > 0.6f) r = 0.6f + 0.4f * std::tanh((r - 0.6f) * 1.5f);
+        else if (r < -0.6f) r = -0.6f + 0.4f * std::tanh((r + 0.6f) * 1.5f);
         stereoOut[i * 2]     = l;
         stereoOut[i * 2 + 1] = r;
     }
@@ -281,7 +284,7 @@ void FMDemodulator::setAudioLPF(float cutoffHz)
     m_audioLpfCutoff = newCutoff;
     bool isNBFM = (m_bandwidth <= 25000.0);
     if (isNBFM) {
-        m_audioFilterTaps = designLPF(31, m_audioLpfCutoff, 48000.0f);
+        m_audioFilterTaps = designLPF(63, m_audioLpfCutoff, 48000.0f);
         // Don't clear history — causes clicks during slider drag
     }
 }
@@ -326,9 +329,8 @@ void FMDemodulator::rebuildChain()
         if (best < 2) break;
 
         double newRate = rate / best;
-        // Tighter cutoff for better noise rejection
-        float cutoff = static_cast<float>(newRate * 0.4);
-        int taps = (best >= 8) ? 33 : (best >= 5) ? 21 : 17;
+        float cutoff = static_cast<float>(newRate * 0.35);
+        int taps = (best >= 8) ? 41 : (best >= 5) ? 33 : 25;
 
         DecimStage s;
         s.taps = designLPF(taps, cutoff, static_cast<float>(rate));
@@ -356,8 +358,8 @@ void FMDemodulator::rebuildChain()
             if (best < 2) break;
 
             double newRate = rate / best;
-            float cutoff = static_cast<float>(newRate * 0.4);
-            int taps = (best >= 8) ? 33 : (best >= 5) ? 21 : 17;
+            float cutoff = static_cast<float>(newRate * 0.35);
+            int taps = (best >= 8) ? 41 : (best >= 5) ? 33 : 25;
 
             DecimStage s;
             s.taps = designLPF(taps, cutoff, static_cast<float>(rate));
@@ -367,8 +369,8 @@ void FMDemodulator::rebuildChain()
             rate = newRate;
         }
 
-        // Voice audio filter — cutoff controlled by setAudioLPF / slider
-        m_audioFilterTaps = designLPF(31, m_audioLpfCutoff, 48000.0f);
+        // Voice audio filter — 63 taps for sharp rolloff
+        m_audioFilterTaps = designLPF(63, m_audioLpfCutoff, 48000.0f);
         if (m_outputGain <= 0.0f) m_outputGain = 4.5f;
 
         m_monoFilterTaps.clear();
@@ -378,7 +380,7 @@ void FMDemodulator::rebuildChain()
     // IQ bandwidth filter — applied after decimation, before FM demod
     double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
     float filterBW = static_cast<float>(std::min(m_bandwidth, postDecimRate * 0.45));
-    int iqFilterTaps = isNBFM ? 71 : 31;
+    int iqFilterTaps = isNBFM ? 127 : 31;
     if (filterBW > 0) {
         m_iqBandwidthTaps = designLPF(iqFilterTaps, filterBW, static_cast<float>(postDecimRate));
     } else {
@@ -597,6 +599,7 @@ std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>
     return out;
 }
 
+// Windowed sinc resampler — 6-point kernel with Blackman-Harris window
 std::vector<float> FMDemodulator::resample(const std::vector<float>& in, double inRate, double outRate)
 {
     if (in.empty()) return in;
@@ -604,14 +607,29 @@ std::vector<float> FMDemodulator::resample(const std::vector<float>& in, double 
     size_t outN = static_cast<size_t>(in.size() / ratio);
     std::vector<float> out;
     out.reserve(outN);
+    const int halfKernel = 3;
     for (size_t i = 0; i < outN; i++) {
         double pos = i * ratio;
-        size_t idx = static_cast<size_t>(pos);
-        double frac = pos - idx;
-        if (idx + 1 < in.size())
-            out.push_back(static_cast<float>(in[idx] * (1.0 - frac) + in[idx + 1] * frac));
-        else if (idx < in.size())
-            out.push_back(in[idx]);
+        int center = static_cast<int>(pos);
+        double frac = pos - center;
+        float sample = 0.0f;
+        float weightSum = 0.0f;
+        for (int j = -halfKernel + 1; j <= halfKernel; j++) {
+            int idx = center + j;
+            if (idx < 0 || idx >= static_cast<int>(in.size())) continue;
+            double x = j - frac;
+            float sinc = (std::abs(x) < 1e-6) ? 1.0f
+                : static_cast<float>(std::sin(x * M_PI) / (x * M_PI));
+            double wpos = (j - frac + halfKernel) / (2.0 * halfKernel);
+            float w = 0.35875f - 0.48829f * std::cos(2.0f * static_cast<float>(M_PI) * wpos)
+                     + 0.14128f * std::cos(4.0f * static_cast<float>(M_PI) * wpos)
+                     - 0.01168f * std::cos(6.0f * static_cast<float>(M_PI) * wpos);
+            float weight = sinc * w;
+            sample += in[idx] * weight;
+            weightSum += weight;
+        }
+        if (weightSum > 0.0f) sample /= weightSum;
+        out.push_back(sample);
     }
     return out;
 }
@@ -650,7 +668,7 @@ void FMDemodulator::applyFMNR(std::vector<std::complex<float>>& iq)
 
     // Stage 2: Moving average filter on I and Q
     // Window size controls smoothing — larger = more NR but less audio bandwidth
-    const int window = 3;  // light smoothing, preserves voice quality
+    const int window = 5;  // moderate smoothing
     if (static_cast<int>(iq.size()) <= window) return;
 
     // Use history buffer for block continuity
