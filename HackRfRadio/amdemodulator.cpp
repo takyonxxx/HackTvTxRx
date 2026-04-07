@@ -49,7 +49,7 @@ std::vector<float> AMDemodulator::demodulate(const std::vector<std::complex<floa
         audio = std::move(tmp);
     }
 
-    removeDC(audio);
+    // DC blocking is now handled inside amDemod (SDR++ style)
     return audio;
 }
 
@@ -128,50 +128,68 @@ void AMDemodulator::rebuildChain()
     }
 }
 
+// AM Demodulation — SDR++ style
+// 1. Envelope detection (magnitude)
+// 2. DC blocker (adaptive, per-sample)
+// 3. AGC with look-ahead clipping prevention
 std::vector<float> AMDemodulator::amDemod(const std::vector<std::complex<float>>& signal)
 {
     if (signal.empty()) return {};
-    std::vector<float> out(signal.size());
+    const size_t n = signal.size();
+    std::vector<float> out(n);
 
-    const float sampleRate = m_iqStages.empty()
-        ? static_cast<float>(m_inputRate) : static_cast<float>(m_iqStages.back().outputRate);
-    const float attackAlpha = 1.0f - std::exp(-1.0f / (sampleRate * 0.001f));
-    const float decayAlpha = 1.0f - std::exp(-1.0f / (sampleRate * 0.100f));
-    const float targetLevel = 0.5f;
-    const float maxGain = 5000.0f;
-    const float minGain = 0.01f;
+    // SDR++ AGC parameters
+    const float setPoint = 1.0f;
+    const float attack = 0.001f;       // fast attack
+    const float invAttack = 1.0f - attack;
+    const float decay = 0.0001f;       // slow decay
+    const float invDecay = 1.0f - decay;
+    const float maxGain = 10000.0f;
+    const float maxOutputAmp = 10.0f;
 
-    float dcSum = 0.0f;
-    for (size_t i = 0; i < signal.size(); i++) {
-        dcSum += std::sqrt(signal[i].real() * signal[i].real() +
+    // 1. Envelope detection
+    for (size_t i = 0; i < n; i++) {
+        out[i] = std::sqrt(signal[i].real() * signal[i].real() +
                            signal[i].imag() * signal[i].imag());
     }
-    float dcLevel = dcSum / static_cast<float>(signal.size());
 
-    for (size_t i = 0; i < signal.size(); i++) {
-        float envelope = std::sqrt(signal[i].real() * signal[i].real() +
-                                   signal[i].imag() * signal[i].imag());
-        float audio = envelope - dcLevel;
-        float absAudio = std::fabs(audio);
-        if (absAudio > m_agcPeak) {
-            m_agcPeak += attackAlpha * (absAudio - m_agcPeak);
-        } else {
-            m_agcPeak += decayAlpha * (absAudio - m_agcPeak);
-        }
-        if (m_agcPeak > 0.00001f) {
-            float desiredGain = targetLevel / m_agcPeak;
-            desiredGain = std::clamp(desiredGain, minGain, maxGain);
-            if (desiredGain < m_agcGain) {
-                m_agcGain += attackAlpha * (desiredGain - m_agcGain);
-                m_agcHoldCounter = static_cast<int>(sampleRate * 0.030f);
-            } else if (m_agcHoldCounter > 0) {
-                m_agcHoldCounter--;
-            } else {
-                m_agcGain += decayAlpha * (desiredGain - m_agcGain);
-            }
-        }
-        out[i] = audio * m_agcGain;
+    // 2. DC blocker (SDR++ style: offset += out * rate)
+    const float dcRate = 0.0001f;  // slow tracking
+    for (size_t i = 0; i < n; i++) {
+        float clean = out[i] - m_dcOffset;
+        m_dcOffset += clean * dcRate;
+        out[i] = clean;
     }
+
+    // 3. AGC with look-ahead (SDR++ style)
+    for (size_t i = 0; i < n; i++) {
+        float inAmp = std::fabs(out[i]);
+        float gain;
+
+        if (inAmp != 0.0f) {
+            // Update amplitude estimate
+            m_agcAmp = (inAmp > m_agcAmp)
+                ? (m_agcAmp * invAttack + inAmp * attack)
+                : (m_agcAmp * invDecay + inAmp * decay);
+            gain = std::min(setPoint / m_agcAmp, maxGain);
+        } else {
+            gain = 1.0f;
+        }
+
+        // Look-ahead clipping prevention
+        if (inAmp * gain > maxOutputAmp) {
+            float maxAmp = 0.0f;
+            for (size_t j = i; j < n; j++) {
+                float a = std::fabs(out[j]);
+                if (a > maxAmp) maxAmp = a;
+            }
+            m_agcAmp = maxAmp;
+            gain = std::min(setPoint / m_agcAmp, maxGain);
+        }
+
+        out[i] *= gain;
+    }
+
     return out;
 }
 
@@ -334,15 +352,4 @@ std::vector<float> AMDemodulator::resample(const std::vector<float>& in, double 
             out.push_back(in[idx]);
     }
     return out;
-}
-
-void AMDemodulator::removeDC(std::vector<float>& audio)
-{
-    constexpr float alpha = 0.995f;
-    for (auto& s : audio) {
-        float y = s - m_dcX1 + alpha * m_dcY1;
-        m_dcX1 = s;
-        m_dcY1 = y;
-        s = y;
-    }
 }

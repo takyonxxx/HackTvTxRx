@@ -36,6 +36,9 @@ public:
     void setAudioLPF(float cutoffHz);
     float audioLPF() const { return m_audioLpfCutoff; }
 
+    void setFMNR(bool enabled) { m_fmnrEnabled = enabled; }
+    bool fmnrEnabled() const { return m_fmnrEnabled; }
+
     bool isStereo() const { return m_stereoDetected.load(); }
     void setForceMono(bool mono) { m_forceMono = mono; }
 
@@ -89,7 +92,15 @@ private:
 
     double m_mpxRate = 0.0;  // rate after IQ decimation (before stereo decode)
 
+    // FM IF Noise Reduction (SDR++ style)
+    bool m_fmnrEnabled = true;
+    int m_fmnrBins = 32;
+    std::vector<std::complex<float>> m_fmnrBuffer;  // delay buffer
+    std::vector<float> m_fmnrWindow;                  // Nuttall window
+
     void rebuildChain();
+    void applyFMNR(std::vector<std::complex<float>>& iq);
+    static void fftInPlace(std::vector<std::complex<float>>& x, bool inverse);
 
     static std::vector<float> designLPF(int numTaps, float cutoff, float sampleRate);
     void decimateComplex(

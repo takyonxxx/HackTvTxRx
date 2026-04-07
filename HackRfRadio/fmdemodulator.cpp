@@ -41,6 +41,12 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
         iq = std::move(tmp);
     }
 
+    // 2b. FM IF Noise Reduction (SDR++ FMNR)
+    // Isolates the FM carrier's instantaneous frequency, strips all noise
+    if (m_fmnrEnabled && !isWBFM) {
+        applyFMNR(iq);
+    }
+
     // 3. FM demodulate — produces MPX baseband
     double fmRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
     auto mpx = fmDemod(iq, fmRate);
@@ -75,25 +81,25 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
     }
 
     // 7. Audio LPF
-    {
-        std::vector<float> tmp;
-        applyFIR(mpx, tmp, m_audioFilterTaps, m_audioFilterHistory);
-        mpx = std::move(tmp);
-    }
+    // {
+    //     std::vector<float> tmp;
+    //     applyFIR(mpx, tmp, m_audioFilterTaps, m_audioFilterHistory);
+    //     mpx = std::move(tmp);
+    // }
 
-    // 8. HPF 100 Hz (remove DC offset and sub-bass rumble)
-    {
-        float cutoff = 100.0f;
-        float rc = 1.0f / (2.0f * static_cast<float>(M_PI) * cutoff);
-        float dt = 1.0f / 48000.0f;
-        float alpha = rc / (rc + dt);
-        for (auto& s : mpx) {
-            float filtered = alpha * (m_hpfPrevL + s - m_hpfPrevInL);
-            m_hpfPrevInL = s;
-            m_hpfPrevL = filtered;
-            s = filtered;
-        }
-    }
+    // 8. HPF 300 Hz (remove DC offset and sub-bass rumble — SDR++ uses 300 Hz)
+    // {
+    //     float cutoff = 300.0f;
+    //     float rc = 1.0f / (2.0f * static_cast<float>(M_PI) * cutoff);
+    //     float dt = 1.0f / 48000.0f;
+    //     float alpha = rc / (rc + dt);
+    //     for (auto& s : mpx) {
+    //         float filtered = alpha * (m_hpfPrevL + s - m_hpfPrevInL);
+    //         m_hpfPrevInL = s;
+    //         m_hpfPrevL = filtered;
+    //         s = filtered;
+    //     }
+    // }
 
     // 9. DC removal
     removeDC(m_dcX1L, m_dcY1L, mpx);
@@ -256,11 +262,12 @@ std::vector<float> FMDemodulator::decodeStereo(const std::vector<float>& mpx, do
     removeDC(m_dcX1L, m_dcY1L, leftAudio);
     removeDC(m_dcX1R, m_dcY1R, rightAudio);
 
-    // --- Interleave L/R + soft limiter ---
+    // --- Interleave L/R + volume gain + soft limiter ---
     size_t outLen = std::min(leftAudio.size(), rightAudio.size());
     std::vector<float> stereoOut(outLen * 2);
     for (size_t i = 0; i < outLen; i++) {
-        float l = leftAudio[i], r = rightAudio[i];
+        float l = leftAudio[i] * m_outputGain;
+        float r = rightAudio[i] * m_outputGain;
         // Soft limiter
         if (l > 0.9f) l = 0.9f + 0.1f * std::tanh((l - 0.9f) * 8.0f);
         else if (l < -0.9f) l = -0.9f + 0.1f * std::tanh((l + 0.9f) * 8.0f);
@@ -315,6 +322,8 @@ void FMDemodulator::rebuildChain()
     m_audioFilterHistory.clear();
     m_monoFilterHistory.clear();
     m_diffFilterHistory.clear();
+    m_fmnrBuffer.clear();
+    m_fmnrWindow.clear();
 
     double rate = m_inputRate;
     bool isNBFM = (m_bandwidth <= 25000.0);
@@ -594,7 +603,12 @@ std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>
 
     bool isNBFM = (m_bandwidth <= 25000.0);
 
+    // deviation = bandwidth/2 for NBFM, 75kHz for WFM
+    // rxModIndex acts as deviation multiplier (slider range 0.1-5.0, default 2.0)
+    // Higher rxModIndex = assumes wider deviation = less amplification = less distortion
+    // Lower rxModIndex = assumes narrower deviation = more amplification = louder but may clip
     float deviation = isNBFM ? static_cast<float>(m_bandwidth * 0.5) : 75000.0f;
+    deviation *= m_rxModIndex;
     float deviationRads = 2.0f * static_cast<float>(M_PI) * deviation / static_cast<float>(rate);
     float gain = 1.0f / deviationRads;
 
@@ -639,5 +653,116 @@ void FMDemodulator::removeDC(float& dcX1, float& dcY1, std::vector<float>& audio
         dcX1 = s;
         dcY1 = y;
         s = y;
+    }
+}
+
+// ========== In-place radix-2 FFT (Cooley-Tukey) ==========
+void FMDemodulator::fftInPlace(std::vector<std::complex<float>>& x, bool inverse)
+{
+    const size_t N = x.size();
+    if (N <= 1) return;
+
+    // Bit-reversal permutation
+    for (size_t i = 1, j = 0; i < N; i++) {
+        size_t bit = N >> 1;
+        while (j & bit) { j ^= bit; bit >>= 1; }
+        j ^= bit;
+        if (i < j) std::swap(x[i], x[j]);
+    }
+
+    // Butterfly stages
+    float sign = inverse ? 1.0f : -1.0f;
+    for (size_t len = 2; len <= N; len <<= 1) {
+        float ang = sign * 2.0f * static_cast<float>(M_PI) / len;
+        std::complex<float> wlen(std::cos(ang), std::sin(ang));
+        for (size_t i = 0; i < N; i += len) {
+            std::complex<float> w(1.0f, 0.0f);
+            for (size_t j = 0; j < len / 2; j++) {
+                std::complex<float> u = x[i + j];
+                std::complex<float> v = x[i + j + len / 2] * w;
+                x[i + j] = u + v;
+                x[i + j + len / 2] = u - v;
+                w *= wlen;
+            }
+        }
+    }
+
+    // Normalize IFFT
+    if (inverse) {
+        float invN = 1.0f / static_cast<float>(N);
+        for (auto& s : x) s *= invN;
+    }
+}
+
+// ========== FM IF Noise Reduction (SDR++ FMNR style) ==========
+// For each IQ sample: take a _bins-point FFT, keep only the strongest bin,
+// zero everything else, IFFT back. This isolates the FM carrier's
+// instantaneous frequency and strips all noise.
+void FMDemodulator::applyFMNR(std::vector<std::complex<float>>& iq)
+{
+    if (iq.empty()) return;
+
+    const int bins = m_fmnrBins;
+
+    // Initialize buffer and window on first call or if bins changed
+    if (static_cast<int>(m_fmnrWindow.size()) != bins) {
+        m_fmnrBuffer.assign(bins - 1, {0.0f, 0.0f});
+        m_fmnrWindow.resize(bins);
+        // Nuttall window
+        for (int i = 0; i < bins; i++) {
+            float x = 2.0f * static_cast<float>(M_PI) * i / (bins - 1);
+            m_fmnrWindow[i] = 0.355768f - 0.487396f * std::cos(x)
+                            + 0.144232f * std::cos(2.0f * x)
+                            - 0.012604f * std::cos(3.0f * x);
+        }
+    }
+
+    // Append input to delay buffer
+    std::vector<std::complex<float>> work;
+    work.reserve(m_fmnrBuffer.size() + iq.size());
+    work.insert(work.end(), m_fmnrBuffer.begin(), m_fmnrBuffer.end());
+    work.insert(work.end(), iq.begin(), iq.end());
+
+    std::vector<std::complex<float>> fftBuf(bins);
+    std::vector<float> ampBuf(bins);
+
+    // Process each sample
+    for (size_t i = 0; i < iq.size(); i++) {
+        // Apply window to bins-length segment
+        for (int j = 0; j < bins; j++) {
+            fftBuf[j] = work[i + j] * m_fmnrWindow[j];
+        }
+
+        // Forward FFT
+        fftInPlace(fftBuf, false);
+
+        // Find bin with maximum amplitude
+        int maxIdx = 0;
+        float maxAmp = 0.0f;
+        for (int j = 0; j < bins; j++) {
+            float amp = fftBuf[j].real() * fftBuf[j].real() + fftBuf[j].imag() * fftBuf[j].imag();
+            if (amp > maxAmp) { maxAmp = amp; maxIdx = j; }
+        }
+
+        // Keep only strongest bin, zero rest
+        std::vector<std::complex<float>> ifftBuf(bins, {0.0f, 0.0f});
+        ifftBuf[maxIdx] = fftBuf[maxIdx];
+
+        // Inverse FFT
+        fftInPlace(ifftBuf, true);
+
+        // Take center sample
+        iq[i] = ifftBuf[bins / 2];
+    }
+
+    // Save last bins-1 samples as delay for next block
+    size_t iqSize = iq.size();
+    size_t histSize = bins - 1;
+    if (iqSize >= histSize) {
+        m_fmnrBuffer.assign(iq.end() - histSize, iq.end());
+    } else {
+        size_t keep = histSize - iqSize;
+        m_fmnrBuffer.erase(m_fmnrBuffer.begin(), m_fmnrBuffer.begin() + (m_fmnrBuffer.size() - keep));
+        m_fmnrBuffer.insert(m_fmnrBuffer.end(), iq.begin(), iq.end());
     }
 }

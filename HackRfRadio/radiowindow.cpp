@@ -174,6 +174,7 @@ void RadioWindow::saveSettings()
     s.setValue("rxModIndex", m_gainDialog->rxModIndex());
     s.setValue("deemph", m_gainDialog->deemph());
     s.setValue("audioLpf", m_gainDialog->audioLpf());
+    s.setValue("fmnr", m_gainDialog->fmnrEnabled());
     s.setValue("ampEnable", m_gainDialog->ampEnabled());
 
     // Window geometry
@@ -233,6 +234,7 @@ void RadioWindow::loadSettings()
         m_gainDialog->setRxModIndex(s.value("rxModIndex", 30).toInt());
         m_gainDialog->setDeemph(s.value("deemph", 0).toInt());
         m_gainDialog->setAudioLpf(s.value("audioLpf", 50).toInt());
+        m_gainDialog->setFmnrEnabled(s.value("fmnr", true).toBool());
         m_gainDialog->setAmpEnabled(s.value("ampEnable", false).toBool());
         m_gainDialog->blockSignals(false);
     }
@@ -786,10 +788,14 @@ void RadioWindow::processIqBuffer()
         break;
     case AM: {
         auto mono = m_amDemod->demodulate(samples);
+        float amGain = m_gainDialog ? (m_gainDialog->rxGain() / 10.0f) : 1.0f;
         audio.resize(mono.size() * 2);
         for (size_t i = 0; i < mono.size(); i++) {
-            audio[i * 2]     = mono[i];
-            audio[i * 2 + 1] = mono[i];
+            float s = mono[i] * amGain;
+            if (s > 0.9f) s = 0.9f + 0.1f * std::tanh((s - 0.9f) * 8.0f);
+            else if (s < -0.9f) s = -0.9f + 0.1f * std::tanh((s + 0.9f) * 8.0f);
+            audio[i * 2]     = s;
+            audio[i * 2 + 1] = s;
         }
         break;
     }
@@ -956,15 +962,15 @@ void RadioWindow::onModulationChanged(int index)
             m_gainDialog->setModIndex(40);
             // RX presets (blocked — only local)
             m_gainDialog->blockSignals(true);
-            m_gainDialog->setVgaGain(20);
+            m_gainDialog->setVgaGain(15);
             m_gainDialog->setLnaGain(20);
-            m_gainDialog->setRxGain(20);       // 2.0
-            m_gainDialog->setRxModIndex(20);   // 2.0 (not used in NBFM demod)
+            m_gainDialog->setRxGain(30);       // 3.0
+            m_gainDialog->setRxModIndex(25);   // 2.5 (deviation multiplier)
             m_gainDialog->setDeemph(0);        // OFF
             m_gainDialog->setAudioLpf(50);     // 5.0 kHz
             m_gainDialog->blockSignals(false);
-            m_fmDemod->setOutputGain(2.0f);
-            m_fmDemod->setRxModIndex(2.0f);
+            m_fmDemod->setOutputGain(3.0f);
+            m_fmDemod->setRxModIndex(2.5f);
             m_fmDemod->setDeemphTau(0.0f);
             m_fmDemod->setAudioLPF(5000.0f);
         }
@@ -984,14 +990,14 @@ void RadioWindow::onModulationChanged(int index)
             // RX presets (blocked — only local)
             m_gainDialog->blockSignals(true);
             m_gainDialog->setVgaGain(20);
-            m_gainDialog->setLnaGain(20);
+            m_gainDialog->setLnaGain(40);
             m_gainDialog->setRxGain(20);       // 2.0
-            m_gainDialog->setRxModIndex(20);   // 2.0 (not used in NBFM demod)
+            m_gainDialog->setRxModIndex(10);   // 1.0 (deviation multiplier)
             m_gainDialog->setDeemph(0);        // OFF
             m_gainDialog->setAudioLpf(50);     // 5.0 kHz
             m_gainDialog->blockSignals(false);
             m_fmDemod->setOutputGain(2.0f);
-            m_fmDemod->setRxModIndex(2.0f);
+            m_fmDemod->setRxModIndex(1.0f);
             m_fmDemod->setDeemphTau(0.0f);
             m_fmDemod->setAudioLPF(5000.0f);
         }
@@ -1008,13 +1014,14 @@ void RadioWindow::onModulationChanged(int index)
             // TX presets (NOT blocked — must reach server)
             m_gainDialog->setAmplitude(50);    // 0.50 carrier level
             m_gainDialog->setModIndex(85);     // 0.85 = %85 modulation depth
-            // RX presets - AM (LNA slightly higher for weak aviation signals)
+            // RX presets - AM
             m_gainDialog->blockSignals(true);
             m_gainDialog->setVgaGain(20);
             m_gainDialog->setLnaGain(30);
             m_gainDialog->setRxGain(10);       // 1.0
             m_gainDialog->setRxModIndex(10);   // 1.0
             m_gainDialog->setDeemph(0);        // OFF
+            m_gainDialog->setAudioLpf(50);     // 5.0 kHz
             m_gainDialog->blockSignals(false);
         }
         m_mainIfBwSlider->blockSignals(true);

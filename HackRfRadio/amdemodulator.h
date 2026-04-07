@@ -46,16 +46,11 @@ private:
     std::vector<std::complex<float>> m_iqBwHistory;
     std::vector<float> m_audioFilterHistory;
 
-    // DC blocker state
-    float m_dcX1 = 0.0f;
-    float m_dcY1 = 0.0f;
+    // DC blocker state (SDR++ style)
+    float m_dcOffset = 0.0f;
 
-    // AGC state (inspired by BK4819 AM_fix firmware)
-    float m_agcGain = 1.0f;
-    float m_agcPeak = 0.0f;          // smoothed peak envelope
-    int   m_agcHoldCounter = 0;      // hold gain after reduction
-    float m_agcAttackAlpha = 0.0f;   // fast attack
-    float m_agcDecayAlpha = 0.0f;    // slow decay
+    // AGC state (SDR++ style)
+    float m_agcAmp = 1.0f;
 
     void rebuildChain();
 
@@ -82,7 +77,6 @@ private:
         std::vector<float>& history);
     std::vector<float> amDemod(const std::vector<std::complex<float>>& signal);
     static std::vector<float> resample(const std::vector<float>& in, double inRate, double outRate);
-    void removeDC(std::vector<float>& audio);
 };
 
 #endif // AMDEMODULATOR_H

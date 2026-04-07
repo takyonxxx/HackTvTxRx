@@ -196,6 +196,15 @@ void GainSettingsDialog::setupUi()
     });
     rxGrid->addWidget(new QLabel("Audio LPF:"), row, 0); rxGrid->addWidget(m_audioLpfSlider, row, 1); rxGrid->addWidget(m_audioLpfLabel, row, 2); row++;
 
+    // FM IF Noise Reduction checkbox
+    m_fmnrCheck = new QCheckBox("FM IF NR (noise reduction)");
+    m_fmnrCheck->setChecked(true);
+    connect(m_fmnrCheck, &QCheckBox::toggled, [this](bool checked) {
+        m_fmDemod->setFMNR(checked);
+        emit settingsChanged();
+    });
+    rxGrid->addWidget(m_fmnrCheck, row, 0, 1, 3); row++;
+
     rxGrid->setColumnMinimumWidth(0, 80);
     rxGrid->setColumnMinimumWidth(2, 50);
     rxGrid->setColumnStretch(1, 1);
@@ -280,6 +289,7 @@ int GainSettingsDialog::deemph() const { return m_deemphSlider->value(); }
 int GainSettingsDialog::ifBandwidth() const { return m_ifBwSlider->value(); }
 int GainSettingsDialog::rxModIndex() const { return m_rxModIdxSlider->value(); }
 int GainSettingsDialog::audioLpf() const { return m_audioLpfSlider->value(); }
+bool GainSettingsDialog::fmnrEnabled() const { return m_fmnrCheck->isChecked(); }
 bool GainSettingsDialog::ampEnabled() const { return m_ampEnableCheck->isChecked(); }
 
 void GainSettingsDialog::setVgaGain(int v) { m_vgaGainSlider->setValue(v); }
@@ -292,6 +302,7 @@ void GainSettingsDialog::setDeemph(int v) { m_deemphSlider->setValue(v); }
 void GainSettingsDialog::setIfBandwidth(int v) { m_ifBwSlider->setValue(v); }
 void GainSettingsDialog::setRxModIndex(int v) { m_rxModIdxSlider->setValue(v); }
 void GainSettingsDialog::setAudioLpf(int v) { m_audioLpfSlider->setValue(v); }
+void GainSettingsDialog::setFmnrEnabled(bool en) { m_fmnrCheck->setChecked(en); }
 void GainSettingsDialog::setAmpEnabled(bool en) {
     m_ampEnableCheck->blockSignals(true);
     m_ampEnableCheck->setChecked(en);
