@@ -31,7 +31,6 @@ bool AudioPlayback::initAudioSink()
         return false;
     }
 
-    qDebug() << "Using audio output:" << outputDevice.description();
 
     m_audioSink = std::make_unique<QAudioSink>(outputDevice, m_format);
     m_audioSink->setBufferSize(48000 * 2 * 2); // 500ms stereo buffer — low latency
@@ -64,8 +63,6 @@ bool AudioPlayback::start()
     });
     m_writerThread.start();
 
-    qDebug() << "Audio playback started at" << SAMPLE_RATE
-             << "Hz, stereo, buffer:" << m_audioSink->bufferSize();
     return true;
 }
 
@@ -99,7 +96,6 @@ void AudioPlayback::stop()
     m_readPos = 0;
     m_bufferSize = 0;
 
-    qDebug() << "Audio playback stopped";
 }
 
 void AudioPlayback::enqueueAudio(const std::vector<float>& samples)

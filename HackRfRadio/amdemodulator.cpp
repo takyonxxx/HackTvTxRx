@@ -7,8 +7,6 @@ AMDemodulator::AMDemodulator(double inputSampleRate, double bandwidth, QObject *
     , m_bandwidth(bandwidth)
 {
     rebuildChain();
-    qDebug() << "AMDemodulator: input" << m_inputRate / 1e6 << "MHz"
-             << "bw" << m_bandwidth / 1e3 << "kHz";
 }
 
 std::vector<float> AMDemodulator::demodulate(const std::vector<std::complex<float>>& samples)
@@ -57,7 +55,6 @@ void AMDemodulator::setSampleRate(double newRate)
 {
     m_inputRate = newRate;
     rebuildChain();
-    qDebug() << "AMDemodulator: rate changed to" << m_inputRate / 1e6 << "MHz";
 }
 
 void AMDemodulator::setBandwidth(double bandwidthHz)

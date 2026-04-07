@@ -13,11 +13,6 @@ FMDemodulator::FMDemodulator(double inputSampleRate, double bandwidth, QObject *
 {
     rebuildChain();
 
-    qDebug() << "FMDemodulator: input" << m_inputRate / 1e6 << "MHz"
-             << "bw" << m_bandwidth / 1e3 << "kHz"
-             << "gain" << m_outputGain
-             << "stages:" << m_iqStages.size() << "IQ +"
-             << m_realStages.size() << "real";
 }
 
 std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<float>>& samples)
@@ -269,7 +264,6 @@ void FMDemodulator::setSampleRate(double newRate)
     m_pilotFreq = 19000.0;
     m_pilotLevel = 0.0f;
     rebuildChain();
-    qDebug() << "FMDemodulator: rate changed to" << m_inputRate / 1e6 << "MHz";
 }
 
 void FMDemodulator::setBandwidth(double bandwidthHz)
@@ -278,8 +272,6 @@ void FMDemodulator::setBandwidth(double bandwidthHz)
     rebuildChain();
 
     double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
-    qDebug() << "FMDemodulator: BW" << m_bandwidth / 1e3 << "kHz, gain" << m_outputGain
-             << "postDecim" << postDecimRate / 1e3 << "kHz";
 }
 
 void FMDemodulator::setAudioLPF(float cutoffHz)
@@ -305,7 +297,6 @@ void FMDemodulator::rebuildChain()
     m_monoFilterHistory.clear();
     m_diffFilterHistory.clear();
     m_fmnrBuffer.clear();
-    m_fmnrWindow.clear();
 
     double rate = m_inputRate;
     bool isNBFM = (m_bandwidth <= 25000.0);
@@ -585,9 +576,8 @@ std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>
 
     bool isNBFM = (m_bandwidth <= 25000.0);
 
-    // SDR++ Quadrature demod: gain = sampleRate / (2π × deviation)
-    // deviation = bandwidth/2 for NBFM, 75kHz for WFM
-    // rxModIndex multiplies deviation — higher = less gain = cleaner sound
+    // SDR++ Quadrature demod: gain = sampleRate / (2π × deviation × rxModIndex)
+    // rxModIndex controls effective deviation — higher = wider deviation = less gain
     float deviation = isNBFM ? static_cast<float>(m_bandwidth * 0.5) : 75000.0f;
     deviation *= m_rxModIndex;
     float deviationRads = 2.0f * static_cast<float>(M_PI) * deviation / static_cast<float>(rate);
@@ -637,111 +627,65 @@ void FMDemodulator::removeDC(float& dcX1, float& dcY1, std::vector<float>& audio
     }
 }
 
-// ========== In-place radix-2 FFT (Cooley-Tukey) ==========
-void FMDemodulator::fftInPlace(std::vector<std::complex<float>>& x, bool inverse)
-{
-    const size_t N = x.size();
-    if (N <= 1) return;
-
-    // Bit-reversal permutation
-    for (size_t i = 1, j = 0; i < N; i++) {
-        size_t bit = N >> 1;
-        while (j & bit) { j ^= bit; bit >>= 1; }
-        j ^= bit;
-        if (i < j) std::swap(x[i], x[j]);
-    }
-
-    // Butterfly stages
-    float sign = inverse ? 1.0f : -1.0f;
-    for (size_t len = 2; len <= N; len <<= 1) {
-        float ang = sign * 2.0f * static_cast<float>(M_PI) / len;
-        std::complex<float> wlen(std::cos(ang), std::sin(ang));
-        for (size_t i = 0; i < N; i += len) {
-            std::complex<float> w(1.0f, 0.0f);
-            for (size_t j = 0; j < len / 2; j++) {
-                std::complex<float> u = x[i + j];
-                std::complex<float> v = x[i + j + len / 2] * w;
-                x[i + j] = u + v;
-                x[i + j + len / 2] = u - v;
-                w *= wlen;
-            }
-        }
-    }
-
-    // Normalize IFFT
-    if (inverse) {
-        float invN = 1.0f / static_cast<float>(N);
-        for (auto& s : x) s *= invN;
-    }
-}
-
-// ========== FM IF Noise Reduction (SDR++ FMNR style) ==========
-// For each IQ sample: take a _bins-point FFT, keep the strongest bin
-// plus immediate neighbors for smooth transitions, zero the rest, IFFT back.
+// ========== FM IF Noise Reduction ==========
+// Two-stage approach:
+// 1. IQ Hard Limiter — normalize each sample to unit magnitude.
+//    FM signal carries information in phase only, amplitude is irrelevant.
+//    Noise adds random amplitude variations. Normalizing removes AM noise
+//    without affecting the FM content. This is the same technique used in
+//    real FM receiver ICs (e.g. MC3362, SA605).
+// 2. Moving average on I and Q separately — smooths out high-frequency
+//    phase noise without affecting the FM modulation bandwidth.
 void FMDemodulator::applyFMNR(std::vector<std::complex<float>>& iq)
 {
     if (iq.empty()) return;
 
-    const int bins = m_fmnrBins;
-
-    // Initialize buffer and window on first call or if bins changed
-    if (static_cast<int>(m_fmnrWindow.size()) != bins) {
-        m_fmnrBuffer.assign(bins - 1, {0.0f, 0.0f});
-        m_fmnrWindow.resize(bins);
-        // Nuttall window
-        for (int i = 0; i < bins; i++) {
-            float x = 2.0f * static_cast<float>(M_PI) * i / (bins - 1);
-            m_fmnrWindow[i] = 0.355768f - 0.487396f * std::cos(x)
-                            + 0.144232f * std::cos(2.0f * x)
-                            - 0.012604f * std::cos(3.0f * x);
+    // Stage 1: Hard limiter — normalize to unit magnitude
+    for (auto& s : iq) {
+        float mag = std::sqrt(s.real() * s.real() + s.imag() * s.imag());
+        if (mag > 1e-10f) {
+            s /= mag;
         }
     }
 
-    // Append input to delay buffer
+    // Stage 2: Moving average filter on I and Q
+    // Window size controls smoothing — larger = more NR but less audio bandwidth
+    const int window = 3;  // light smoothing, preserves voice quality
+    if (static_cast<int>(iq.size()) <= window) return;
+
+    // Use history buffer for block continuity
+    const int histNeeded = window - 1;
+    if (static_cast<int>(m_fmnrBuffer.size()) != histNeeded) {
+        m_fmnrBuffer.assign(histNeeded, {0.0f, 0.0f});
+    }
+
+    // Build work buffer with history
     std::vector<std::complex<float>> work;
-    work.reserve(m_fmnrBuffer.size() + iq.size());
+    work.reserve(histNeeded + iq.size());
     work.insert(work.end(), m_fmnrBuffer.begin(), m_fmnrBuffer.end());
     work.insert(work.end(), iq.begin(), iq.end());
 
-    std::vector<std::complex<float>> fftBuf(bins);
-
-    // Process each sample
+    // Apply moving average
+    float invW = 1.0f / static_cast<float>(window);
     for (size_t i = 0; i < iq.size(); i++) {
-        // Apply window to bins-length segment
-        for (int j = 0; j < bins; j++) {
-            fftBuf[j] = work[i + j] * m_fmnrWindow[j];
+        float sumR = 0.0f, sumI = 0.0f;
+        for (int j = 0; j < window; j++) {
+            sumR += work[i + j].real();
+            sumI += work[i + j].imag();
         }
-
-        // Forward FFT
-        fftInPlace(fftBuf, false);
-
-        // Find bin with maximum amplitude
-        int maxIdx = 0;
-        float maxAmp = 0.0f;
-        for (int j = 0; j < bins; j++) {
-            float amp = fftBuf[j].real() * fftBuf[j].real() + fftBuf[j].imag() * fftBuf[j].imag();
-            if (amp > maxAmp) { maxAmp = amp; maxIdx = j; }
-        }
-
-        // Keep only strongest bin (SDR++ original — no neighbors)
-        std::vector<std::complex<float>> ifftBuf(bins, {0.0f, 0.0f});
-        ifftBuf[maxIdx] = fftBuf[maxIdx];
-
-        // Inverse FFT
-        fftInPlace(ifftBuf, true);
-
-        // Take center sample
-        iq[i] = ifftBuf[bins / 2];
+        iq[i] = {sumR * invW, sumI * invW};
     }
 
-    // Save last bins-1 samples as delay for next block
-    size_t iqSize = iq.size();
-    size_t histSize = bins - 1;
-    if (iqSize >= histSize) {
-        m_fmnrBuffer.assign(iq.end() - histSize, iq.end());
-    } else {
-        size_t keep = histSize - iqSize;
-        m_fmnrBuffer.erase(m_fmnrBuffer.begin(), m_fmnrBuffer.begin() + (m_fmnrBuffer.size() - keep));
-        m_fmnrBuffer.insert(m_fmnrBuffer.end(), iq.begin(), iq.end());
+    // Re-normalize after smoothing (maintain unit amplitude)
+    for (auto& s : iq) {
+        float mag = std::sqrt(s.real() * s.real() + s.imag() * s.imag());
+        if (mag > 1e-10f) {
+            s /= mag;
+        }
+    }
+
+    // Save history for next block
+    if (iq.size() >= static_cast<size_t>(histNeeded)) {
+        m_fmnrBuffer.assign(iq.end() - histNeeded, iq.end());
     }
 }

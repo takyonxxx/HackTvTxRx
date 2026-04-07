@@ -40,7 +40,6 @@ bool TcpClient::connectToServer(const QString& host, quint16 dataPort, quint16 c
     m_controlPort = controlPort;
     m_audioPort = audioPort;
 
-    qDebug() << "Connecting to" << host << "data:" << dataPort << "ctrl:" << controlPort << "audio:" << audioPort;
 
     m_controlSocket->connectToHost(host, controlPort);
     m_dataSocket->connectToHost(host, dataPort);
@@ -162,14 +161,12 @@ void TcpClient::sendAudioData(const float* data, size_t count)
 
 void TcpClient::onDataConnected()
 {
-    qDebug() << "Data socket connected";
     m_dataSocket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
     m_dataSocket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption, 1024 * 1024);
 }
 
 void TcpClient::onDataDisconnected()
 {
-    qDebug() << "Data socket disconnected";
 }
 
 void TcpClient::onDataReadyRead()
@@ -192,14 +189,12 @@ void TcpClient::onDataError(QAbstractSocket::SocketError error)
 
 void TcpClient::onControlConnected()
 {
-    qDebug() << "Control socket connected";
     m_connected.store(true);
     emit connected();
 }
 
 void TcpClient::onControlDisconnected()
 {
-    qDebug() << "Control socket disconnected";
     m_connected.store(false);
     emit disconnected();
 }
@@ -231,7 +226,6 @@ void TcpClient::onControlError(QAbstractSocket::SocketError error)
 
 void TcpClient::onAudioConnected()
 {
-    qDebug() << "Audio socket connected";
     m_audioSocket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
     // Smaller send buffer for lower latency audio
     m_audioSocket->setSocketOption(QAbstractSocket::SendBufferSizeSocketOption, 32768);
@@ -239,7 +233,6 @@ void TcpClient::onAudioConnected()
 
 void TcpClient::onAudioDisconnected()
 {
-    qDebug() << "Audio socket disconnected";
 }
 
 void TcpClient::onAudioError(QAbstractSocket::SocketError error)

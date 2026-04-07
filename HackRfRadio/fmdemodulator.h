@@ -92,15 +92,12 @@ private:
 
     double m_mpxRate = 0.0;  // rate after IQ decimation (before stereo decode)
 
-    // FM IF Noise Reduction (SDR++ style)
+    // FM IF Noise Reduction (amplitude limiter + smoothing)
     bool m_fmnrEnabled = false;
-    int m_fmnrBins = 32;
-    std::vector<std::complex<float>> m_fmnrBuffer;  // delay buffer
-    std::vector<float> m_fmnrWindow;                  // Nuttall window
+    std::vector<std::complex<float>> m_fmnrBuffer;  // history for moving average
 
     void rebuildChain();
     void applyFMNR(std::vector<std::complex<float>>& iq);
-    static void fftInPlace(std::vector<std::complex<float>>& x, bool inverse);
 
     static std::vector<float> designLPF(int numTaps, float cutoff, float sampleRate);
     void decimateComplex(

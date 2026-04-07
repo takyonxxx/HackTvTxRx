@@ -188,7 +188,7 @@ void RadioWindow::loadSettings()
     QSettings s("MarenRobotics", "HackRfRadio");
 
     if (!s.contains("host")) {
-        qDebug() << "No saved settings, using defaults";
+        // No saved settings, use defaults
         // Apply defaults
         onModulationChanged(0);
         return;
@@ -230,7 +230,7 @@ void RadioWindow::loadSettings()
         m_gainDialog->setTxGain(s.value("txGain", 47).toInt());
         m_gainDialog->setAmplitude(s.value("amplitude", 50).toInt());
         m_gainDialog->setModIndex(s.value("modIndex", 40).toInt());
-        m_gainDialog->setRxGain(s.value("rxGain", 10).toInt());
+        m_gainDialog->setRxGain(s.value("rxGain", 5).toInt());
         m_gainDialog->setRxModIndex(s.value("rxModIndex", 100).toInt());
         m_gainDialog->setDeemph(s.value("deemph", 0).toInt());
         m_gainDialog->setAudioLpf(s.value("audioLpf", 50).toInt());
@@ -258,9 +258,7 @@ void RadioWindow::loadSettings()
     m_squelchLevel = m_squelchSlider->value() / 100.0f;
     m_squelchLabel->setText(QString("%1%").arg(m_squelchSlider->value()));
 
-    qDebug() << "Settings applied - freq:" << freq
-             << "bw:" << m_sampleRate
-             << "mod:" << m_modulationIndex;
+    // Settings applied silently
 }
 
 // ============================================================
@@ -709,7 +707,7 @@ void RadioWindow::onConnected()
         m_fmDemod->setBandwidth(bw);
         m_amDemod->setBandwidth(bw);
 
-        float rxGain = m_gainDialog->rxGain() / 10.0f;
+        float rxGain = m_gainDialog->rxGain() / 100.0f;
         m_fmDemod->setOutputGain(rxGain);
         m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 100.0f);
         m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
@@ -730,7 +728,11 @@ void RadioWindow::onDisconnected()
 }
 
 void RadioWindow::onConnectionError(const QString& error) { logMessage("Error: " + error); }
-void RadioWindow::onControlResponse(const QString& response) { logMessage("Server: " + response); }
+void RadioWindow::onControlResponse(const QString& response) {
+    // Only log non-OK responses (errors/info, not routine confirmations)
+    if (!response.startsWith("OK:"))
+        logMessage("Server: " + response);
+}
 
 // ============================================================
 // IQ Data (RX)
@@ -788,7 +790,7 @@ void RadioWindow::processIqBuffer()
         break;
     case AM: {
         auto mono = m_amDemod->demodulate(samples);
-        float amGain = m_gainDialog ? (m_gainDialog->rxGain() / 10.0f) : 1.0f;
+        float amGain = m_gainDialog ? (m_gainDialog->rxGain() / 100.0f) : 1.0f;
         audio.resize(mono.size() * 2);
         for (size_t i = 0; i < mono.size(); i++) {
             float s = mono[i] * amGain;
@@ -816,7 +818,6 @@ void RadioWindow::onPttPressed()
 {
     if (!m_tcpClient->isConnected() || m_isTx) return;
 
-    qDebug() << "=== PTT PRESSED ===";
     m_isTx = true;
     m_iqAccumulator.clear();
 
@@ -837,8 +838,6 @@ void RadioWindow::onPttPressed()
     float estimatedDbm = -40.0f + ifGain + ampDb + rfAmpDb;
     estimatedDbm = std::clamp(estimatedDbm, -60.0f, 15.0f);
 
-    qDebug() << "TX estimated power:" << estimatedDbm << "dBm";
-
     m_txRxIndicator->setText("TX - Transmitting");
     m_txRxIndicator->setStyleSheet(
         "font-size: 18px; font-weight: bold; color: #FF4444; "
@@ -850,7 +849,6 @@ void RadioWindow::onPttReleased()
 {
     if (!m_isTx) return;
 
-    qDebug() << "=== PTT RELEASED ===";
     m_isTx = false;
 
     m_tcpClient->switchToRx();
@@ -935,7 +933,6 @@ void RadioWindow::onFrequencyChanged(uint64_t freq)
 {
     if (m_tcpClient->isConnected()) m_tcpClient->setFrequency(freq);
     m_cPlotter->setCenterFreq(static_cast<quint64>(freq));
-    logMessage(QString("Freq: %1 MHz").arg(freq / 1000000.0, 0, 'f', 3));
 }
 
 // ============================================================
@@ -964,13 +961,13 @@ void RadioWindow::onModulationChanged(int index)
             m_gainDialog->blockSignals(true);
             m_gainDialog->setVgaGain(15);
             m_gainDialog->setLnaGain(20);
-            m_gainDialog->setRxGain(5);        // 0.5
-            m_gainDialog->setRxModIndex(10);   // 0.10 (deviation multiplier)
+            m_gainDialog->setRxGain(300);      // 3.00
+            m_gainDialog->setRxModIndex(25);   // 0.25
             m_gainDialog->setDeemph(0);        // OFF
             m_gainDialog->setAudioLpf(70);     // 7.0 kHz
             m_gainDialog->blockSignals(false);
-            m_fmDemod->setOutputGain(0.5f);
-            m_fmDemod->setRxModIndex(0.10f);
+            m_fmDemod->setOutputGain(3.0f);
+            m_fmDemod->setRxModIndex(0.25f);
             m_fmDemod->setDeemphTau(0.0f);
             m_fmDemod->setAudioLPF(7000.0f);
         }
@@ -991,12 +988,12 @@ void RadioWindow::onModulationChanged(int index)
             m_gainDialog->blockSignals(true);
             m_gainDialog->setVgaGain(20);
             m_gainDialog->setLnaGain(40);
-            m_gainDialog->setRxGain(20);       // 2.0
-            m_gainDialog->setRxModIndex(100);  // 1.0 (deviation multiplier)
+            m_gainDialog->setRxGain(20);       // 0.20
+            m_gainDialog->setRxModIndex(100);  // 1.0 (not used in demod)
             m_gainDialog->setDeemph(0);        // OFF
             m_gainDialog->setAudioLpf(50);     // 5.0 kHz
             m_gainDialog->blockSignals(false);
-            m_fmDemod->setOutputGain(2.0f);
+            m_fmDemod->setOutputGain(0.20f);
             m_fmDemod->setRxModIndex(1.0f);
             m_fmDemod->setDeemphTau(0.0f);
             m_fmDemod->setAudioLPF(5000.0f);
@@ -1042,7 +1039,7 @@ void RadioWindow::onModulationChanged(int index)
     m_cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
 
     if (m_gainDialog) {
-        float rxGain = m_gainDialog->rxGain() / 10.0f;
+        float rxGain = m_gainDialog->rxGain() / 100.0f;
         m_fmDemod->setOutputGain(rxGain);
         m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 100.0f);
         m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
@@ -1086,7 +1083,7 @@ void RadioWindow::onBwChanged(int index)
     m_cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
 
     if (m_gainDialog) {
-        float rxGain = m_gainDialog->rxGain() / 10.0f;
+        float rxGain = m_gainDialog->rxGain() / 100.0f;
         m_fmDemod->setOutputGain(rxGain);
         m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 100.0f);
         m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
@@ -1094,7 +1091,6 @@ void RadioWindow::onBwChanged(int index)
     }
 
     saveSettings();
-    qDebug() << "BW changed to" << m_sampleRate / 1e6 << "MHz";
 }
 
 // ============================================================

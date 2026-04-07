@@ -134,11 +134,11 @@ void GainSettingsDialog::setupUi()
     });
     rxGrid->addWidget(new QLabel("LNA (RX):"), row, 0); rxGrid->addWidget(m_lnaGainSlider, row, 1); rxGrid->addWidget(m_lnaGainLabel, row, 2); row++;
 
-    m_rxGainSlider = new QSlider(Qt::Horizontal); m_rxGainSlider->setRange(1, 100); m_rxGainSlider->setValue(10);
-    m_rxGainLabel = new QLabel("1.0");
+    m_rxGainSlider = new QSlider(Qt::Horizontal); m_rxGainSlider->setRange(1, 1000); m_rxGainSlider->setValue(10);
+    m_rxGainLabel = new QLabel("0.10");
     connect(m_rxGainSlider, &QSlider::valueChanged, [this](int v) {
-        float gain = v / 10.0f;
-        m_rxGainLabel->setText(QString::number(gain, 'f', 1));
+        float gain = v / 100.0f;
+        m_rxGainLabel->setText(QString::number(gain, 'f', 2));
         m_fmDemod->setOutputGain(gain);
         emit settingsChanged();
     });

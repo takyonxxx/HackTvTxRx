@@ -15,18 +15,14 @@ static bool setupiOSAudioSession()
                          AVAudioSessionCategoryOptionAllowBluetooth
                    error:&error];
     if (error) {
-        qDebug() << "AVAudioSession setCategory failed:" << error.localizedDescription.UTF8String;
         return false;
     }
 
     [session setActive:YES error:&error];
     if (error) {
-        qDebug() << "AVAudioSession setActive failed:" << error.localizedDescription.UTF8String;
         return false;
     }
 
-    qDebug() << "AVAudioSession configured: PlayAndRecord, sampleRate:"
-             << session.sampleRate << "inputChannels:" << session.inputNumberOfChannels;
     return true;
 }
 #endif
@@ -62,13 +58,9 @@ bool AudioCapture::start()
         return false;
     }
 
-    qDebug() << "Using audio input:" << inputDevice.description();
 
     // Try device preferred format first
     m_format = inputDevice.preferredFormat();
-    qDebug() << "Using device preferred format:" << m_format.sampleRate() << "Hz"
-             << m_format.channelCount() << "ch"
-             << m_format.sampleFormat();
 
     // If preferred format is invalid (macOS sometimes returns Unknown),
     // use a known-good format
@@ -83,9 +75,6 @@ bool AudioCapture::start()
                 m_format.setSampleFormat(QAudioFormat::Float);
             }
         }
-        qDebug() << "Corrected format:" << m_format.sampleRate() << "Hz"
-                 << m_format.channelCount() << "ch"
-                 << m_format.sampleFormat();
     }
 
     m_inputChannels = m_format.channelCount();
@@ -110,9 +99,6 @@ bool AudioCapture::start()
     m_flushTimer->start(10);
 
     m_running.store(true);
-    qDebug() << "Audio capture started at" << m_format.sampleRate() << "Hz,"
-             << m_format.channelCount() << "ch,"
-             << "format:" << m_format.sampleFormat() << "flush=10ms";
     return true;
 }
 
@@ -122,7 +108,6 @@ void AudioCapture::stop()
     if (m_flushTimer) { m_flushTimer->stop(); delete m_flushTimer; m_flushTimer = nullptr; }
     if (m_audioSource) { m_audioSource->stop(); delete m_audioSource; m_audioSource = nullptr; m_ioDevice = nullptr; }
     { std::lock_guard<std::mutex> lock(m_accMutex); m_accumulator.clear(); }
-    qDebug() << "Audio capture stopped";
 }
 
 void AudioCapture::onReadyRead()
