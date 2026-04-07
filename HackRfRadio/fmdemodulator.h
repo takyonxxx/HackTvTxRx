@@ -45,6 +45,9 @@ private:
         std::vector<float> taps;
         int factor;
         double outputRate;
+        // Persistent delay line for block-continuous filtering
+        std::vector<std::complex<float>> iqHistory;   // for complex decimation
+        std::vector<float> realHistory;                // for real decimation
     };
 
     double m_inputRate;
@@ -63,6 +66,12 @@ private:
     std::vector<float> m_audioFilterTaps;
     std::vector<float> m_iqBandwidthTaps;
 
+    // Persistent delay lines for non-decimating FIR filters
+    std::vector<std::complex<float>> m_iqBwHistory;   // IQ bandwidth filter state
+    std::vector<float> m_audioFilterHistory;            // audio LPF state
+    std::vector<float> m_monoFilterHistory;             // WBFM mono LPF state
+    std::vector<float> m_diffFilterHistory;             // WBFM diff LPF state
+
     // Stereo decode state
     double m_pilotPhase = 0.0;       // PLL phase accumulator for 19 kHz pilot
     double m_pilotFreq = 19000.0;    // PLL frequency estimate
@@ -80,16 +89,26 @@ private:
     void rebuildChain();
 
     static std::vector<float> designLPF(int numTaps, float cutoff, float sampleRate);
-    static std::vector<std::complex<float>> decimateComplex(
+    void decimateComplex(
         const std::vector<std::complex<float>>& in,
-        const std::vector<float>& taps, int factor);
-    static std::vector<std::complex<float>> applyComplexFIR(
+        std::vector<std::complex<float>>& out,
+        const std::vector<float>& taps, int factor,
+        std::vector<std::complex<float>>& history);
+    void applyComplexFIR(
         const std::vector<std::complex<float>>& in,
-        const std::vector<float>& taps);
-    static std::vector<float> decimateReal(
+        std::vector<std::complex<float>>& out,
+        const std::vector<float>& taps,
+        std::vector<std::complex<float>>& history);
+    void decimateReal(
         const std::vector<float>& in,
-        const std::vector<float>& taps, int factor);
-    static std::vector<float> applyFIR(const std::vector<float>& in, const std::vector<float>& taps);
+        std::vector<float>& out,
+        const std::vector<float>& taps, int factor,
+        std::vector<float>& history);
+    void applyFIR(
+        const std::vector<float>& in,
+        std::vector<float>& out,
+        const std::vector<float>& taps,
+        std::vector<float>& history);
     std::vector<float> fmDemod(const std::vector<std::complex<float>>& signal, double rate);
     std::vector<float> decodeStereo(const std::vector<float>& mpx, double mpxRate);
     static std::vector<float> resample(const std::vector<float>& in, double inRate, double outRate);

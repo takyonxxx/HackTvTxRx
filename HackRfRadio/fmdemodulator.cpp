@@ -28,13 +28,17 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
 
     // 1. Multi-stage complex IQ decimation
     auto iq = samples;
-    for (const auto& stage : m_iqStages) {
-        iq = decimateComplex(iq, stage.taps, stage.factor);
+    for (auto& stage : m_iqStages) {
+        std::vector<std::complex<float>> tmp;
+        decimateComplex(iq, tmp, stage.taps, stage.factor, stage.iqHistory);
+        iq = std::move(tmp);
     }
 
     // 2. Adjustable IQ bandwidth filter
     if (!m_iqBandwidthTaps.empty()) {
-        iq = applyComplexFIR(iq, m_iqBandwidthTaps);
+        std::vector<std::complex<float>> tmp;
+        applyComplexFIR(iq, tmp, m_iqBandwidthTaps, m_iqBwHistory);
+        iq = std::move(tmp);
     }
 
     // 3. FM demodulate — produces MPX baseband
@@ -48,8 +52,10 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
 
     // NBFM / fallback mono path
     // 4. Real-valued decimation stages
-    for (const auto& stage : m_realStages) {
-        mpx = decimateReal(mpx, stage.taps, stage.factor);
+    for (auto& stage : m_realStages) {
+        std::vector<float> tmp;
+        decimateReal(mpx, tmp, stage.taps, stage.factor, stage.realHistory);
+        mpx = std::move(tmp);
     }
 
     // 5. Resample to 48 kHz
@@ -69,7 +75,11 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
     }
 
     // 7. Audio LPF
-    mpx = applyFIR(mpx, m_audioFilterTaps);
+    {
+        std::vector<float> tmp;
+        applyFIR(mpx, tmp, m_audioFilterTaps, m_audioFilterHistory);
+        mpx = std::move(tmp);
+    }
 
     // 8. HPF 100 Hz (remove DC offset and sub-bass rumble)
     {
@@ -157,7 +167,8 @@ std::vector<float> FMDemodulator::decodeStereo(const std::vector<float>& mpx, do
     bool doStereo = stereoNow && !m_forceMono;
 
     // --- Extract L+R (mono) with 15 kHz LPF ---
-    auto monoSignal = applyFIR(mpx, m_monoFilterTaps);
+    std::vector<float> monoSignal;
+    applyFIR(mpx, monoSignal, m_monoFilterTaps, m_monoFilterHistory);
 
     std::vector<float> leftAudio, rightAudio;
 
@@ -187,7 +198,8 @@ std::vector<float> FMDemodulator::decodeStereo(const std::vector<float>& mpx, do
         }
 
         // LPF the L-R signal at 15 kHz
-        auto diffSignal = applyFIR(diffRaw, m_diffFilterTaps);
+        std::vector<float> diffSignal;
+        applyFIR(diffRaw, diffSignal, m_diffFilterTaps, m_diffFilterHistory);
 
         // L = (L+R) + (L-R), R = (L+R) - (L-R)
         size_t len = std::min(monoSignal.size(), diffSignal.size());
@@ -285,6 +297,12 @@ void FMDemodulator::rebuildChain()
 {
     m_iqStages.clear();
     m_realStages.clear();
+
+    // Clear all persistent filter state
+    m_iqBwHistory.clear();
+    m_audioFilterHistory.clear();
+    m_monoFilterHistory.clear();
+    m_diffFilterHistory.clear();
 
     double rate = m_inputRate;
     bool isNBFM = (m_bandwidth <= 25000.0);
@@ -393,120 +411,207 @@ std::vector<float> FMDemodulator::designLPF(int numTaps, float cutoff, float sam
     return h;
 }
 
-std::vector<std::complex<float>> FMDemodulator::decimateComplex(
+// ========== Stateful FIR filters with persistent delay lines ==========
+// Each filter maintains a history buffer (size = taps-1) that carries
+// the tail of the previous block into the next. This eliminates the
+// clicks/pops/noise that occurred at block boundaries with zero-padding.
+
+void FMDemodulator::decimateComplex(
     const std::vector<std::complex<float>>& in,
-    const std::vector<float>& taps, int factor)
+    std::vector<std::complex<float>>& out,
+    const std::vector<float>& taps, int factor,
+    std::vector<std::complex<float>>& history)
 {
-    const size_t N = in.size();
     const size_t T = taps.size();
-    const int half = T / 2;
-    std::vector<std::complex<float>> out;
+    const size_t N = in.size();
+
+    // Initialize history if needed
+    if (history.size() != T - 1)
+        history.assign(T - 1, {0.0f, 0.0f});
+
+    // Build working buffer: [history | input]
+    std::vector<std::complex<float>> work;
+    work.reserve(history.size() + N);
+    work.insert(work.end(), history.begin(), history.end());
+    work.insert(work.end(), in.begin(), in.end());
+
+    out.clear();
     out.reserve(N / factor + 1);
+
     for (size_t i = 0; i < N; i += factor) {
         float sumR = 0.0f, sumI = 0.0f;
+        // i in input maps to i + (T-1) in work buffer, filter centered
         for (size_t j = 0; j < T; j++) {
-            int idx = static_cast<int>(i) - half + static_cast<int>(j);
-            if (idx >= 0 && idx < static_cast<int>(N)) {
-                sumR += in[idx].real() * taps[j];
-                sumI += in[idx].imag() * taps[j];
-            }
+            const auto& s = work[i + j];
+            sumR += s.real() * taps[j];
+            sumI += s.imag() * taps[j];
         }
         out.emplace_back(sumR, sumI);
     }
-    return out;
+
+    // Save last T-1 input samples as history for next block
+    if (N >= T - 1) {
+        std::copy(in.end() - (T - 1), in.end(), history.begin());
+    } else {
+        // Input shorter than history: shift old history and append input
+        size_t keep = (T - 1) - N;
+        std::copy(history.end() - keep, history.end(), history.begin());
+        std::copy(in.begin(), in.end(), history.begin() + keep);
+    }
 }
 
-std::vector<std::complex<float>> FMDemodulator::applyComplexFIR(
+void FMDemodulator::applyComplexFIR(
     const std::vector<std::complex<float>>& in,
-    const std::vector<float>& taps)
+    std::vector<std::complex<float>>& out,
+    const std::vector<float>& taps,
+    std::vector<std::complex<float>>& history)
 {
-    if (in.empty() || taps.empty()) return in;
-    const size_t N = in.size();
+    if (in.empty() || taps.empty()) { out = in; return; }
+
     const size_t T = taps.size();
-    const int half = T / 2;
-    std::vector<std::complex<float>> out(N);
+    const size_t N = in.size();
+
+    if (history.size() != T - 1)
+        history.assign(T - 1, {0.0f, 0.0f});
+
+    std::vector<std::complex<float>> work;
+    work.reserve(history.size() + N);
+    work.insert(work.end(), history.begin(), history.end());
+    work.insert(work.end(), in.begin(), in.end());
+
+    out.resize(N);
     for (size_t i = 0; i < N; i++) {
         float sumR = 0.0f, sumI = 0.0f;
         for (size_t j = 0; j < T; j++) {
-            int idx = static_cast<int>(i) - half + static_cast<int>(j);
-            if (idx >= 0 && idx < static_cast<int>(N)) {
-                sumR += in[idx].real() * taps[j];
-                sumI += in[idx].imag() * taps[j];
-            }
+            const auto& s = work[i + j];
+            sumR += s.real() * taps[j];
+            sumI += s.imag() * taps[j];
         }
         out[i] = {sumR, sumI};
     }
-    return out;
+
+    if (N >= T - 1) {
+        std::copy(in.end() - (T - 1), in.end(), history.begin());
+    } else {
+        size_t keep = (T - 1) - N;
+        std::copy(history.end() - keep, history.end(), history.begin());
+        std::copy(in.begin(), in.end(), history.begin() + keep);
+    }
 }
 
-std::vector<float> FMDemodulator::decimateReal(
+void FMDemodulator::decimateReal(
     const std::vector<float>& in,
-    const std::vector<float>& taps, int factor)
+    std::vector<float>& out,
+    const std::vector<float>& taps, int factor,
+    std::vector<float>& history)
 {
-    const size_t N = in.size();
     const size_t T = taps.size();
-    const int half = T / 2;
-    std::vector<float> out;
+    const size_t N = in.size();
+
+    if (history.size() != T - 1)
+        history.assign(T - 1, 0.0f);
+
+    std::vector<float> work;
+    work.reserve(history.size() + N);
+    work.insert(work.end(), history.begin(), history.end());
+    work.insert(work.end(), in.begin(), in.end());
+
+    out.clear();
     out.reserve(N / factor + 1);
+
     for (size_t i = 0; i < N; i += factor) {
         float sum = 0.0f;
         for (size_t j = 0; j < T; j++) {
-            int idx = static_cast<int>(i) - half + static_cast<int>(j);
-            if (idx >= 0 && idx < static_cast<int>(N)) {
-                sum += in[idx] * taps[j];
-            }
+            sum += work[i + j] * taps[j];
         }
         out.push_back(sum);
     }
-    return out;
+
+    if (N >= T - 1) {
+        std::copy(in.end() - (T - 1), in.end(), history.begin());
+    } else {
+        size_t keep = (T - 1) - N;
+        std::copy(history.end() - keep, history.end(), history.begin());
+        std::copy(in.begin(), in.end(), history.begin() + keep);
+    }
 }
 
-std::vector<float> FMDemodulator::applyFIR(const std::vector<float>& in, const std::vector<float>& taps)
+void FMDemodulator::applyFIR(
+    const std::vector<float>& in,
+    std::vector<float>& out,
+    const std::vector<float>& taps,
+    std::vector<float>& history)
 {
-    if (in.empty() || taps.empty()) return in;
-    const size_t N = in.size();
+    if (in.empty() || taps.empty()) { out = in; return; }
+
     const size_t T = taps.size();
-    const int half = T / 2;
-    std::vector<float> out(N);
+    const size_t N = in.size();
+
+    if (history.size() != T - 1)
+        history.assign(T - 1, 0.0f);
+
+    std::vector<float> work;
+    work.reserve(history.size() + N);
+    work.insert(work.end(), history.begin(), history.end());
+    work.insert(work.end(), in.begin(), in.end());
+
+    out.resize(N);
     for (size_t i = 0; i < N; i++) {
         float sum = 0.0f;
         for (size_t j = 0; j < T; j++) {
-            int idx = static_cast<int>(i) - half + static_cast<int>(j);
-            if (idx >= 0 && idx < static_cast<int>(N)) {
-                sum += in[idx] * taps[j];
-            }
+            sum += work[i + j] * taps[j];
         }
         out[i] = sum;
     }
-    return out;
+
+    if (N >= T - 1) {
+        std::copy(in.end() - (T - 1), in.end(), history.begin());
+    } else {
+        size_t keep = (T - 1) - N;
+        std::copy(history.end() - keep, history.end(), history.begin());
+        std::copy(in.begin(), in.end(), history.begin() + keep);
+    }
 }
 
 // FM Demodulation — produces MPX baseband signal
+// NBFM: solanmevbot/nbfm approach — output raw phase difference scaled to
+// [-1, +1] range with fixed gentle gain. No deviation-based normalization
+// which over-amplifies strong nearby signals.
+// WBFM: standard deviation-based normalization (works fine for broadcast).
 std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>& signal, double rate)
 {
     if (signal.empty()) return {};
 
     std::vector<float> out(signal.size());
 
-    // FM demod: phase difference between consecutive IQ samples
-    // atan2 output range: [-π, +π]
-    //
-    // For proper normalization:
-    //   max phase delta per sample = 2π × deviation / sampleRate
-    //   NFM ±5 kHz at 50 kHz rate: max delta = 2π × 5000/50000 = 0.628 rad
-    //   WFM ±75 kHz at 400 kHz rate: max delta = 2π × 75000/400000 = 1.178 rad
-    //
-    // We normalize so that full deviation maps to ±1.0, then apply gain
+    bool isNBFM = (m_bandwidth <= 25000.0);
 
-    float maxDeviation = (m_bandwidth <= 25000.0) ? 5000.0f : 75000.0f;
-    float maxDelta = 2.0f * static_cast<float>(M_PI) * maxDeviation / static_cast<float>(rate);
-    float scale = (1.0f / maxDelta) * m_outputGain * m_rxModIndex;
+    float scale;
+    if (isNBFM) {
+        // Normalize so that ±5kHz deviation maps to ±1.0
+        // Then outputGain (default 2.0) gives ±2.0 peak — within soft limiter range
+        // DO NOT multiply by rxModIndex here — it was causing overload (old: 1/0.628 × 2.0 × 1.5 = 4.77)
+        float maxDeviation = 5000.0f;
+        float maxDelta = 2.0f * static_cast<float>(M_PI) * maxDeviation / static_cast<float>(rate);
+        scale = (1.0f / maxDelta) * m_outputGain;
+    } else {
+        // WBFM: standard normalization
+        float maxDeviation = 75000.0f;
+        float maxDelta = 2.0f * static_cast<float>(M_PI) * maxDeviation / static_cast<float>(rate);
+        scale = (1.0f / maxDelta) * m_outputGain * m_rxModIndex;
+    }
 
     std::complex<float> prevSample(std::cos(m_lastPhase), std::sin(m_lastPhase));
 
     for (size_t i = 0; i < signal.size(); i++) {
+        // Conjugate multiply: extracts phase difference between consecutive samples
         std::complex<float> product = signal[i] * std::conj(prevSample);
         float delta = std::atan2(product.imag(), product.real());
+
+        // Phase wrapping guard (same as solanmevbot)
+        if (delta > static_cast<float>(M_PI)) delta -= 2.0f * static_cast<float>(M_PI);
+        if (delta < -static_cast<float>(M_PI)) delta += 2.0f * static_cast<float>(M_PI);
+
         out[i] = delta * scale;
         prevSample = signal[i];
     }
