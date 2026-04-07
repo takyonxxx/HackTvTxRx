@@ -30,6 +30,8 @@ private:
         std::vector<float> taps;
         int factor;
         double outputRate;
+        std::vector<std::complex<float>> iqHistory;
+        std::vector<float> realHistory;
     };
 
     double m_inputRate;
@@ -39,6 +41,10 @@ private:
     std::vector<DecimStage> m_realStages;
     std::vector<float> m_audioFilterTaps;
     std::vector<float> m_iqBandwidthTaps;
+
+    // Persistent filter state
+    std::vector<std::complex<float>> m_iqBwHistory;
+    std::vector<float> m_audioFilterHistory;
 
     // DC blocker state
     float m_dcX1 = 0.0f;
@@ -54,16 +60,26 @@ private:
     void rebuildChain();
 
     static std::vector<float> designLPF(int numTaps, float cutoff, float sampleRate);
-    static std::vector<std::complex<float>> decimateComplex(
+    void decimateComplex(
         const std::vector<std::complex<float>>& in,
-        const std::vector<float>& taps, int factor);
-    static std::vector<std::complex<float>> applyComplexFIR(
+        std::vector<std::complex<float>>& out,
+        const std::vector<float>& taps, int factor,
+        std::vector<std::complex<float>>& history);
+    void applyComplexFIR(
         const std::vector<std::complex<float>>& in,
-        const std::vector<float>& taps);
-    static std::vector<float> decimateReal(
+        std::vector<std::complex<float>>& out,
+        const std::vector<float>& taps,
+        std::vector<std::complex<float>>& history);
+    void decimateReal(
         const std::vector<float>& in,
-        const std::vector<float>& taps, int factor);
-    static std::vector<float> applyFIR(const std::vector<float>& in, const std::vector<float>& taps);
+        std::vector<float>& out,
+        const std::vector<float>& taps, int factor,
+        std::vector<float>& history);
+    void applyFIR(
+        const std::vector<float>& in,
+        std::vector<float>& out,
+        const std::vector<float>& taps,
+        std::vector<float>& history);
     std::vector<float> amDemod(const std::vector<std::complex<float>>& signal);
     static std::vector<float> resample(const std::vector<float>& in, double inRate, double outRate);
     void removeDC(std::vector<float>& audio);

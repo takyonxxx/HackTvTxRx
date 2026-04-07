@@ -15,26 +15,27 @@ std::vector<float> AMDemodulator::demodulate(const std::vector<std::complex<floa
 {
     if (samples.empty()) return {};
 
-    // 1. Multi-stage complex IQ decimation
     auto iq = samples;
-    for (const auto& stage : m_iqStages) {
-        iq = decimateComplex(iq, stage.taps, stage.factor);
+    for (auto& stage : m_iqStages) {
+        std::vector<std::complex<float>> tmp;
+        decimateComplex(iq, tmp, stage.taps, stage.factor, stage.iqHistory);
+        iq = std::move(tmp);
     }
 
-    // 2. Bandwidth filter
     if (!m_iqBandwidthTaps.empty()) {
-        iq = applyComplexFIR(iq, m_iqBandwidthTaps);
+        std::vector<std::complex<float>> tmp;
+        applyComplexFIR(iq, tmp, m_iqBandwidthTaps, m_iqBwHistory);
+        iq = std::move(tmp);
     }
 
-    // 3. AM demodulate (envelope detection)
     auto audio = amDemod(iq);
 
-    // 4. Real-valued decimation stages
-    for (const auto& stage : m_realStages) {
-        audio = decimateReal(audio, stage.taps, stage.factor);
+    for (auto& stage : m_realStages) {
+        std::vector<float> tmp;
+        decimateReal(audio, tmp, stage.taps, stage.factor, stage.realHistory);
+        audio = std::move(tmp);
     }
 
-    // 5. Resample to 48 kHz
     double lastRate = m_realStages.empty()
                           ? (m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate)
                           : m_realStages.back().outputRate;
@@ -42,12 +43,13 @@ std::vector<float> AMDemodulator::demodulate(const std::vector<std::complex<floa
         audio = resample(audio, lastRate, 48000.0);
     }
 
-    // 6. Final audio LPF
-    audio = applyFIR(audio, m_audioFilterTaps);
+    {
+        std::vector<float> tmp;
+        applyFIR(audio, tmp, m_audioFilterTaps, m_audioFilterHistory);
+        audio = std::move(tmp);
+    }
 
-    // 7. DC removal
     removeDC(audio);
-
     return audio;
 }
 
@@ -61,41 +63,33 @@ void AMDemodulator::setSampleRate(double newRate)
 void AMDemodulator::setBandwidth(double bandwidthHz)
 {
     m_bandwidth = std::clamp(bandwidthHz, 2000.0, 500000.0);
-
     double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
-    float cutoff = static_cast<float>(std::min(m_bandwidth * 1.5, postDecimRate * 0.45));
+    float cutoff = static_cast<float>(std::min(m_bandwidth * 0.5, postDecimRate * 0.45));
     m_iqBandwidthTaps = designLPF(51, cutoff, static_cast<float>(postDecimRate));
+    m_iqBwHistory.clear();
 }
 
 void AMDemodulator::rebuildChain()
 {
     m_iqStages.clear();
     m_realStages.clear();
+    m_iqBwHistory.clear();
+    m_audioFilterHistory.clear();
 
     double rate = m_inputRate;
-
-    // AM needs wider IQ bandwidth than FM — carrier + both sidebands
-    // Aviation AM: 8.33 kHz spacing, but signal can be up to 10 kHz wide
-    // Use less aggressive decimation to preserve signal
     double iqTarget = std::max(m_bandwidth * 6.0, 60000.0);
     iqTarget = std::min(iqTarget, 200000.0);
-
     const int candidates[] = {10, 8, 5, 4, 3, 2};
 
     while (rate > iqTarget * 1.5) {
         int best = 0;
         for (int f : candidates) {
-            if (rate / f >= iqTarget) {
-                best = f;
-                break;
-            }
+            if (rate / f >= iqTarget) { best = f; break; }
         }
         if (best < 2) break;
-
         double newRate = rate / best;
         float cutoff = static_cast<float>(newRate * 0.4);
         int taps = (best >= 8) ? 33 : (best >= 5) ? 21 : 17;
-
         DecimStage s;
         s.taps = designLPF(taps, cutoff, static_cast<float>(rate));
         s.factor = best;
@@ -107,17 +101,12 @@ void AMDemodulator::rebuildChain()
     while (rate > 96000.0) {
         int best = 0;
         for (int f : candidates) {
-            if (rate / f >= 48000.0) {
-                best = f;
-                break;
-            }
+            if (rate / f >= 48000.0) { best = f; break; }
         }
         if (best < 2) break;
-
         double newRate = rate / best;
         float cutoff = static_cast<float>(newRate * 0.4);
         int taps = (best >= 8) ? 33 : (best >= 5) ? 21 : 17;
-
         DecimStage s;
         s.taps = designLPF(taps, cutoff, static_cast<float>(rate));
         s.factor = best;
@@ -126,14 +115,12 @@ void AMDemodulator::rebuildChain()
         rate = newRate;
     }
 
-    // AM audio: voice is 300-3400 Hz, use 4 kHz cutoff
     float audioCutoff = std::min(4000.0f, static_cast<float>(m_bandwidth / 2.0));
     m_audioFilterTaps = designLPF(31, audioCutoff, 48000.0f);
 
-    // IQ bandwidth filter — wider than FM to capture both AM sidebands
-    // Use 1.5x bandwidth to avoid cutting sideband edges
+    // SDR++ style: LPF cutoff = bandwidth/2
     double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
-    float defaultBW = static_cast<float>(std::min(m_bandwidth * 1.5, postDecimRate * 0.45));
+    float defaultBW = static_cast<float>(std::min(m_bandwidth * 0.5, postDecimRate * 0.45));
     if (defaultBW > 0) {
         m_iqBandwidthTaps = designLPF(51, defaultBW, static_cast<float>(postDecimRate));
     } else {
@@ -144,70 +131,50 @@ void AMDemodulator::rebuildChain()
 std::vector<float> AMDemodulator::amDemod(const std::vector<std::complex<float>>& signal)
 {
     if (signal.empty()) return {};
-
     std::vector<float> out(signal.size());
-
-    // AM envelope detection with adaptive AGC
-    // Fast attack to prevent clipping, slow decay to prevent pumping
 
     const float sampleRate = m_iqStages.empty()
         ? static_cast<float>(m_inputRate) : static_cast<float>(m_iqStages.back().outputRate);
-    const float attackAlpha = 1.0f - std::exp(-1.0f / (sampleRate * 0.001f));  // 1ms attack
-    const float decayAlpha = 1.0f - std::exp(-1.0f / (sampleRate * 0.100f));   // 100ms decay
-
+    const float attackAlpha = 1.0f - std::exp(-1.0f / (sampleRate * 0.001f));
+    const float decayAlpha = 1.0f - std::exp(-1.0f / (sampleRate * 0.100f));
     const float targetLevel = 0.5f;
-    const float maxGain = 5000.0f;    // very high for weak aviation signals
+    const float maxGain = 5000.0f;
     const float minGain = 0.01f;
 
-    // First pass: compute DC level (average envelope) for this block
     float dcSum = 0.0f;
     for (size_t i = 0; i < signal.size(); i++) {
-        float envelope = std::sqrt(signal[i].real() * signal[i].real() +
-                                   signal[i].imag() * signal[i].imag());
-        dcSum += envelope;
+        dcSum += std::sqrt(signal[i].real() * signal[i].real() +
+                           signal[i].imag() * signal[i].imag());
     }
     float dcLevel = dcSum / static_cast<float>(signal.size());
 
-    // Second pass: demodulate with DC removal and AGC
     for (size_t i = 0; i < signal.size(); i++) {
         float envelope = std::sqrt(signal[i].real() * signal[i].real() +
                                    signal[i].imag() * signal[i].imag());
-
-        // Remove carrier (DC component) — this extracts the audio modulation
         float audio = envelope - dcLevel;
-
-        // Peak follower for AGC
         float absAudio = std::fabs(audio);
         if (absAudio > m_agcPeak) {
             m_agcPeak += attackAlpha * (absAudio - m_agcPeak);
         } else {
             m_agcPeak += decayAlpha * (absAudio - m_agcPeak);
         }
-
-        // Compute gain from peak level
         if (m_agcPeak > 0.00001f) {
             float desiredGain = targetLevel / m_agcPeak;
             desiredGain = std::clamp(desiredGain, minGain, maxGain);
-
             if (desiredGain < m_agcGain) {
-                // Fast attack
                 m_agcGain += attackAlpha * (desiredGain - m_agcGain);
-                m_agcHoldCounter = static_cast<int>(sampleRate * 0.030f); // 30ms hold
+                m_agcHoldCounter = static_cast<int>(sampleRate * 0.030f);
             } else if (m_agcHoldCounter > 0) {
                 m_agcHoldCounter--;
             } else {
-                // Slow decay
                 m_agcGain += decayAlpha * (desiredGain - m_agcGain);
             }
         }
-
         out[i] = audio * m_agcGain;
     }
-
     return out;
 }
 
-// All filter functions identical to FMDemodulator
 std::vector<float> AMDemodulator::designLPF(int numTaps, float cutoff, float sampleRate)
 {
     std::vector<float> h(numTaps);
@@ -224,92 +191,130 @@ std::vector<float> AMDemodulator::designLPF(int numTaps, float cutoff, float sam
     return h;
 }
 
-std::vector<std::complex<float>> AMDemodulator::decimateComplex(
+// ========== Stateful FIR filters ==========
+
+void AMDemodulator::decimateComplex(
     const std::vector<std::complex<float>>& in,
-    const std::vector<float>& taps, int factor)
+    std::vector<std::complex<float>>& out,
+    const std::vector<float>& taps, int factor,
+    std::vector<std::complex<float>>& history)
 {
-    const size_t N = in.size();
     const size_t T = taps.size();
-    const int half = T / 2;
-    std::vector<std::complex<float>> out;
+    const size_t N = in.size();
+    if (history.size() != T - 1) history.assign(T - 1, {0.0f, 0.0f});
+    std::vector<std::complex<float>> work;
+    work.reserve(history.size() + N);
+    work.insert(work.end(), history.begin(), history.end());
+    work.insert(work.end(), in.begin(), in.end());
+    out.clear();
     out.reserve(N / factor + 1);
     for (size_t i = 0; i < N; i += factor) {
         float sumR = 0.0f, sumI = 0.0f;
         for (size_t j = 0; j < T; j++) {
-            int idx = static_cast<int>(i) - half + static_cast<int>(j);
-            if (idx >= 0 && idx < static_cast<int>(N)) {
-                sumR += in[idx].real() * taps[j];
-                sumI += in[idx].imag() * taps[j];
-            }
+            const auto& s = work[i + j];
+            sumR += s.real() * taps[j];
+            sumI += s.imag() * taps[j];
         }
         out.emplace_back(sumR, sumI);
     }
-    return out;
+    if (N >= T - 1) {
+        std::copy(in.end() - (T - 1), in.end(), history.begin());
+    } else {
+        size_t keep = (T - 1) - N;
+        std::copy(history.end() - keep, history.end(), history.begin());
+        std::copy(in.begin(), in.end(), history.begin() + keep);
+    }
 }
 
-std::vector<std::complex<float>> AMDemodulator::applyComplexFIR(
+void AMDemodulator::applyComplexFIR(
     const std::vector<std::complex<float>>& in,
-    const std::vector<float>& taps)
+    std::vector<std::complex<float>>& out,
+    const std::vector<float>& taps,
+    std::vector<std::complex<float>>& history)
 {
-    if (in.empty() || taps.empty()) return in;
-    const size_t N = in.size();
+    if (in.empty() || taps.empty()) { out = in; return; }
     const size_t T = taps.size();
-    const int half = T / 2;
-    std::vector<std::complex<float>> out(N);
+    const size_t N = in.size();
+    if (history.size() != T - 1) history.assign(T - 1, {0.0f, 0.0f});
+    std::vector<std::complex<float>> work;
+    work.reserve(history.size() + N);
+    work.insert(work.end(), history.begin(), history.end());
+    work.insert(work.end(), in.begin(), in.end());
+    out.resize(N);
     for (size_t i = 0; i < N; i++) {
         float sumR = 0.0f, sumI = 0.0f;
         for (size_t j = 0; j < T; j++) {
-            int idx = static_cast<int>(i) - half + static_cast<int>(j);
-            if (idx >= 0 && idx < static_cast<int>(N)) {
-                sumR += in[idx].real() * taps[j];
-                sumI += in[idx].imag() * taps[j];
-            }
+            const auto& s = work[i + j];
+            sumR += s.real() * taps[j];
+            sumI += s.imag() * taps[j];
         }
         out[i] = {sumR, sumI};
     }
-    return out;
+    if (N >= T - 1) {
+        std::copy(in.end() - (T - 1), in.end(), history.begin());
+    } else {
+        size_t keep = (T - 1) - N;
+        std::copy(history.end() - keep, history.end(), history.begin());
+        std::copy(in.begin(), in.end(), history.begin() + keep);
+    }
 }
 
-std::vector<float> AMDemodulator::decimateReal(
+void AMDemodulator::decimateReal(
     const std::vector<float>& in,
-    const std::vector<float>& taps, int factor)
+    std::vector<float>& out,
+    const std::vector<float>& taps, int factor,
+    std::vector<float>& history)
 {
-    const size_t N = in.size();
     const size_t T = taps.size();
-    const int half = T / 2;
-    std::vector<float> out;
+    const size_t N = in.size();
+    if (history.size() != T - 1) history.assign(T - 1, 0.0f);
+    std::vector<float> work;
+    work.reserve(history.size() + N);
+    work.insert(work.end(), history.begin(), history.end());
+    work.insert(work.end(), in.begin(), in.end());
+    out.clear();
     out.reserve(N / factor + 1);
     for (size_t i = 0; i < N; i += factor) {
         float sum = 0.0f;
-        for (size_t j = 0; j < T; j++) {
-            int idx = static_cast<int>(i) - half + static_cast<int>(j);
-            if (idx >= 0 && idx < static_cast<int>(N)) {
-                sum += in[idx] * taps[j];
-            }
-        }
+        for (size_t j = 0; j < T; j++) sum += work[i + j] * taps[j];
         out.push_back(sum);
     }
-    return out;
+    if (N >= T - 1) {
+        std::copy(in.end() - (T - 1), in.end(), history.begin());
+    } else {
+        size_t keep = (T - 1) - N;
+        std::copy(history.end() - keep, history.end(), history.begin());
+        std::copy(in.begin(), in.end(), history.begin() + keep);
+    }
 }
 
-std::vector<float> AMDemodulator::applyFIR(const std::vector<float>& in, const std::vector<float>& taps)
+void AMDemodulator::applyFIR(
+    const std::vector<float>& in,
+    std::vector<float>& out,
+    const std::vector<float>& taps,
+    std::vector<float>& history)
 {
-    if (in.empty() || taps.empty()) return in;
-    const size_t N = in.size();
+    if (in.empty() || taps.empty()) { out = in; return; }
     const size_t T = taps.size();
-    const int half = T / 2;
-    std::vector<float> out(N);
+    const size_t N = in.size();
+    if (history.size() != T - 1) history.assign(T - 1, 0.0f);
+    std::vector<float> work;
+    work.reserve(history.size() + N);
+    work.insert(work.end(), history.begin(), history.end());
+    work.insert(work.end(), in.begin(), in.end());
+    out.resize(N);
     for (size_t i = 0; i < N; i++) {
         float sum = 0.0f;
-        for (size_t j = 0; j < T; j++) {
-            int idx = static_cast<int>(i) - half + static_cast<int>(j);
-            if (idx >= 0 && idx < static_cast<int>(N)) {
-                sum += in[idx] * taps[j];
-            }
-        }
+        for (size_t j = 0; j < T; j++) sum += work[i + j] * taps[j];
         out[i] = sum;
     }
-    return out;
+    if (N >= T - 1) {
+        std::copy(in.end() - (T - 1), in.end(), history.begin());
+    } else {
+        size_t keep = (T - 1) - N;
+        std::copy(history.end() - keep, history.end(), history.begin());
+        std::copy(in.begin(), in.end(), history.begin() + keep);
+    }
 }
 
 std::vector<float> AMDemodulator::resample(const std::vector<float>& in, double inRate, double outRate)

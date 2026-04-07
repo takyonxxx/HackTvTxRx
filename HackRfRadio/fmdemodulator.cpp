@@ -98,10 +98,11 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
     // 9. DC removal
     removeDC(m_dcX1L, m_dcY1L, mpx);
 
-    // 10. Soft limiter + mono→stereo interleave
+    // 10. Volume gain + Soft limiter + mono→stereo interleave
+    // outputGain is applied here as volume control, NOT in fmDemod
     std::vector<float> stereoOut(mpx.size() * 2);
     for (size_t i = 0; i < mpx.size(); i++) {
-        float s = mpx[i];
+        float s = mpx[i] * m_outputGain;
         if (s > 0.9f) s = 0.9f + 0.1f * std::tanh((s - 0.9f) * 8.0f);
         else if (s < -0.9f) s = -0.9f + 0.1f * std::tanh((s + 0.9f) * 8.0f);
         stereoOut[i * 2]     = s;  // L
@@ -383,9 +384,17 @@ void FMDemodulator::rebuildChain()
 
     // IQ bandwidth filter — applied after decimation, before FM demod
     double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
-    // Use exact bandwidth for clean channel isolation
-    float filterBW = static_cast<float>(std::min(m_bandwidth, postDecimRate * 0.45));
-    // NFM at 50 kHz: 71 taps gives very sharp cutoff for maximum noise rejection
+    // LPF cutoff = bandwidth * 0.7 (single-sided)
+    // For 12.5 kHz channel: cutoff = 8.75 kHz → passes ±8.75 kHz
+    // Slightly wider than bandwidth/2 to preserve FM sidebands, but much
+    // tighter than the old full-bandwidth cutoff which passed 2x too much noise
+    float filterBW;
+    if (isNBFM) {
+        filterBW = static_cast<float>(m_bandwidth * 0.7);
+        filterBW = std::min(filterBW, static_cast<float>(postDecimRate * 0.45));
+    } else {
+        filterBW = static_cast<float>(std::min(m_bandwidth, postDecimRate * 0.45));
+    }
     int iqFilterTaps = isNBFM ? 71 : 31;
     if (filterBW > 0) {
         m_iqBandwidthTaps = designLPF(iqFilterTaps, filterBW, static_cast<float>(postDecimRate));
@@ -573,11 +582,11 @@ void FMDemodulator::applyFIR(
     }
 }
 
-// FM Demodulation — produces MPX baseband signal
-// NBFM: solanmevbot/nbfm approach — output raw phase difference scaled to
-// [-1, +1] range with fixed gentle gain. No deviation-based normalization
-// which over-amplifies strong nearby signals.
-// WBFM: standard deviation-based normalization (works fine for broadcast).
+// FM Demodulation — SDR++/GNU Radio Quadrature Demod approach
+// gain = 1 / hzToRads(deviation, sampleRate)
+//      = sampleRate / (2π × deviation)
+// For NBFM 12.5kHz BW at 50kHz rate: deviation = 6250, gain = 50000/(2π×6250) = 1.273
+// Output range: normalized to ±1.0 at full deviation, no extra gain multiplier
 std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>& signal, double rate)
 {
     if (signal.empty()) return {};
@@ -586,37 +595,30 @@ std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>
 
     bool isNBFM = (m_bandwidth <= 25000.0);
 
-    float scale;
+    // SDR++ formula: deviation = bandwidth / 2
+    // gain = 1 / (2π × deviation / sampleRate) = sampleRate / (2π × deviation)
+    float deviation;
     if (isNBFM) {
-        // Normalize so that ±5kHz deviation maps to ±1.0
-        // Then outputGain (default 2.0) gives ±2.0 peak — within soft limiter range
-        // DO NOT multiply by rxModIndex here — it was causing overload (old: 1/0.628 × 2.0 × 1.5 = 4.77)
-        float maxDeviation = 5000.0f;
-        float maxDelta = 2.0f * static_cast<float>(M_PI) * maxDeviation / static_cast<float>(rate);
-        scale = (1.0f / maxDelta) * m_outputGain;
+        deviation = static_cast<float>(m_bandwidth * 0.5);  // 12500 → 6250 Hz
     } else {
-        // WBFM: standard normalization
-        float maxDeviation = 75000.0f;
-        float maxDelta = 2.0f * static_cast<float>(M_PI) * maxDeviation / static_cast<float>(rate);
-        scale = (1.0f / maxDelta) * m_outputGain * m_rxModIndex;
+        deviation = 75000.0f;
     }
+    float deviationRads = 2.0f * static_cast<float>(M_PI) * deviation / static_cast<float>(rate);
+    float gain = 1.0f / deviationRads;
 
-    std::complex<float> prevSample(std::cos(m_lastPhase), std::sin(m_lastPhase));
-
+    // Phase tracking — same as SDR++ Quadrature::process()
     for (size_t i = 0; i < signal.size(); i++) {
-        // Conjugate multiply: extracts phase difference between consecutive samples
-        std::complex<float> product = signal[i] * std::conj(prevSample);
-        float delta = std::atan2(product.imag(), product.real());
+        float cphase = std::atan2(signal[i].imag(), signal[i].real());
+        float delta = cphase - m_lastPhase;
 
-        // Phase wrapping guard (same as solanmevbot)
+        // Normalize phase difference to [-π, +π]
         if (delta > static_cast<float>(M_PI)) delta -= 2.0f * static_cast<float>(M_PI);
         if (delta < -static_cast<float>(M_PI)) delta += 2.0f * static_cast<float>(M_PI);
 
-        out[i] = delta * scale;
-        prevSample = signal[i];
+        out[i] = delta * gain;
+        m_lastPhase = cphase;
     }
 
-    m_lastPhase = std::atan2(prevSample.imag(), prevSample.real());
     return out;
 }
 

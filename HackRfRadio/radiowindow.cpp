@@ -955,12 +955,12 @@ void RadioWindow::onModulationChanged(int index)
             m_gainDialog->blockSignals(true);
             m_gainDialog->setVgaGain(20);
             m_gainDialog->setLnaGain(20);
-            m_gainDialog->setRxGain(20);       // 2.0
-            m_gainDialog->setRxModIndex(15);   // 1.5
+            m_gainDialog->setRxGain(40);       // 4.0
+            m_gainDialog->setRxModIndex(20);   // 2.0
             m_gainDialog->setDeemph(0);        // OFF
             m_gainDialog->blockSignals(false);
-            m_fmDemod->setOutputGain(2.0f);
-            m_fmDemod->setRxModIndex(1.5f);
+            m_fmDemod->setOutputGain(4.0f);
+            m_fmDemod->setRxModIndex(2.0f);
             m_fmDemod->setDeemphTau(0.0f);
         }
         m_mainIfBwSlider->blockSignals(true);
@@ -979,13 +979,13 @@ void RadioWindow::onModulationChanged(int index)
             // RX presets (blocked — only local)
             m_gainDialog->blockSignals(true);
             m_gainDialog->setVgaGain(20);
-            m_gainDialog->setLnaGain(40);
-            m_gainDialog->setRxGain(15);       // 1.5
-            m_gainDialog->setRxModIndex(15);   // 1.5
+            m_gainDialog->setLnaGain(20);
+            m_gainDialog->setRxGain(40);       // 4.0
+            m_gainDialog->setRxModIndex(20);   // 2.0
             m_gainDialog->setDeemph(0);        // OFF
             m_gainDialog->blockSignals(false);
-            m_fmDemod->setOutputGain(1.5f);
-            m_fmDemod->setRxModIndex(1.5f);
+            m_fmDemod->setOutputGain(4.0f);
+            m_fmDemod->setRxModIndex(2.0f);
             m_fmDemod->setDeemphTau(0.0f);
         }
         m_mainIfBwSlider->blockSignals(true);
