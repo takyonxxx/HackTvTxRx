@@ -231,7 +231,7 @@ void RadioWindow::loadSettings()
         m_gainDialog->setAmplitude(s.value("amplitude", 50).toInt());
         m_gainDialog->setModIndex(s.value("modIndex", 40).toInt());
         m_gainDialog->setRxGain(s.value("rxGain", 10).toInt());
-        m_gainDialog->setRxModIndex(s.value("rxModIndex", 30).toInt());
+        m_gainDialog->setRxModIndex(s.value("rxModIndex", 100).toInt());
         m_gainDialog->setDeemph(s.value("deemph", 0).toInt());
         m_gainDialog->setAudioLpf(s.value("audioLpf", 50).toInt());
         m_gainDialog->setFmnrEnabled(s.value("fmnr", true).toBool());
@@ -711,7 +711,7 @@ void RadioWindow::onConnected()
 
         float rxGain = m_gainDialog->rxGain() / 10.0f;
         m_fmDemod->setOutputGain(rxGain);
-        m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
+        m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 100.0f);
         m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
         m_fmDemod->setAudioLPF(m_gainDialog->audioLpf() / 10.0f * 1000.0f);
     }
@@ -964,15 +964,15 @@ void RadioWindow::onModulationChanged(int index)
             m_gainDialog->blockSignals(true);
             m_gainDialog->setVgaGain(15);
             m_gainDialog->setLnaGain(20);
-            m_gainDialog->setRxGain(30);       // 3.0
-            m_gainDialog->setRxModIndex(10);   // 1.0 (deviation multiplier)
+            m_gainDialog->setRxGain(5);        // 0.5
+            m_gainDialog->setRxModIndex(10);   // 0.10 (deviation multiplier)
             m_gainDialog->setDeemph(0);        // OFF
-            m_gainDialog->setAudioLpf(50);     // 5.0 kHz
+            m_gainDialog->setAudioLpf(70);     // 7.0 kHz
             m_gainDialog->blockSignals(false);
-            m_fmDemod->setOutputGain(3.0f);
-            m_fmDemod->setRxModIndex(1.0f);
+            m_fmDemod->setOutputGain(0.5f);
+            m_fmDemod->setRxModIndex(0.10f);
             m_fmDemod->setDeemphTau(0.0f);
-            m_fmDemod->setAudioLPF(5000.0f);
+            m_fmDemod->setAudioLPF(7000.0f);
         }
         m_mainIfBwSlider->blockSignals(true);
         m_mainIfBwSlider->setValue(25);
@@ -992,7 +992,7 @@ void RadioWindow::onModulationChanged(int index)
             m_gainDialog->setVgaGain(20);
             m_gainDialog->setLnaGain(40);
             m_gainDialog->setRxGain(20);       // 2.0
-            m_gainDialog->setRxModIndex(10);   // 1.0 (deviation multiplier)
+            m_gainDialog->setRxModIndex(100);  // 1.0 (deviation multiplier)
             m_gainDialog->setDeemph(0);        // OFF
             m_gainDialog->setAudioLpf(50);     // 5.0 kHz
             m_gainDialog->blockSignals(false);
@@ -1019,7 +1019,7 @@ void RadioWindow::onModulationChanged(int index)
             m_gainDialog->setVgaGain(20);
             m_gainDialog->setLnaGain(30);
             m_gainDialog->setRxGain(10);       // 1.0
-            m_gainDialog->setRxModIndex(10);   // 1.0
+            m_gainDialog->setRxModIndex(100);  // 1.0
             m_gainDialog->setDeemph(0);        // OFF
             m_gainDialog->setAudioLpf(50);     // 5.0 kHz
             m_gainDialog->blockSignals(false);
@@ -1044,7 +1044,7 @@ void RadioWindow::onModulationChanged(int index)
     if (m_gainDialog) {
         float rxGain = m_gainDialog->rxGain() / 10.0f;
         m_fmDemod->setOutputGain(rxGain);
-        m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
+        m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 100.0f);
         m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
         m_fmDemod->setAudioLPF(m_gainDialog->audioLpf() / 10.0f * 1000.0f);
     }
@@ -1088,7 +1088,7 @@ void RadioWindow::onBwChanged(int index)
     if (m_gainDialog) {
         float rxGain = m_gainDialog->rxGain() / 10.0f;
         m_fmDemod->setOutputGain(rxGain);
-        m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 10.0f);
+        m_fmDemod->setRxModIndex(m_gainDialog->rxModIndex() / 100.0f);
         m_fmDemod->setDeemphTau(static_cast<float>(m_gainDialog->deemph()));
         m_fmDemod->setAudioLPF(m_gainDialog->audioLpf() / 10.0f * 1000.0f);
     }

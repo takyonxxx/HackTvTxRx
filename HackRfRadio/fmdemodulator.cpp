@@ -91,12 +91,12 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
     removeDC(m_dcX1L, m_dcY1L, mpx);
 
     // 10. Volume gain + Soft limiter + mono→stereo interleave
-    // outputGain is applied here as volume control, NOT in fmDemod
     std::vector<float> stereoOut(mpx.size() * 2);
     for (size_t i = 0; i < mpx.size(); i++) {
         float s = mpx[i] * m_outputGain;
-        if (s > 0.9f) s = 0.9f + 0.1f * std::tanh((s - 0.9f) * 8.0f);
-        else if (s < -0.9f) s = -0.9f + 0.1f * std::tanh((s + 0.9f) * 8.0f);
+        // Full tanh soft compression — no hard knee, no crackling
+        // tanh(1.0) = 0.76, tanh(2.0) = 0.96, tanh(3.0) = 0.995
+        s = std::tanh(s);
         stereoOut[i * 2]     = s;  // L
         stereoOut[i * 2 + 1] = s;  // R (mono duplicate)
     }
@@ -252,13 +252,8 @@ std::vector<float> FMDemodulator::decodeStereo(const std::vector<float>& mpx, do
     size_t outLen = std::min(leftAudio.size(), rightAudio.size());
     std::vector<float> stereoOut(outLen * 2);
     for (size_t i = 0; i < outLen; i++) {
-        float l = leftAudio[i] * m_outputGain;
-        float r = rightAudio[i] * m_outputGain;
-        // Soft limiter
-        if (l > 0.9f) l = 0.9f + 0.1f * std::tanh((l - 0.9f) * 8.0f);
-        else if (l < -0.9f) l = -0.9f + 0.1f * std::tanh((l + 0.9f) * 8.0f);
-        if (r > 0.9f) r = 0.9f + 0.1f * std::tanh((r - 0.9f) * 8.0f);
-        else if (r < -0.9f) r = -0.9f + 0.1f * std::tanh((r + 0.9f) * 8.0f);
+        float l = std::tanh(leftAudio[i] * m_outputGain);
+        float r = std::tanh(rightAudio[i] * m_outputGain);
         stereoOut[i * 2]     = l;
         stereoOut[i * 2 + 1] = r;
     }

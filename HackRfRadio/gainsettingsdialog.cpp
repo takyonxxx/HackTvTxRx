@@ -164,12 +164,12 @@ void GainSettingsDialog::setupUi()
     });
     rxGrid->addWidget(new QLabel("IF BW:"), row, 0); rxGrid->addWidget(m_ifBwSlider, row, 1); rxGrid->addWidget(m_ifBwLabel, row, 2); row++;
 
-    // RX Modulation Index slider: 0.1 - 5.0 (slider 1-50, /10)
-    m_rxModIdxSlider = new QSlider(Qt::Horizontal); m_rxModIdxSlider->setRange(1, 50); m_rxModIdxSlider->setValue(30);
-    m_rxModIdxLabel = new QLabel("3.0");
+    // RX Modulation Index slider: 0.01 - 5.0 (slider 1-500, /100)
+    m_rxModIdxSlider = new QSlider(Qt::Horizontal); m_rxModIdxSlider->setRange(1, 500); m_rxModIdxSlider->setValue(100);
+    m_rxModIdxLabel = new QLabel("1.00");
     connect(m_rxModIdxSlider, &QSlider::valueChanged, [this](int v) {
-        float idx = v / 10.0f;
-        m_rxModIdxLabel->setText(QString::number(idx, 'f', 1));
+        float idx = v / 100.0f;
+        m_rxModIdxLabel->setText(QString::number(idx, 'f', 2));
         m_fmDemod->setRxModIndex(idx);
         emit settingsChanged();
     });
