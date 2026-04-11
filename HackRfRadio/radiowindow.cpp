@@ -1011,11 +1011,11 @@ void RadioWindow::onModulationChanged(int index)
             // TX presets (NOT blocked — must reach server)
             m_gainDialog->setAmplitude(50);    // 0.50 carrier level
             m_gainDialog->setModIndex(85);     // 0.85 = %85 modulation depth
-            // RX presets - AM
+            // RX presets - AM (LNA=40, VGA=35 for airband)
             m_gainDialog->blockSignals(true);
-            m_gainDialog->setVgaGain(20);
-            m_gainDialog->setLnaGain(30);
-            m_gainDialog->setRxGain(10);       // 1.0
+            m_gainDialog->setVgaGain(35);
+            m_gainDialog->setLnaGain(40);
+            m_gainDialog->setRxGain(400);       // 4.0
             m_gainDialog->setRxModIndex(100);  // 1.0
             m_gainDialog->setDeemph(0);        // OFF
             m_gainDialog->setAudioLpf(50);     // 5.0 kHz

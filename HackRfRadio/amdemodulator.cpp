@@ -13,27 +13,56 @@ std::vector<float> AMDemodulator::demodulate(const std::vector<std::complex<floa
 {
     if (samples.empty()) return {};
 
+    // Remove IQ DC offset
     auto iq = samples;
+    {
+        float sumI = 0.0f, sumQ = 0.0f;
+        for (const auto& s : iq) {
+            sumI += s.real();
+            sumQ += s.imag();
+        }
+        float meanI = sumI / iq.size();
+        float meanQ = sumQ / iq.size();
+        for (auto& s : iq) {
+            s = std::complex<float>(s.real() - meanI, s.imag() - meanQ);
+        }
+    }
+
+    // IQ decimation stages
     for (auto& stage : m_iqStages) {
         std::vector<std::complex<float>> tmp;
         decimateComplex(iq, tmp, stage.taps, stage.factor, stage.iqHistory);
         iq = std::move(tmp);
     }
 
-    if (!m_iqBandwidthTaps.empty()) {
-        std::vector<std::complex<float>> tmp;
-        applyComplexFIR(iq, tmp, m_iqBandwidthTaps, m_iqBwHistory);
-        iq = std::move(tmp);
+    // Simple envelope detection - just magnitude
+    const size_t n = iq.size();
+    std::vector<float> audio(n);
+    for (size_t i = 0; i < n; i++) {
+        audio[i] = std::abs(iq[i]);
     }
 
-    auto audio = amDemod(iq);
+    // DC block - remove carrier
+    for (size_t i = 0; i < n; i++) {
+        m_dcOffset += (audio[i] - m_dcOffset) * 0.005f;
+        audio[i] -= m_dcOffset;
+    }
 
+    // Simple fixed gain
+    for (size_t i = 0; i < n; i++) {
+        audio[i] *= 50.0f;
+        if (audio[i] > 1.0f) audio[i] = 1.0f;
+        if (audio[i] < -1.0f) audio[i] = -1.0f;
+    }
+
+    // Real decimation stages
     for (auto& stage : m_realStages) {
         std::vector<float> tmp;
         decimateReal(audio, tmp, stage.taps, stage.factor, stage.realHistory);
         audio = std::move(tmp);
     }
 
+    // Resample to 48kHz
     double lastRate = m_realStages.empty()
                           ? (m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate)
                           : m_realStages.back().outputRate;
@@ -41,13 +70,6 @@ std::vector<float> AMDemodulator::demodulate(const std::vector<std::complex<floa
         audio = resample(audio, lastRate, 48000.0);
     }
 
-    {
-        std::vector<float> tmp;
-        applyFIR(audio, tmp, m_audioFilterTaps, m_audioFilterHistory);
-        audio = std::move(tmp);
-    }
-
-    // DC blocking is now handled inside amDemod (SDR++ style)
     return audio;
 }
 
@@ -125,24 +147,22 @@ void AMDemodulator::rebuildChain()
     }
 }
 
-// AM Demodulation — SDR++ style
+// AM Demodulation — improved for airband
 // 1. Envelope detection (magnitude)
-// 2. DC blocker (adaptive, per-sample)
-// 3. AGC with look-ahead clipping prevention
+// 2. DC blocker (faster tracking for AM)
+// 3. Gentle AGC
 std::vector<float> AMDemodulator::amDemod(const std::vector<std::complex<float>>& signal)
 {
     if (signal.empty()) return {};
     const size_t n = signal.size();
     std::vector<float> out(n);
 
-    // SDR++ AGC parameters
-    const float setPoint = 1.0f;
-    const float attack = 0.001f;       // fast attack
+    // AGC parameters - gentler for AM voice
+    const float attack = 0.005f;
     const float invAttack = 1.0f - attack;
-    const float decay = 0.0001f;       // slow decay
+    const float decay = 0.00005f;
     const float invDecay = 1.0f - decay;
-    const float maxGain = 10000.0f;
-    const float maxOutputAmp = 10.0f;
+    const float maxGain = 1000.0f;
 
     // 1. Envelope detection
     for (size_t i = 0; i < n; i++) {
@@ -150,41 +170,30 @@ std::vector<float> AMDemodulator::amDemod(const std::vector<std::complex<float>>
                            signal[i].imag() * signal[i].imag());
     }
 
-    // 2. DC blocker (SDR++ style: offset += out * rate)
-    const float dcRate = 0.0001f;  // slow tracking
+    // 2. DC blocker - faster tracking for AM carrier removal
+    const float dcRate = 0.001f;
     for (size_t i = 0; i < n; i++) {
-        float clean = out[i] - m_dcOffset;
-        m_dcOffset += clean * dcRate;
-        out[i] = clean;
+        m_dcOffset += (out[i] - m_dcOffset) * dcRate;
+        out[i] -= m_dcOffset;
     }
 
-    // 3. AGC with look-ahead (SDR++ style)
+    // 3. AGC - simple, no look-ahead
     for (size_t i = 0; i < n; i++) {
         float inAmp = std::fabs(out[i]);
-        float gain;
 
-        if (inAmp != 0.0f) {
-            // Update amplitude estimate
-            m_agcAmp = (inAmp > m_agcAmp)
-                ? (m_agcAmp * invAttack + inAmp * attack)
-                : (m_agcAmp * invDecay + inAmp * decay);
-            gain = std::min(setPoint / m_agcAmp, maxGain);
-        } else {
-            gain = 1.0f;
+        if (inAmp > m_agcAmp)
+            m_agcAmp = m_agcAmp * invAttack + inAmp * attack;
+        else
+            m_agcAmp = m_agcAmp * invDecay + inAmp * decay;
+
+        if (m_agcAmp > 0.0001f) {
+            float gain = std::min(1.0f / m_agcAmp, maxGain);
+            out[i] *= gain;
         }
 
-        // Look-ahead clipping prevention
-        if (inAmp * gain > maxOutputAmp) {
-            float maxAmp = 0.0f;
-            for (size_t j = i; j < n; j++) {
-                float a = std::fabs(out[j]);
-                if (a > maxAmp) maxAmp = a;
-            }
-            m_agcAmp = maxAmp;
-            gain = std::min(setPoint / m_agcAmp, maxGain);
-        }
-
-        out[i] *= gain;
+        // soft clip
+        if (out[i] > 1.0f) out[i] = 1.0f;
+        else if (out[i] < -1.0f) out[i] = -1.0f;
     }
 
     return out;
