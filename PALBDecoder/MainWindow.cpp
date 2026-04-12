@@ -1104,7 +1104,6 @@ void MainWindow::initHackRF()
     m_hackTvLib->setLnaGain(40);
     m_hackTvLib->setVgaGain(20);
     m_hackTvLib->setRxAmpGain(14);
-    m_hackTvLib->setMicEnabled(false);
 
     // Setup log callback
     m_hackTvLib->setLogCallback([this](const std::string& msg) {
