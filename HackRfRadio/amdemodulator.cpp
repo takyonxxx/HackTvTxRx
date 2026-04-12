@@ -13,7 +13,7 @@ std::vector<float> AMDemodulator::demodulate(const std::vector<std::complex<floa
 {
     if (samples.empty()) return {};
 
-    // Remove IQ DC offset
+    // Remove IQ DC offset (HackRF DC bias)
     auto iq = samples;
     {
         float sumI = 0.0f, sumQ = 0.0f;
@@ -28,34 +28,24 @@ std::vector<float> AMDemodulator::demodulate(const std::vector<std::complex<floa
         }
     }
 
-    // IQ decimation stages
+    // IQ decimation
     for (auto& stage : m_iqStages) {
         std::vector<std::complex<float>> tmp;
         decimateComplex(iq, tmp, stage.taps, stage.factor, stage.iqHistory);
         iq = std::move(tmp);
     }
 
-    // Simple envelope detection - just magnitude
-    const size_t n = iq.size();
-    std::vector<float> audio(n);
-    for (size_t i = 0; i < n; i++) {
-        audio[i] = std::abs(iq[i]);
+    // IQ bandwidth filter
+    if (!m_iqBandwidthTaps.empty()) {
+        std::vector<std::complex<float>> tmp;
+        applyComplexFIR(iq, tmp, m_iqBandwidthTaps, m_iqBwHistory);
+        iq = std::move(tmp);
     }
 
-    // DC block - remove carrier
-    for (size_t i = 0; i < n; i++) {
-        m_dcOffset += (audio[i] - m_dcOffset) * 0.005f;
-        audio[i] -= m_dcOffset;
-    }
+    // SDRangel-style AM demod: envelope + AGC DC removal
+    auto audio = amDemod(iq);
 
-    // Simple fixed gain
-    for (size_t i = 0; i < n; i++) {
-        audio[i] *= 50.0f;
-        if (audio[i] > 1.0f) audio[i] = 1.0f;
-        if (audio[i] < -1.0f) audio[i] = -1.0f;
-    }
-
-    // Real decimation stages
+    // Real decimation to get closer to 48kHz
     for (auto& stage : m_realStages) {
         std::vector<float> tmp;
         decimateReal(audio, tmp, stage.taps, stage.factor, stage.realHistory);
@@ -68,6 +58,13 @@ std::vector<float> AMDemodulator::demodulate(const std::vector<std::complex<floa
                           : m_realStages.back().outputRate;
     if (std::abs(lastRate - 48000.0) > 1.0) {
         audio = resample(audio, lastRate, 48000.0);
+    }
+
+    // Audio lowpass filter
+    {
+        std::vector<float> tmp;
+        applyFIR(audio, tmp, m_audioFilterTaps, m_audioFilterHistory);
+        audio = std::move(tmp);
     }
 
     return audio;
@@ -147,53 +144,33 @@ void AMDemodulator::rebuildChain()
     }
 }
 
-// AM Demodulation — improved for airband
+// AM Demodulation — SDRangel style
 // 1. Envelope detection (magnitude)
-// 2. DC blocker (faster tracking for AM)
-// 3. Gentle AGC
+// 2. Combined AGC + DC removal: (demod - avg) / avg
 std::vector<float> AMDemodulator::amDemod(const std::vector<std::complex<float>>& signal)
 {
     if (signal.empty()) return {};
     const size_t n = signal.size();
     std::vector<float> out(n);
 
-    // AGC parameters - gentler for AM voice
-    const float attack = 0.005f;
-    const float invAttack = 1.0f - attack;
-    const float decay = 0.00005f;
-    const float invDecay = 1.0f - decay;
-    const float maxGain = 1000.0f;
+    // SDRangel volumeAGC rate = 0.003
+    const float agcRate = 0.003f;
 
-    // 1. Envelope detection
     for (size_t i = 0; i < n; i++) {
-        out[i] = std::sqrt(signal[i].real() * signal[i].real() +
-                           signal[i].imag() * signal[i].imag());
-    }
+        // 1. Envelope detection
+        float demod = std::sqrt(signal[i].real() * signal[i].real() +
+                                signal[i].imag() * signal[i].imag());
 
-    // 2. DC blocker - faster tracking for AM carrier removal
-    const float dcRate = 0.001f;
-    for (size_t i = 0; i < n; i++) {
-        m_dcOffset += (out[i] - m_dcOffset) * dcRate;
-        out[i] -= m_dcOffset;
-    }
+        // 2. AGC tracks carrier level (slow moving average)
+        m_agcAmp += agcRate * (demod - m_agcAmp);
 
-    // 3. AGC - simple, no look-ahead
-    for (size_t i = 0; i < n; i++) {
-        float inAmp = std::fabs(out[i]);
-
-        if (inAmp > m_agcAmp)
-            m_agcAmp = m_agcAmp * invAttack + inAmp * attack;
-        else
-            m_agcAmp = m_agcAmp * invDecay + inAmp * decay;
-
-        if (m_agcAmp > 0.0001f) {
-            float gain = std::min(1.0f / m_agcAmp, maxGain);
-            out[i] *= gain;
+        // 3. DC removal + normalization in one step
+        // This removes carrier and normalizes by carrier amplitude
+        if (m_agcAmp > 1e-6f) {
+            out[i] = (demod - m_agcAmp) / m_agcAmp;
+        } else {
+            out[i] = 0.0f;
         }
-
-        // soft clip
-        if (out[i] > 1.0f) out[i] = 1.0f;
-        else if (out[i] < -1.0f) out[i] = -1.0f;
     }
 
     return out;

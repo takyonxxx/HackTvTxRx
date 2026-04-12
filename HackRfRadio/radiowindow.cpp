@@ -791,11 +791,12 @@ void RadioWindow::processIqBuffer()
     case AM: {
         auto mono = m_amDemod->demodulate(samples);
         float amGain = m_gainDialog ? (m_gainDialog->rxGain() / 100.0f) : 1.0f;
+
         audio.resize(mono.size() * 2);
         for (size_t i = 0; i < mono.size(); i++) {
             float s = mono[i] * amGain;
-            if (s > 0.9f) s = 0.9f + 0.1f * std::tanh((s - 0.9f) * 8.0f);
-            else if (s < -0.9f) s = -0.9f + 0.1f * std::tanh((s + 0.9f) * 8.0f);
+            if (s > 0.9f) s = 0.9f;
+            else if (s < -0.9f) s = -0.9f;
             audio[i * 2]     = s;
             audio[i * 2 + 1] = s;
         }
