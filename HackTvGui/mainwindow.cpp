@@ -672,6 +672,19 @@ void MainWindow::startRx()
     QStringList args;
     if (isTvTx) {
         args = buildTvTxCommand();
+    } else if (isFmFileTx) {
+        // FM File TX: start in TX mode with fmtransmitter
+        args = buildRxCommand();  // base args (freq, sample rate, device)
+        // Override to TX mode
+        for (int i = 0; i < args.size(); i++) {
+            if (args[i] == "--rx-tx-mode" && i + 1 < args.size()) {
+                args[i + 1] = "tx";
+                break;
+            }
+        }
+        if (!args.contains("fmtransmitter")) {
+            args.append("fmtransmitter");
+        }
     } else {
         args = buildRxCommand();
     }
@@ -688,7 +701,7 @@ void MainWindow::startRx()
             }, Qt::QueuedConnection);
     });
 
-    if (!isTvTx) {
+    if (!isTvTx && !isFmFileTx) {
         m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
             if (!m_isProcessing.load() || !data || len != 262144 || m_shuttingDown.load() || m_isTx) return;
             const int n = len / 2;
@@ -719,8 +732,8 @@ void MainWindow::startRx()
     int txModType = (m_opMode == MODE_AM) ? 2 : (m_opMode == MODE_WFM) ? 1 : 0;
     m_hackTvLib->setTxModulationType(txModType);
 
-    // Create demodulators for RX
-    if (!isTvTx) {
+    // Create demodulators for RX (not for TX modes)
+    if (!isTvTx && !isFmFileTx) {
         amDemodulator.reset();
         fmDemodulator.reset();
 
