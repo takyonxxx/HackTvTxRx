@@ -181,13 +181,13 @@ bool SdrDevice::reinitialize(const std::string& mode)
         m_hackTvLib->setModulation_index(m_currentModulationIndex);
         m_hackTvLib->setAmplitude(m_currentAmplitude);
         m_hackTvLib->setTxAmpGain(m_currentTxAmpGain);
-        m_hackTvLib->setAmpEnable(m_currentAmpEnable);
+        m_hackTvLib->setAmpEnable(true);  // Always enable amp for TX
         m_hackTvLib->setTxModulationType(m_currentModulationType);
 
         qDebug() << "TX ready - modIdx=" << m_currentModulationIndex
                  << "amp=" << m_currentAmplitude
                  << "modType=" << m_currentModulationType
-                 << "ampEnabled=1";
+                 << "ampEnabled=1 (forced)";
     } else {
         if (m_deviceType == "rtlsdr") {
             // RTL-SDR: use auto gain or set gain directly
