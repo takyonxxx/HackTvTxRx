@@ -131,6 +131,16 @@ void TcpClient::setModulationType(int type)
     sendCommand(QString("SET_MODULATION_TYPE:%1").arg(type));
 }
 
+void TcpClient::setDevice(const QString& device)
+{
+    sendCommand(QString("SET_DEVICE:%1").arg(device));
+}
+
+void TcpClient::requestDevice()
+{
+    sendCommand("GET_DEVICE");
+}
+
 void TcpClient::switchToRx()
 {
     sendCommand("SWITCH_RX");

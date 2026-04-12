@@ -51,6 +51,8 @@ public:
     bool switchToRx();
     bool switchToTx();
     bool isTxMode() const { return m_isTxMode; }
+    void setDeviceType(const std::string& type) { m_deviceType = type; }
+    bool forceRestart();
 
 signals:
     void statusMessage(const QString& message);
@@ -121,6 +123,7 @@ private:
 
     // Mode tracking
     bool m_isTxMode;
+    std::string m_deviceType;  // "hackrf" or "rtlsdr"
 
     // Audio ring buffer for TX (receives PCM float from TCP audio clients)
     static constexpr size_t TX_AUDIO_RING_SIZE = 1048576;

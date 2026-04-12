@@ -177,6 +177,9 @@ void RadioWindow::saveSettings()
     s.setValue("fmnr", m_gainDialog->fmnrEnabled());
     s.setValue("ampEnable", m_gainDialog->ampEnabled());
 
+    // Device type
+    s.setValue("isHackRf", m_isHackRf);
+
     // Window geometry
     s.setValue("geometry", saveGeometry());
 
@@ -240,6 +243,11 @@ void RadioWindow::loadSettings()
     }
     m_rfAmpBtn->setChecked(s.value("ampEnable", false).toBool());
 
+    // Device type
+    m_isHackRf = s.value("isHackRf", true).toBool();
+    m_deviceToggleBtn->setChecked(m_isHackRf);
+    m_deviceToggleBtn->setText(m_isHackRf ? "HackRF" : "RTL-SDR");
+
     // Window geometry
     if (s.contains("geometry"))
         restoreGeometry(s.value("geometry").toByteArray());
@@ -288,6 +296,27 @@ void RadioWindow::setupUi()
     m_connectBtn->setMinimumHeight(48);
     connect(m_connectBtn, &QPushButton::clicked, this, &RadioWindow::onConnectClicked);
 
+    m_deviceToggleBtn = new QPushButton("HackRF");
+    m_deviceToggleBtn->setObjectName("cycleBtn");
+    m_deviceToggleBtn->setMinimumHeight(48);
+    m_deviceToggleBtn->setCheckable(true);
+    m_deviceToggleBtn->setChecked(true);  // default HackRF
+    connect(m_deviceToggleBtn, &QPushButton::toggled, [this](bool checked) {
+        m_isHackRf = checked;
+        m_deviceToggleBtn->setText(checked ? "HackRF" : "RTL-SDR");
+        // Send device change to server if connected
+        if (m_tcpClient->isConnected()) {
+            m_tcpClient->setDevice(checked ? "hackrf" : "rtlsdr");
+        }
+        // RTL-SDR: disable PTT (RX only)
+        if (m_pttButton) {
+            m_pttButton->setEnabled(checked);
+            m_pttButton->setStyleSheet(checked ?
+                "QPushButton { background-color: #CC3333; color: white; font-size: 18px; font-weight: bold; border-radius: 8px; }" :
+                "QPushButton { background-color: #555555; color: #999999; font-size: 18px; font-weight: bold; border-radius: 8px; }");
+        }
+    });
+
     m_connectionStatus = new QLabel("Disconnected");
     m_connectionStatus->setObjectName("connStatus");
     m_connectionStatus->setAlignment(Qt::AlignCenter);
@@ -299,6 +328,7 @@ void RadioWindow::setupUi()
     connect(m_settingsBtn, &QPushButton::clicked, this, &RadioWindow::onSettingsClicked);
 
     topBar->addWidget(m_connectBtn, 1);
+    topBar->addWidget(m_deviceToggleBtn, 1);
     topBar->addWidget(m_connectionStatus, 1);
     topBar->addWidget(m_settingsBtn, 1);
     mainLayout->addLayout(topBar);
@@ -698,6 +728,9 @@ void RadioWindow::onConnected()
     m_tcpClient->setModulationType(static_cast<int>(m_currentModulation));
     m_tcpClient->switchToRx();
 
+    // Query server for current device type to sync toggle
+    m_tcpClient->requestDevice();
+
     // Apply IF bandwidth from slider
     if (m_gainDialog) {
         int bwVal = m_gainDialog->ifBandwidth();
@@ -720,6 +753,7 @@ void RadioWindow::onDisconnected()
     m_connectionStatus->setText("Disconnected");
     m_connectionStatus->setStyleSheet("color: #FF4444; font-weight: bold; font-size: 13px;");
     m_connectBtn->setText("Connect");
+    m_deviceToggleBtn->setEnabled(true);  // can switch device again
     m_audioPlayback->stop();
     m_audioCapture->stop();
     m_micStarted = false;
@@ -729,6 +763,19 @@ void RadioWindow::onDisconnected()
 
 void RadioWindow::onConnectionError(const QString& error) { logMessage("Error: " + error); }
 void RadioWindow::onControlResponse(const QString& response) {
+    // Handle device response from server
+    if (response.startsWith("DEVICE:")) {
+        QString dev = response.mid(7).trimmed().toLower();
+        bool isHackRf = (dev == "hackrf");
+        m_isHackRf = isHackRf;
+        m_deviceToggleBtn->blockSignals(true);
+        m_deviceToggleBtn->setChecked(isHackRf);
+        m_deviceToggleBtn->setText(isHackRf ? "HackRF" : "RTL-SDR");
+        m_deviceToggleBtn->blockSignals(false);
+        if (m_pttButton) {
+            m_pttButton->setEnabled(isHackRf);
+        }
+    }
     // Only log non-OK responses (errors/info, not routine confirmations)
     if (!response.startsWith("OK:"))
         logMessage("Server: " + response);
@@ -817,7 +864,7 @@ void RadioWindow::processIqBuffer()
 
 void RadioWindow::onPttPressed()
 {
-    if (!m_tcpClient->isConnected() || m_isTx) return;
+    if (!m_tcpClient->isConnected() || m_isTx || !m_isHackRf) return;
 
     m_isTx = true;
     m_iqAccumulator.clear();

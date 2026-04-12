@@ -110,6 +110,7 @@ private:
     GainSettingsDialog* m_gainDialog;
     QPushButton* m_settingsBtn;
     QPushButton* m_rfAmpBtn;
+    QPushButton* m_deviceToggleBtn;
 
     // State
     enum Modulation { FM_NB, FM_WB, AM };
@@ -118,6 +119,7 @@ private:
     bool m_pttHeld = false;
     bool m_micStarted = false;
     bool m_forceMono = false;
+    bool m_isHackRf = true;  // true=HackRF, false=RTL-SDR
     uint32_t m_sampleRate = 2000000;
 
     // BW data

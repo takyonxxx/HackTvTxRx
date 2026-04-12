@@ -23,6 +23,7 @@ SdrDevice::SdrDevice(QObject *parent)
     , m_currentAmplitude(0.10f)
     , m_currentModulationType(0)
     , m_isTxMode(false)
+    , m_deviceType("hackrf")
     , m_dataPort(5000)
     , m_controlPort(5001)
     , m_audioPort(5002)
@@ -61,12 +62,21 @@ bool SdrDevice::initialize(const std::vector<std::string>& args)
         return false;
     }
 
+    // Extract device type from args
+    m_deviceType = "hackrf"; // default
+    for (size_t i = 0; i < args.size(); i++) {
+        if (args[i] == "-o" && i + 1 < args.size()) {
+            m_deviceType = args[i + 1];
+            break;
+        }
+    }
+
     if (!m_hackTvLib->setArguments(args)) {
         emit errorOccurred("Failed to set arguments");
         return false;
     }
 
-    emit statusMessage("Initialized successfully");
+    emit statusMessage(QString("Initialized with device: %1").arg(QString::fromStdString(m_deviceType)));
     return true;
 }
 
@@ -135,14 +145,14 @@ bool SdrDevice::reinitialize(const std::string& mode)
     std::string freqStr = std::to_string(m_currentFrequency);
 
     std::vector<std::string> args = {
-        "-o", "hackrf",
+        "-o", m_deviceType,
         "--rx-tx-mode", mode,
         "-s", srStr,
         "-f", freqStr
     };
 
-    // Add fmtransmitter source for TX mode (required for FM TX path in lib)
-    if (mode == "tx") {
+    // Add fmtransmitter source for TX mode (only for hackrf)
+    if (mode == "tx" && m_deviceType == "hackrf") {
         args.push_back("-a");
         args.push_back("fmtransmitter");
     }
@@ -179,9 +189,14 @@ bool SdrDevice::reinitialize(const std::string& mode)
                  << "modType=" << m_currentModulationType
                  << "ampEnabled=1";
     } else {
-        m_hackTvLib->setVgaGain(m_currentVgaGain);
-        m_hackTvLib->setLnaGain(m_currentLnaGain);
-        m_hackTvLib->setRxAmpGain(m_currentRxAmpGain);
+        if (m_deviceType == "rtlsdr") {
+            // RTL-SDR: use auto gain or set gain directly
+            m_hackTvLib->setLnaGain(m_currentLnaGain);
+        } else {
+            m_hackTvLib->setVgaGain(m_currentVgaGain);
+            m_hackTvLib->setLnaGain(m_currentLnaGain);
+            m_hackTvLib->setRxAmpGain(m_currentRxAmpGain);
+        }
     }
 
     return true;
@@ -189,6 +204,13 @@ bool SdrDevice::reinitialize(const std::string& mode)
 
 bool SdrDevice::switchToRx()
 {
+    // Already in RX mode and running - skip reinitialize
+    if (!m_isTxMode && m_hackTvLib && m_hackTvLib->isInitialized()) {
+        qDebug() << "Already in RX mode, skipping reinitialize";
+        emit statusMessage("Already in RX mode");
+        return true;
+    }
+
     qDebug() << "Switching to RX mode...";
 
     if (!reinitialize("rx")) {
@@ -202,9 +224,21 @@ bool SdrDevice::switchToRx()
     return true;
 }
 
+bool SdrDevice::forceRestart()
+{
+    qDebug() << "Force restart with device:" << QString::fromStdString(m_deviceType);
+    m_isTxMode = true;  // force switchToRx to actually reinitialize
+    return switchToRx();
+}
+
 bool SdrDevice::switchToTx()
 {
     qDebug() << "Switching to TX mode...";
+
+    if (m_deviceType == "rtlsdr") {
+        emit errorOccurred("RTL-SDR does not support TX mode");
+        return false;
+    }
 
     txRingReset();
 
@@ -439,11 +473,12 @@ void SdrDevice::onNewControlConnection()
         emit controlClientConnected(clientAddress);
         emit statusMessage(QString("Control client connected: %1").arg(clientAddress));
 
+        QString deviceName = QString::fromStdString(m_deviceType).toUpper();
         QString welcome =
-            "HackRF TCP IQ Server v3.0 (Radio Mode)\n"
-            "Supports RX and TX with FM/AM modulation\n"
-            "Type HELP for available commands.\n"
-            "Ready.\n";
+            QString("HackRF TCP IQ Server v3.0 (Radio Mode) [%1]\n"
+                    "Supports RX and TX with FM/AM modulation\n"
+                    "Type HELP for available commands.\n"
+                    "Ready.\n").arg(deviceName);
 
         clientSocket->write(welcome.toUtf8());
         clientSocket->flush();
@@ -691,6 +726,30 @@ void SdrDevice::processControlCommand(QTcpSocket* client, const QString& command
             response = "ERROR: Invalid modulation type (0=NFM, 1=WFM, 2=AM)\n";
         }
     }
+    else if (cmd == "SET_DEVICE" && parts.size() == 2) {
+        QString dev = parts[1].toLower().trimmed();
+        if (dev == "hackrf" || dev == "rtlsdr") {
+            std::string oldDevice = m_deviceType;
+            m_deviceType = dev.toStdString();
+            // Re-initialize with new device
+            if (m_isTxMode && dev == "rtlsdr") {
+                m_isTxMode = false;
+            }
+            QString modeName = m_isTxMode ? "tx" : "rx";
+            if (reinitialize(modeName.toStdString())) {
+                response = QString("OK: Device switched to %1\n").arg(dev.toUpper());
+                emit parameterChanged("Device", dev.toUpper());
+            } else {
+                m_deviceType = oldDevice;  // revert on failure
+                response = QString("ERROR: Failed to switch to %1\n").arg(dev.toUpper());
+            }
+        } else {
+            response = "ERROR: Invalid device (hackrf or rtlsdr)\n";
+        }
+    }
+    else if (cmd == "GET_DEVICE") {
+        response = QString("DEVICE:%1\n").arg(QString::fromStdString(m_deviceType).toUpper());
+    }
     else if (cmd == "SWITCH_RX") {
         if (switchToRx()) {
             response = "OK: Switched to RX mode\n";
@@ -699,7 +758,9 @@ void SdrDevice::processControlCommand(QTcpSocket* client, const QString& command
         }
     }
     else if (cmd == "SWITCH_TX") {
-        if (switchToTx()) {
+        if (m_deviceType == "rtlsdr") {
+            response = "ERROR: RTL-SDR does not support TX mode\n";
+        } else if (switchToTx()) {
             response = "OK: Switched to TX mode\n";
         } else {
             response = "ERROR: Failed to switch to TX mode\n";
@@ -720,6 +781,8 @@ void SdrDevice::processControlCommand(QTcpSocket* client, const QString& command
             "  SET_MODULATION_INDEX:<value>  - Set FM modulation index 0.1-20.0\n"
             "  SET_AMPLITUDE:<value>         - Set TX amplitude 0.0-2.0\n"
             "  SET_MODULATION_TYPE:<value>   - Set TX modulation 0=NFM, 1=WFM, 2=AM\n"
+            "  SET_DEVICE:<type>             - Switch SDR device (hackrf or rtlsdr)\n"
+            "  GET_DEVICE                    - Get current device type\n"
             "  SWITCH_RX                     - Switch to receive mode\n"
             "  SWITCH_TX                     - Switch to transmit mode\n"
             "  GET_STATUS                    - Get current settings\n"
@@ -737,22 +800,24 @@ QString SdrDevice::getCurrentStatus()
 {
     return QString(
                "Current Settings:\n"
-               "  Mode:           %1\n"
-               "  Frequency:      %2 Hz (%3 MHz)\n"
-               "  Sample Rate:    %4 Hz (%5 MHz)\n"
-               "  VGA Gain:       %6\n"
-               "  LNA Gain:       %7\n"
-               "  RX Amp Gain:    %8\n"
-               "  TX Amp Gain:    %9\n"
-               "  RF Amp:         %10\n"
-               "  Mod Index:      %11\n"
-               "  Amplitude:      %12\n"
-               "  Mod Type:       %13\n"
-               "  Data Clients:   %14\n"
-               "  Control Clients: %15\n"
-               "  Audio Clients:  %16\n"
-               "  Data Sent:      %17 MB\n"
-               ).arg(m_isTxMode ? "TX" : "RX")
+               "  Device:         %1\n"
+               "  Mode:           %2\n"
+               "  Frequency:      %3 Hz (%4 MHz)\n"
+               "  Sample Rate:    %5 Hz (%6 MHz)\n"
+               "  VGA Gain:       %7\n"
+               "  LNA Gain:       %8\n"
+               "  RX Amp Gain:    %9\n"
+               "  TX Amp Gain:    %10\n"
+               "  RF Amp:         %11\n"
+               "  Mod Index:      %12\n"
+               "  Amplitude:      %13\n"
+               "  Mod Type:       %14\n"
+               "  Data Clients:   %15\n"
+               "  Control Clients: %16\n"
+               "  Audio Clients:  %17\n"
+               "  Data Sent:      %18 MB\n"
+               ).arg(QString::fromStdString(m_deviceType).toUpper())
+        .arg(m_isTxMode ? "TX" : "RX")
         .arg(m_currentFrequency)
         .arg(m_currentFrequency / 1000000.0, 0, 'f', 3)
         .arg(m_currentSampleRate)
@@ -844,7 +909,12 @@ void SdrDevice::setLnaGain(unsigned int gain)
 {
     m_currentLnaGain = gain;
     if (m_hackTvLib) {
-        m_hackTvLib->setLnaGain(gain);
+        if (m_deviceType == "rtlsdr") {
+            // RTL-SDR: map LNA gain to overall gain (0-49 dB in 1dB steps)
+            m_hackTvLib->setLnaGain(gain);
+        } else {
+            m_hackTvLib->setLnaGain(gain);
+        }
         qDebug() << "LNA gain set to:" << gain;
     }
 }
@@ -853,7 +923,11 @@ void SdrDevice::setVgaGain(unsigned int gain)
 {
     m_currentVgaGain = gain;
     if (m_hackTvLib) {
-        m_hackTvLib->setVgaGain(gain);
+        if (m_deviceType == "rtlsdr") {
+            // RTL-SDR: no separate VGA, ignore or map to gain
+        } else {
+            m_hackTvLib->setVgaGain(gain);
+        }
         qDebug() << "VGA gain set to:" << gain;
     }
 }

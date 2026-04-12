@@ -31,6 +31,8 @@ public:
     void setModulationIndex(float index);
     void setAmplitude(float amp);
     void setModulationType(int type); // 0=NFM, 1=WFM, 2=AM
+    void setDevice(const QString& device); // "hackrf" or "rtlsdr"
+    void requestDevice();
     void switchToRx();
     void switchToTx();
     void requestStatus();

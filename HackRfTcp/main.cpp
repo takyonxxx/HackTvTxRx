@@ -22,8 +22,8 @@ QString getLocalIPAddress()
 int main(int argc, char *argv[])
 {
     QCoreApplication a(argc, argv);
-    a.setApplicationName("HackRF TCP Radio Server");
-    a.setApplicationVersion("3.0");
+    a.setApplicationName("SDR TCP Radio Server");
+    a.setApplicationVersion("3.1");
 
     SdrDevice hackrf;
 
@@ -56,7 +56,7 @@ int main(int argc, char *argv[])
     });
 
     QCommandLineParser parser;
-    parser.setApplicationDescription("HackRF TCP Radio Server - FM/AM Transceiver via TCP");
+    parser.setApplicationDescription("SDR TCP Radio Server - FM/AM Transceiver via TCP (HackRF / RTL-SDR)");
     parser.addHelpOption();
     parser.addVersionOption();
 
@@ -84,6 +84,10 @@ int main(int argc, char *argv[])
                                    "Initial mode (rx or tx)", "mode", "rx");
     parser.addOption(modeOption);
 
+    QCommandLineOption deviceOption(QStringList() << "o" << "device",
+                                    "SDR device type (hackrf, rtlsdr, or auto)", "device", "auto");
+    parser.addOption(deviceOption);
+
     parser.process(a);
 
     quint16 dataPort = parser.value(dataPortOption).toUShort();
@@ -92,9 +96,28 @@ int main(int argc, char *argv[])
     uint32_t sampleRate = parser.value(sampleRateOption).toUInt();
     uint64_t frequency = parser.value(frequencyOption).toULongLong();
     QString mode = parser.value(modeOption).toLower();
+    QString device = parser.value(deviceOption).toLower();
+
+    // Auto-detect device - try hackrf first, fall back to rtlsdr
+    if (device == "auto") {
+        qDebug() << "Auto-detecting SDR device...";
+        device = "hackrf";  // try hackrf first, will fall back if fails
+    }
+
+    // Validate device type
+    if (device != "hackrf" && device != "rtlsdr") {
+        qDebug() << "Invalid device type:" << device << "(use 'hackrf', 'rtlsdr', or 'auto')";
+        return 1;
+    }
+
+    // RTL-SDR only supports RX
+    if (device == "rtlsdr" && mode == "tx") {
+        qDebug() << "RTL-SDR does not support TX mode, forcing RX";
+        mode = "rx";
+    }
 
     std::vector<std::string> hacktvArgs = {
-        "-o", "hackrf",
+        "-o", device.toStdString(),
         "--rx-tx-mode", mode.toStdString()
     };
 
@@ -103,6 +126,7 @@ int main(int argc, char *argv[])
     qDebug() << "========================================\n";
 
     qDebug() << "Configuration:";
+    qDebug() << "  Device:         " << device;
     qDebug() << "  Data Port:      " << dataPort;
     qDebug() << "  Control Port:   " << controlPort;
     qDebug() << "  Audio Port:     " << audioPort;
@@ -116,7 +140,7 @@ int main(int argc, char *argv[])
     }
 
     if (!hackrf.initialize(hacktvArgs)) {
-        qDebug() << "\nFailed to initialize HackRF";
+        qDebug() << "\nFailed to initialize" << device;
         return 1;
     }
 
@@ -125,18 +149,31 @@ int main(int argc, char *argv[])
 
     QThread::msleep(100);
 
-    if (!hackrf.start()) {
-        qDebug() << "\nFailed to start HackRF";
+    bool started = hackrf.start();
+
+    // Auto-fallback: if hackrf failed, try rtlsdr
+    if (!started && device == "hackrf") {
+        qDebug() << "\nHackRF not found, falling back to RTL-SDR...";
+        device = "rtlsdr";
+        hackrf.setDeviceType("rtlsdr");
+        started = hackrf.forceRestart();
+    }
+
+    if (!started) {
+        qDebug() << "\nFailed to start" << device;
         return 1;
     }
+
+    qDebug() << "\nDevice started:" << device.toUpper();
 
     QString localIP = getLocalIPAddress();
 
     qDebug() << "\n========================================";
-    qDebug() << "   HackRF Radio Server Started!";
+    qDebug() << "   SDR TCP Radio Server v3.1";
     qDebug() << "========================================";
     qDebug() << "";
     qDebug() << "Server is running on IP:" << localIP;
+    qDebug() << "  Device:         " << device.toUpper();
     qDebug() << "  IQ Data Stream: " << localIP << ":" << dataPort;
     qDebug() << "  Control:        " << localIP << ":" << controlPort;
     qDebug() << "  TX Audio In:    " << localIP << ":" << audioPort;
@@ -145,6 +182,7 @@ int main(int argc, char *argv[])
     qDebug() << "Audio format: float32 PCM, mono, 44100 Hz";
     qDebug() << "\n========================================";
     qDebug() << "  Server Ready - Press Ctrl+C to stop";
+    qDebug() << "  Device:" << device.toUpper();
     qDebug() << "========================================\n";
 
     return a.exec();
