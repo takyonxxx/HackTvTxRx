@@ -62,6 +62,10 @@ public:
     // Called on PTT release to push RX params to server
     void sendRxParams();
 
+    // Show/hide parameters based on modulation mode
+    // 0=NFM, 1=WFM, 2=AM
+    void setModulationVisibility(int modulation);
+
 signals:
     void ampEnableChanged(bool enabled);
     void settingsChanged();
@@ -86,6 +90,12 @@ private:
     QSlider* m_audioLpfSlider;  QLabel* m_audioLpfLabel;
     QCheckBox* m_fmnrCheck;
     QCheckBox* m_ampEnableCheck;
+
+    // Row labels for visibility control
+    QLabel* m_rxModIdxRowLabel = nullptr;
+    QLabel* m_deemphRowLabel = nullptr;
+    QLabel* m_audioLpfRowLabel = nullptr;
+    QLabel* m_rxGainRowLabel = nullptr;
 
     // Connection fields
     QLineEdit* m_hostEdit;

@@ -223,7 +223,7 @@ void RadioWindow::loadSettings()
 
     // Volume & Squelch
     m_volumeSlider->setValue(s.value("volume", 50).toInt());
-    m_squelchSlider->setValue(s.value("squelch", 10).toInt());
+    m_squelchSlider->setValue(s.value("squelch", 20).toInt());
 
     // Gain & TX (to settings page)
     if (m_gainDialog) {
@@ -508,7 +508,7 @@ void RadioWindow::setupUi()
     sliderGrid->addWidget(m_volumeSlider, 0, 1);
     sliderGrid->addWidget(m_volumeLabel, 0, 2);
 
-    // Squelch - hidden, kept for compatibility
+    // Squelch - internal only, not shown
     m_squelchSlider = new QSlider(Qt::Horizontal);
     m_squelchSlider->setRange(0, 100);
     m_squelchSlider->setValue(0);
@@ -837,7 +837,7 @@ void RadioWindow::processIqBuffer()
         break;
     case AM: {
         auto mono = m_amDemod->demodulate(samples);
-        float amGain = m_gainDialog ? (m_gainDialog->rxGain() / 1000.0f) : 0.4f;
+        float amGain = m_gainDialog ? (m_gainDialog->rxGain() / 100.0f) : 5.0f;
 
         audio.resize(mono.size() * 2);
         for (size_t i = 0; i < mono.size(); i++) {
@@ -1063,7 +1063,7 @@ void RadioWindow::onModulationChanged(int index)
             m_gainDialog->blockSignals(true);
             m_gainDialog->setVgaGain(20);
             m_gainDialog->setLnaGain(40);
-            m_gainDialog->setRxGain(401);      // 4.01
+            m_gainDialog->setRxGain(500);      // 5.0
             m_gainDialog->setRxModIndex(100);  // 1.00
             m_gainDialog->setDeemph(0);        // OFF
             m_gainDialog->setAudioLpf(50);     // 5.0 kHz
@@ -1085,6 +1085,11 @@ void RadioWindow::onModulationChanged(int index)
     m_amDemod->setSampleRate(m_sampleRate);
     m_cPlotter->setSampleRate(m_sampleRate);
     m_cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
+
+    // Show/hide parameters based on modulation
+    if (m_gainDialog) {
+        m_gainDialog->setModulationVisibility(index);
+    }
 
     if (m_gainDialog) {
         float rxGain = m_gainDialog->rxGain() / 100.0f;

@@ -173,7 +173,8 @@ void GainSettingsDialog::setupUi()
         m_fmDemod->setRxModIndex(idx);
         emit settingsChanged();
     });
-    rxGrid->addWidget(new QLabel("RX ModIdx:"), row, 0); rxGrid->addWidget(m_rxModIdxSlider, row, 1); rxGrid->addWidget(m_rxModIdxLabel, row, 2); row++;
+    m_rxModIdxRowLabel = new QLabel("RX ModIdx:");
+    rxGrid->addWidget(m_rxModIdxRowLabel, row, 0); rxGrid->addWidget(m_rxModIdxSlider, row, 1); rxGrid->addWidget(m_rxModIdxLabel, row, 2); row++;
 
     m_deemphSlider = new QSlider(Qt::Horizontal); m_deemphSlider->setRange(0, 1000); m_deemphSlider->setValue(0);
     m_deemphLabel = new QLabel("OFF");
@@ -183,7 +184,8 @@ void GainSettingsDialog::setupUi()
         m_fmDemod->setDeemphTau(static_cast<float>(v));
         emit settingsChanged();
     });
-    rxGrid->addWidget(new QLabel("DeEmph:"), row, 0); rxGrid->addWidget(m_deemphSlider, row, 1); rxGrid->addWidget(m_deemphLabel, row, 2); row++;
+    m_deemphRowLabel = new QLabel("DeEmph:");
+    rxGrid->addWidget(m_deemphRowLabel, row, 0); rxGrid->addWidget(m_deemphSlider, row, 1); rxGrid->addWidget(m_deemphLabel, row, 2); row++;
 
     // Audio LPF cutoff slider: 1.0 - 8.0 kHz (slider 10-80, /10)
     m_audioLpfSlider = new QSlider(Qt::Horizontal); m_audioLpfSlider->setRange(10, 80); m_audioLpfSlider->setValue(50);
@@ -194,7 +196,8 @@ void GainSettingsDialog::setupUi()
         m_fmDemod->setAudioLPF(cutoff * 1000.0f);
         emit settingsChanged();
     });
-    rxGrid->addWidget(new QLabel("Audio LPF:"), row, 0); rxGrid->addWidget(m_audioLpfSlider, row, 1); rxGrid->addWidget(m_audioLpfLabel, row, 2); row++;
+    m_audioLpfRowLabel = new QLabel("Audio LPF:");
+    rxGrid->addWidget(m_audioLpfRowLabel, row, 0); rxGrid->addWidget(m_audioLpfSlider, row, 1); rxGrid->addWidget(m_audioLpfLabel, row, 2); row++;
 
     // FM IF Noise Reduction checkbox
     m_fmnrCheck = new QCheckBox("FM IF NR (noise reduction)");
@@ -325,4 +328,26 @@ void GainSettingsDialog::sendRxParams()
     if (!m_tcpClient->isConnected()) return;
     m_tcpClient->setVgaGain(m_vgaGainSlider->value());
     m_tcpClient->setLnaGain(m_lnaGainSlider->value());
+}
+
+void GainSettingsDialog::setModulationVisibility(int modulation)
+{
+    // FM-only parameters
+    bool isFM = (modulation == 0 || modulation == 1); // NFM or WFM
+
+    // RX ModIdx - only FM
+    if (m_rxModIdxRowLabel) m_rxModIdxRowLabel->setVisible(isFM);
+    m_rxModIdxSlider->setVisible(isFM);
+    m_rxModIdxLabel->setVisible(isFM);
+
+    // DeEmph - only FM
+    if (m_deemphRowLabel) m_deemphRowLabel->setVisible(isFM);
+    m_deemphSlider->setVisible(isFM);
+    m_deemphLabel->setVisible(isFM);
+
+    // FM NR checkbox - only FM
+    m_fmnrCheck->setVisible(isFM);
+
+    // Audio LPF - all modes (useful for AM too)
+    // Keep visible
 }
