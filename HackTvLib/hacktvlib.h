@@ -132,6 +132,8 @@ public:
     void setTxAmpGain(unsigned int tx_amp_gain);
     void setRxAmpGain(unsigned int rx_amp_gain);
     void setAmpEnable(bool enable);
+    void setTxAmpEnable(bool enable);
+    void setRxAmpEnable(bool enable);
 
     // RTL-SDR specific
     void setFreqCorrection(int ppm);

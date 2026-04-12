@@ -1055,23 +1055,23 @@ void RadioWindow::onModulationChanged(int index)
         m_currentModulation = AM;
         m_amDemod->setBandwidth(10000.0);
         if (m_gainDialog) {
-            m_gainDialog->setIfBandwidth(20);
+            m_gainDialog->setIfBandwidth(21);
             // TX presets (NOT blocked — must reach server)
             m_gainDialog->setAmplitude(50);    // 0.50 carrier level
             m_gainDialog->setModIndex(85);     // 0.85 = %85 modulation depth
-            // RX presets - AM (LNA=40, VGA=35 for airband)
+            // RX presets - AM airband optimized
             m_gainDialog->blockSignals(true);
-            m_gainDialog->setVgaGain(35);
+            m_gainDialog->setVgaGain(20);
             m_gainDialog->setLnaGain(40);
-            m_gainDialog->setRxGain(400);       // 4.0
-            m_gainDialog->setRxModIndex(100);  // 1.0
+            m_gainDialog->setRxGain(401);      // 4.01
+            m_gainDialog->setRxModIndex(100);  // 1.00
             m_gainDialog->setDeemph(0);        // OFF
             m_gainDialog->setAudioLpf(50);     // 5.0 kHz
             m_gainDialog->blockSignals(false);
         }
         m_mainIfBwSlider->blockSignals(true);
-        m_mainIfBwSlider->setValue(20);
-        m_mainIfBwLabel->setText("10.0 kHz");
+        m_mainIfBwSlider->setValue(21);
+        m_mainIfBwLabel->setText("10.5 kHz");
         m_mainIfBwSlider->blockSignals(false);
         break;
     }

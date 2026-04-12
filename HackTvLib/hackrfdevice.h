@@ -52,6 +52,8 @@ public:
     void setTxAmpGain(unsigned int tx_vga_gain);
     void setRxAmpGain(unsigned int rx_amp_gain);
     void setAmpEnable(bool enable);
+    void setTxAmpEnable(bool enable);
+    void setRxAmpEnable(bool enable);
     void setBasebandFilterBandwidth(uint32_t bandwidth);
     void setAntennaEnable(bool enable);
 

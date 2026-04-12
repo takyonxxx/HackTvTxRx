@@ -58,6 +58,8 @@ public:
     void setTxAmpGain(unsigned int tx_amp_gain);
     void setRxAmpGain(unsigned int rx_amp_gain);
     void setAmpEnable(bool enable);
+    void setTxAmpEnable(bool enable);
+    void setRxAmpEnable(bool enable);
 
     // RTL-SDR specific
     void setFreqCorrection(int ppm);
@@ -65,8 +67,6 @@ public:
     void setOffsetTuning(bool enable);
 
     // External audio ring buffer for FM TX
-    // Call enableExternalAudioRing() AFTER start() in TX mode
-    // Then feed mono 44100Hz float audio via writeExternalAudio()
     void enableExternalAudioRing();
     void writeExternalAudio(const float* data, size_t count);
 

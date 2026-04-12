@@ -473,6 +473,13 @@ int HackRfDevice::start(rf_mode _mode)
             }
             fprintf(stderr, "hackrf_start_tx() ok\n");
             fflush(stderr);
+
+            // Force enable AMP for TX after streaming starts
+            if (m_ampEnable) {
+                hackrf_set_amp_enable(h_device, 1);
+                fprintf(stderr, "TX AMP force-enabled after start\n");
+                fflush(stderr);
+            }
         }
         else {
             fprintf(stderr, "Invalid mode specified: %d\n", mode);
@@ -936,4 +943,26 @@ void HackRfDevice::setAmpEnable(bool enable)
 void HackRfDevice::setDataCallback(DataCallback callback)
 {
     m_dataCallback = callback;
+}
+
+void HackRfDevice::setTxAmpEnable(bool enable)
+{
+    m_ampEnable = enable;
+    if (h_device && !m_isDestroying.load()) {
+        std::lock_guard<std::mutex> lock(*m_deviceMutex);
+        hackrf_set_amp_enable(h_device, enable ? 1 : 0);
+        fprintf(stderr, "HackRF TX amp set to: %d\n", enable ? 1 : 0);
+        fflush(stderr);
+    }
+}
+
+void HackRfDevice::setRxAmpEnable(bool enable)
+{
+    m_ampEnable = enable;
+    if (h_device && !m_isDestroying.load()) {
+        std::lock_guard<std::mutex> lock(*m_deviceMutex);
+        hackrf_set_amp_enable(h_device, enable ? 1 : 0);
+        fprintf(stderr, "HackRF RX amp set to: %d\n", enable ? 1 : 0);
+        fflush(stderr);
+    }
 }

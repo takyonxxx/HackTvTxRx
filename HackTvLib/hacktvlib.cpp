@@ -343,6 +343,26 @@ void HackTvLib::setFreqCorrection(int ppm)
     }
 }
 
+void HackTvLib::setTxAmpEnable(bool enable)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setTxAmpEnable(enable);
+    }
+    if (s) {
+        s->amp = enable ? 1 : 0;
+    }
+}
+
+void HackTvLib::setRxAmpEnable(bool enable)
+{
+    if (hackRfDevice) {
+        hackRfDevice->setRxAmpEnable(enable);
+    }
+    if (s) {
+        s->amp = enable ? 1 : 0;
+    }
+}
+
 void HackTvLib::setDirectSampling(int mode)
 {
     if (rtlSdrDevice) {
