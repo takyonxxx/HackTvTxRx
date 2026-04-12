@@ -44,6 +44,8 @@ SOURCES += \
     audiooutput.cpp \
     glplotter.cpp \
     freqctrl.cpp \
+    fmdemodulator.cpp \
+    amdemodulator.cpp \
     main.cpp \
     mainwindow.cpp \
     meter.cpp
@@ -53,6 +55,8 @@ HEADERS += \
     constants.h \
     glplotter.h \
     freqctrl.h \
+    fmdemodulator.h \
+    amdemodulator.h \
     mainwindow.h \
     meter.h \
     modulator.h

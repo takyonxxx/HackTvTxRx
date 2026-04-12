@@ -359,20 +359,20 @@ void MainWindow::addRxGroup()
     connect(rxGainSlider, &QSlider::valueChanged, [this](int v) {
         rxGain = v / 10.0f;
         rxGainLevelLabel->setText(QString::number(rxGain, 'f', 1));
-        if (wbfmDemodulator) wbfmDemodulator->setOutputGain(rxGain);
-        if (amDemodulator) amDemodulator->setOutputGain(rxGain);
+        if (fmDemodulator) fmDemodulator->setOutputGain(rxGain);
+
         saveSettings();
     });
     connect(rxModIndexSlider, &QSlider::valueChanged, [this](int v) {
         rxModIndex = v / 10.0f;
         rxModIndexLevelLabel->setText(QString::number(rxModIndex, 'f', 1));
-        if (wbfmDemodulator) wbfmDemodulator->setRxModIndex(rxModIndex);
+        if (fmDemodulator) fmDemodulator->setRxModIndex(rxModIndex);
         saveSettings();
     });
     connect(rxDeemphSlider, &QSlider::valueChanged, [this](int v) {
         rxDeemph = v;
         rxDeemphLevelLabel->setText(v == 0 ? "OFF" : QString("%1us").arg(v));
-        if (wbfmDemodulator) wbfmDemodulator->setDeemphTau(static_cast<float>(v));
+        if (fmDemodulator) fmDemodulator->setDeemphTau(static_cast<float>(v));
         saveSettings();
     });
 
@@ -605,12 +605,12 @@ void MainWindow::applyModePresets()
         sampleRateCombo->setCurrentIndex(0);
         break;
     case MODE_AM:
-        m_rxBandwidth = 10000;
-        lnaSlider->setValue(30); vgaSlider->setValue(20);
+        m_rxBandwidth = 10500;
+        lnaSlider->setValue(40); vgaSlider->setValue(20);
         rxGainSlider->setValue(10);       // 1.0
         rxModIndexSlider->setValue(10);
         rxDeemphSlider->setValue(0);
-        txAmplitudeSlider->setValue(50);
+        txAmplitudeSlider->setValue(25);  // 0.25 for AM
         txModIndexSlider->setValue(85);   // 0.85
         sampleRateCombo->setCurrentIndex(0);
         break;
@@ -633,7 +633,7 @@ void MainWindow::applyModePresets()
 
     // Update active demodulators if running
     if (m_isProcessing) {
-        if (wbfmDemodulator) wbfmDemodulator->setBandwidth(m_rxBandwidth);
+        if (fmDemodulator) fmDemodulator->setBandwidth(m_rxBandwidth);
         if (amDemodulator) amDemodulator->setBandwidth(m_rxBandwidth);
     }
 }
@@ -722,21 +722,21 @@ void MainWindow::startRx()
     // Create demodulators for RX
     if (!isTvTx) {
         amDemodulator.reset();
-        wbfmDemodulator.reset();
+        fmDemodulator.reset();
 
         if (m_opMode == MODE_AM) {
             amDemodulator = std::make_unique<AMDemodulator>(
                 static_cast<double>(m_sampleRate), static_cast<double>(m_rxBandwidth));
-            amDemodulator->setOutputGain(rxGain);
+
         } else {
             double fmBw = (m_opMode == MODE_WFM) ? 150000.0 : 12500.0;
-            wbfmDemodulator = std::make_unique<WBFMDemodulator>(
+            fmDemodulator = std::make_unique<FMDemodulator>(
                 static_cast<double>(m_sampleRate), fmBw);
-            wbfmDemodulator->setOutputGain(rxGain);
-            wbfmDemodulator->setRxModIndex(rxModIndex);
-            wbfmDemodulator->setDeemphTau(static_cast<float>(rxDeemph));
-            wbfmDemodulator->setForceMono(m_forceMono);
-            connect(wbfmDemodulator.get(), &WBFMDemodulator::stereoStatusChanged, this, [this](bool stereo) {
+            fmDemodulator->setOutputGain(rxGain);
+            fmDemodulator->setRxModIndex(rxModIndex);
+            fmDemodulator->setDeemphTau(static_cast<float>(rxDeemph));
+            fmDemodulator->setForceMono(m_forceMono);
+            connect(fmDemodulator.get(), &FMDemodulator::stereoStatusChanged, this, [this](bool stereo) {
                 if (m_forceMono) {
                     m_stereoLabel->setText("MONO");
                     m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #FF9900; }");
@@ -794,7 +794,7 @@ void MainWindow::stopAll()
         m_hackTvLib = nullptr;
     }
 
-    wbfmDemodulator.reset();
+    fmDemodulator.reset();
     amDemodulator.reset();
 
     startStopButton->setText("START");
@@ -998,18 +998,43 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
         std::vector<float> audio;
         if (m_opMode == MODE_AM && amDemodulator) {
             auto mono = amDemodulator->demodulate(samples);
-            // AM demod returns mono, duplicate to stereo
+            float amGain = rxGain;  // rxGain from slider
+
+            // Debug
+            static int dbgCnt = 0;
+            if (++dbgCnt >= 100) {
+                dbgCnt = 0;
+                float maxRaw = 0.0f, maxGained = 0.0f;
+                for (size_t i = 0; i < mono.size(); i++) {
+                    float a = std::fabs(mono[i]);
+                    if (a > maxRaw) maxRaw = a;
+                    float g = std::fabs(mono[i] * amGain);
+                    if (g > maxGained) maxGained = g;
+                }
+                qDebug("AM: samples=%zu maxRaw=%.4f amGain=%.2f maxGained=%.4f audioGain=%.2f",
+                       mono.size(), maxRaw, amGain, maxGained, audioGain);
+            }
+
+            // AM demod returns mono, duplicate to stereo with gain + soft clip
             audio.resize(mono.size() * 2);
             for (size_t i = 0; i < mono.size(); i++) {
-                audio[i*2] = mono[i];
-                audio[i*2+1] = mono[i];
+                float s = mono[i] * amGain;
+                if (s > 0.9f) s = 0.9f + 0.1f * std::tanh((s - 0.9f) * 8.0f);
+                else if (s < -0.9f) s = -0.9f + 0.1f * std::tanh((s + 0.9f) * 8.0f);
+                audio[i*2] = s;
+                audio[i*2+1] = s;
             }
-        } else if (wbfmDemodulator) {
-            audio = wbfmDemodulator->demodulate(samples);
+        } else if (fmDemodulator) {
+            audio = fmDemodulator->demodulate(samples);
         }
         if (!audio.empty()) {
-            for (auto& s : audio) s = std::clamp(s * audioGain, -0.9f, 0.9f);
-            audioOutput->enqueueAudio(std::move(audio));
+            // AM already has its own gain + soft clip, skip audioGain for AM
+            if (m_opMode == MODE_AM) {
+                audioOutput->enqueueAudio(std::move(audio));
+            } else {
+                for (auto& s : audio) s = std::clamp(s * audioGain, -0.9f, 0.9f);
+                audioOutput->enqueueAudio(std::move(audio));
+            }
         }
     } catch (const std::exception& e) {
         qCritical() << "Demod error:" << e.what();
@@ -1071,7 +1096,7 @@ void MainWindow::on_plotter_newFilterFreq(int low, int high)
     m_HiCutFreq = high;
     m_CutFreq = std::abs(high);
     m_rxBandwidth = m_CutFreq;
-    if (m_isProcessing && wbfmDemodulator) wbfmDemodulator->setBandwidth(m_CutFreq);
+    if (m_isProcessing && fmDemodulator) fmDemodulator->setBandwidth(m_CutFreq);
     if (m_isProcessing && amDemodulator) amDemodulator->setBandwidth(m_CutFreq);
     saveSettings();
 }
@@ -1083,7 +1108,7 @@ void MainWindow::onSampleRateChanged(int index)
     cPlotter->setSampleRate(m_sampleRate);
     cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
     if (m_isProcessing && m_hackTvLib) m_hackTvLib->setSampleRate(m_sampleRate);
-    if (wbfmDemodulator) wbfmDemodulator->setSampleRate(static_cast<double>(m_sampleRate));
+    if (fmDemodulator) fmDemodulator->setSampleRate(static_cast<double>(m_sampleRate));
     if (amDemodulator) amDemodulator->setSampleRate(static_cast<double>(m_sampleRate));
     saveSettings();
 }
@@ -1322,7 +1347,7 @@ void MainWindow::hardReset()
     }
     startStopButton->setEnabled(false);
     QTimer::singleShot(3000, this, [this]() { startStopButton->setEnabled(true); });
-    wbfmDemodulator.reset();
+    fmDemodulator.reset();
     amDemodulator.reset();
     startStopButton->setText("START");
     m_fftUpdatePending.storeRelease(0);
@@ -1413,12 +1438,12 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
     if (obj == m_stereoLabel && event->type() == QEvent::MouseButtonPress) {
         if (m_opMode == MODE_AM) return true;
         m_forceMono = !m_forceMono;
-        if (wbfmDemodulator) wbfmDemodulator->setForceMono(m_forceMono);
+        if (fmDemodulator) fmDemodulator->setForceMono(m_forceMono);
         if (m_forceMono) {
             m_stereoLabel->setText("MONO");
             m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #FF9900; }");
         } else {
-            bool st = wbfmDemodulator ? wbfmDemodulator->isStereo() : false;
+            bool st = fmDemodulator ? fmDemodulator->isStereo() : false;
             m_stereoLabel->setText(st ? "STEREO" : "");
         }
         return true;

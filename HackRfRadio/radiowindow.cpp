@@ -569,13 +569,15 @@ void RadioWindow::setupUi()
     // ──────────────────────────────────────────────
     // PTT BUTTON
     // ──────────────────────────────────────────────
-    m_pttButton = new QPushButton("PTT\nHold to Talk");
+    m_pttButton = new QPushButton("PTT\nPress to Talk");
     m_pttButton->setObjectName("pttButton");
     m_pttButton->setMinimumHeight(80);
     m_pttButton->setMaximumHeight(100);
     m_pttButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    connect(m_pttButton, &QPushButton::pressed, this, &RadioWindow::onPttPressed);
-    connect(m_pttButton, &QPushButton::released, this, &RadioWindow::onPttReleased);
+    m_pttButton->setCheckable(true);
+    connect(m_pttButton, &QPushButton::toggled, this, [this](bool checked) {
+        if (checked) onPttPressed(); else onPttReleased();
+    });
     mainLayout->addWidget(m_pttButton);
 
     // Add main page as index 0
@@ -890,6 +892,7 @@ void RadioWindow::onPttPressed()
     m_txRxIndicator->setStyleSheet(
         "font-size: 18px; font-weight: bold; color: #FF4444; "
         "background-color: #3A1A1A; border: 2px solid #FF4444; border-radius: 10px; padding: 8px;");
+    m_pttButton->setText("PTT\nON - Press to Stop");
     logMessage("PTT ON");
 }
 
@@ -907,6 +910,7 @@ void RadioWindow::onPttReleased()
     m_txRxIndicator->setStyleSheet(
         "font-size: 18px; font-weight: bold; color: #00FF66; "
         "background-color: #1A3A1A; border: 2px solid #00FF66; border-radius: 10px; padding: 8px;");
+    m_pttButton->setText("PTT\nPress to Talk");
     logMessage("PTT OFF");
 }
 
@@ -959,16 +963,18 @@ void RadioWindow::onAudioCaptured(const std::vector<float>& samples)
 
 void RadioWindow::keyPressEvent(QKeyEvent *event)
 {
-    if (event->key() == Qt::Key_Space && !event->isAutoRepeat() && !m_pttHeld) {
-        m_pttHeld = true; onPttPressed(); event->accept(); return;
+    if (event->key() == Qt::Key_Space && !event->isAutoRepeat()) {
+        // Toggle PTT button
+        if (m_pttButton) m_pttButton->toggle();
+        event->accept(); return;
     }
     QMainWindow::keyPressEvent(event);
 }
 
 void RadioWindow::keyReleaseEvent(QKeyEvent *event)
 {
-    if (event->key() == Qt::Key_Space && !event->isAutoRepeat() && m_pttHeld) {
-        m_pttHeld = false; onPttReleased(); event->accept(); return;
+    if (event->key() == Qt::Key_Space && !event->isAutoRepeat()) {
+        event->accept(); return;  // ignore release for toggle mode
     }
     QMainWindow::keyReleaseEvent(event);
 }
@@ -1057,7 +1063,7 @@ void RadioWindow::onModulationChanged(int index)
         if (m_gainDialog) {
             m_gainDialog->setIfBandwidth(21);
             // TX presets (NOT blocked — must reach server)
-            m_gainDialog->setAmplitude(50);    // 0.50 carrier level
+            m_gainDialog->setAmplitude(25);    // 0.25 carrier level for AM
             m_gainDialog->setModIndex(85);     // 0.85 = %85 modulation depth
             // RX presets - AM airband optimized
             m_gainDialog->blockSignals(true);

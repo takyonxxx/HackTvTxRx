@@ -32,6 +32,8 @@
 #include "meter.h"
 #include "audiooutput.h"
 #include "modulator.h"
+#include "fmdemodulator.h"
+#include "amdemodulator.h"
 
 class MainWindow : public QMainWindow
 {
@@ -171,10 +173,7 @@ private:
     QAtomicInt m_fftUpdatePending{0};
 
     // Demod
-    std::unique_ptr<LowPassFilter> lowPassFilter;
-    std::unique_ptr<RationalResampler> rationalResampler;
     std::unique_ptr<FMDemodulator> fmDemodulator;
-    std::unique_ptr<WBFMDemodulator> wbfmDemodulator;
     std::unique_ptr<AMDemodulator> amDemodulator;
 
     // Mic capture
