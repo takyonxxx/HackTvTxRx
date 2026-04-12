@@ -1036,8 +1036,8 @@ void RadioWindow::onModulationChanged(int index)
         if (m_gainDialog) {
             m_gainDialog->setIfBandwidth(163);
             // TX presets (NOT blocked — must reach server)
-            m_gainDialog->setAmplitude(50);
-            m_gainDialog->setModIndex(40);
+            m_gainDialog->setAmplitude(50);    // 0.50
+            m_gainDialog->setModIndex(100);    // 1.00
             // RX presets (blocked — only local)
             m_gainDialog->blockSignals(true);
             m_gainDialog->setVgaGain(20);
@@ -1064,7 +1064,7 @@ void RadioWindow::onModulationChanged(int index)
             m_gainDialog->setIfBandwidth(21);
             // TX presets (NOT blocked — must reach server)
             m_gainDialog->setAmplitude(25);    // 0.25 carrier level for AM
-            m_gainDialog->setModIndex(85);     // 0.85 = %85 modulation depth
+            m_gainDialog->setModIndex(200);    // 2.0 modulation depth
             // RX presets - AM airband optimized
             m_gainDialog->blockSignals(true);
             m_gainDialog->setVgaGain(20);
