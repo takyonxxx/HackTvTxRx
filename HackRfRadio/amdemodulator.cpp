@@ -144,33 +144,24 @@ void AMDemodulator::rebuildChain()
     }
 }
 
-// AM Demodulation — SDRangel style
-// 1. Envelope detection (magnitude)
-// 2. Combined AGC + DC removal: (demod - avg) / avg
+// AM Demodulation — simple envelope detection
+// No AGC - just magnitude, DC removal, fixed gain
 std::vector<float> AMDemodulator::amDemod(const std::vector<std::complex<float>>& signal)
 {
     if (signal.empty()) return {};
     const size_t n = signal.size();
     std::vector<float> out(n);
 
-    // SDRangel volumeAGC rate = 0.003
-    const float agcRate = 0.003f;
-
     for (size_t i = 0; i < n; i++) {
-        // 1. Envelope detection
-        float demod = std::sqrt(signal[i].real() * signal[i].real() +
-                                signal[i].imag() * signal[i].imag());
+        // Envelope detection
+        float mag = std::sqrt(signal[i].real() * signal[i].real() +
+                              signal[i].imag() * signal[i].imag());
 
-        // 2. AGC tracks carrier level (slow moving average)
-        m_agcAmp += agcRate * (demod - m_agcAmp);
+        // DC blocker - track carrier level
+        m_dcOffset += (mag - m_dcOffset) * 0.001f;
 
-        // 3. DC removal + normalization in one step
-        // This removes carrier and normalizes by carrier amplitude
-        if (m_agcAmp > 1e-6f) {
-            out[i] = (demod - m_agcAmp) / m_agcAmp;
-        } else {
-            out[i] = 0.0f;
-        }
+        // Remove carrier, keep modulation
+        out[i] = mag - m_dcOffset;
     }
 
     return out;
