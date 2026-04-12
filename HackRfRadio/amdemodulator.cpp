@@ -144,24 +144,42 @@ void AMDemodulator::rebuildChain()
     }
 }
 
-// AM Demodulation — simple envelope detection
-// No AGC - just magnitude, DC removal, fixed gain
+// AM Demodulation — SDR++ style
+// Two modes: CARRIER AGC (AGC on IQ before demod) or AUDIO AGC (AGC on audio after demod)
+// SDR++ uses carrier AGC by default for AM
+// Flow: IQ AGC → magnitude → DC block → LPF
 std::vector<float> AMDemodulator::amDemod(const std::vector<std::complex<float>>& signal)
 {
     if (signal.empty()) return {};
     const size_t n = signal.size();
     std::vector<float> out(n);
 
+    // SDR++ carrier AGC parameters
+    const float agcRate = 0.003f;
+
+    // 1. Carrier AGC - normalize IQ amplitude BEFORE envelope detection
+    // This keeps the carrier at constant level, preserving modulation depth
     for (size_t i = 0; i < n; i++) {
-        // Envelope detection
         float mag = std::sqrt(signal[i].real() * signal[i].real() +
                               signal[i].imag() * signal[i].imag());
 
-        // DC blocker - track carrier level
-        m_dcOffset += (mag - m_dcOffset) * 0.001f;
+        // Track carrier amplitude
+        m_agcAmp += agcRate * (mag - m_agcAmp);
 
-        // Remove carrier, keep modulation
-        out[i] = mag - m_dcOffset;
+        float gain = (m_agcAmp > 1e-6f) ? (1.0f / m_agcAmp) : 1.0f;
+
+        // Apply AGC to IQ, then take magnitude
+        float normI = signal[i].real() * gain;
+        float normQ = signal[i].imag() * gain;
+        out[i] = std::sqrt(normI * normI + normQ * normQ);
+    }
+
+    // 2. DC blocker - remove the now-normalized carrier (which is ~1.0)
+    for (size_t i = 0; i < n; i++) {
+        float x = out[i];
+        float y = x - m_dcOffset;
+        m_dcOffset += y * 0.001f;
+        out[i] = y;
     }
 
     return out;

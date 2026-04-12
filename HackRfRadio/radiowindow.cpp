@@ -837,27 +837,13 @@ void RadioWindow::processIqBuffer()
         break;
     case AM: {
         auto mono = m_amDemod->demodulate(samples);
-        // rxGain slider: 1-1000, /100 = 0.01-10.0
-        // multiply by 200 base gain (envelope output is small without AGC)
-        float amGain = m_gainDialog ? (m_gainDialog->rxGain() / 100.0f) * 200.0f : 200.0f;
-
-        // Debug
-        float maxVal = 0.0f;
-        for (size_t i = 0; i < mono.size(); i++) {
-            float a = std::fabs(mono[i]);
-            if (a > maxVal) maxVal = a;
-        }
-        static int dc = 0;
-        if (++dc >= 50) {
-            dc = 0;
-            qDebug("AM: samples=%zu max=%.6f gain=%.1f out=%.4f", mono.size(), maxVal, amGain, maxVal * amGain);
-        }
+        float amGain = m_gainDialog ? (m_gainDialog->rxGain() / 1000.0f) : 0.4f;
 
         audio.resize(mono.size() * 2);
         for (size_t i = 0; i < mono.size(); i++) {
             float s = mono[i] * amGain;
-            if (s > 0.9f) s = 0.9f;
-            else if (s < -0.9f) s = -0.9f;
+            if (s > 0.9f) s = 0.9f + 0.1f * std::tanh((s - 0.9f) * 8.0f);
+            else if (s < -0.9f) s = -0.9f + 0.1f * std::tanh((s + 0.9f) * 8.0f);
             audio[i * 2]     = s;
             audio[i * 2 + 1] = s;
         }
