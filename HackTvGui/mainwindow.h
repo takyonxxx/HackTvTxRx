@@ -22,6 +22,7 @@
 #include <QAudioDevice>
 #include <QLabel>
 #include <QKeyEvent>
+#include <QTcpSocket>
 
 #include <memory>
 #include <vector>
@@ -88,19 +89,23 @@ private:
     void switchToTx();
     void switchToRx();
     void applyModePresets();
+    void applyModeTheme();
 
     QVBoxLayout *mainLayout;
 
     // Device group
     QComboBox *outputCombo, *sampleRateCombo;
     QCheckBox *ampEnabled;
+    QCheckBox *stereoEnabled;
+    QLineEdit *tcpAddressEdit;
+    QLabel *tcpAddressLabel;
 
     // Operating mode
     // 0=NFM Radio, 1=WFM Radio, 2=AM Radio, 3=FM File TX, 4=TV File TX, 5=TV Test TX, 6=TV RTSP TX
     QComboBox *operatingModeCombo;
     enum OperatingMode { MODE_NFM=0, MODE_WFM=1, MODE_AM=2, MODE_FM_FILE=3,
                          MODE_TV_FILE=4, MODE_TV_TEST=5, MODE_TV_RTSP=6 };
-    int m_opMode = MODE_NFM;
+    int m_opMode = MODE_WFM;
 
     // RX group
     CFreqCtrl *freqCtrl;
@@ -196,6 +201,25 @@ private:
 
     QFileDialog *fileDialog;
     QString labelStyle;
+    QGroupBox *deviceGroup;
+    QString m_modeAccentColor;
+    QString m_modeAccentDark;
+
+    // TCP client for emulator mode
+    bool isTcpMode() const {
+        QString dev = outputCombo->currentData().toString();
+        return (dev == "hackrftcp" || dev == "rtlsdrtcp");
+    }
+    bool isRtlTcpMode() const { return outputCombo->currentData().toString() == "rtlsdrtcp"; }
+    void startTcpRx();
+    void stopTcpRx();
+    void sendTcpCommand(const QString& cmd);
+
+    QTcpSocket *m_tcpDataSocket = nullptr;
+    QTcpSocket *m_tcpCtrlSocket = nullptr;
+    QTcpSocket *m_tcpAudioSocket = nullptr;
+    QByteArray m_tcpBuffer;
+    bool m_tcpConnected = false;
 };
 
 #endif // MAINWINDOW_H

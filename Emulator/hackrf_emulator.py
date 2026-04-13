@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-HackRF TCP Emulator v5 - MP3 Radio Broadcast + Space Noise
+HackRF TCP Emulator v8 - Stereo FM Broadcast + NFM + AM + Space Noise
 Only requires: pip install numpy
 
-MP3 decoding attempts (in order):
-  1. pydub (if installed)
-  2. ffmpeg from MSYS2 paths or script directory
-  3. Windows powershell MediaPlayer decode
-  4. WAV file fallback (put FaithlessInsomnia.wav in same dir)
-  5. 440Hz tone fallback
+Features:
+  - WFM stereo broadcast with 19kHz pilot + 38kHz L-R subcarrier (real MPX)
+  - NFM voice radio (300-3kHz BPF, pre-emphasis)
+  - AM airband (DSB-FC, 300-3kHz BPF)
+  - Space noise on empty frequencies
+  - TCP protocol compatible with HackTvLib hackrftcp mode
 
 Place FaithlessInsomnia.mp3 (or .wav) in the same directory as this script.
 """
@@ -21,11 +21,11 @@ except ImportError:
     print("ERROR: numpy required. pip install numpy"); sys.exit(1)
 
 # ============================================================
-# Audio Loader - tries multiple methods
+# Audio Loader
 # ============================================================
 
 def load_wav(filepath):
-    """Load WAV file using Python's wave module (no dependencies)."""
+    """Load WAV file using Python's wave module."""
     import wave
     try:
         with wave.open(filepath, 'rb') as wf:
@@ -42,29 +42,34 @@ def load_wav(filepath):
         elif sw == 4:
             data = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
         else:
-            return None
+            return None, 1
 
-        # Mix to mono
-        if nch > 1:
-            data = data.reshape(-1, nch).mean(axis=1)
-
-        # Resample to 48kHz if needed
-        if fr != 48000:
-            old_len = len(data)
-            new_len = int(old_len * 48000 / fr)
-            data = np.interp(np.linspace(0, old_len - 1, new_len), np.arange(old_len), data)
-
-        return data.astype(np.float32)
+        # Keep stereo if available for WFM stereo broadcast
+        if nch == 2:
+            left = data[0::2]
+            right = data[1::2]
+            # Resample both channels to 48kHz
+            if fr != 48000:
+                old_len = len(left)
+                new_len = int(old_len * 48000 / fr)
+                left = np.interp(np.linspace(0, old_len - 1, new_len), np.arange(old_len), left).astype(np.float32)
+                right = np.interp(np.linspace(0, old_len - 1, new_len), np.arange(old_len), right).astype(np.float32)
+            return np.column_stack([left, right]).astype(np.float32), 2
+        else:
+            if fr != 48000:
+                old_len = len(data)
+                new_len = int(old_len * 48000 / fr)
+                data = np.interp(np.linspace(0, old_len - 1, new_len), np.arange(old_len), data)
+            return data.astype(np.float32), 1
     except Exception as e:
         print(f"    WAV load failed: {e}")
-        return None
+        return None, 1
 
 
 def load_audio(mp3_path=None):
-    """Try multiple methods to load audio. Returns float32 mono samples at 48kHz."""
+    """Try to load audio. Returns (samples, num_channels)."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # Find the audio file
     candidates = []
     if mp3_path:
         candidates.append(mp3_path)
@@ -81,36 +86,47 @@ def load_audio(mp3_path=None):
             print(f"  Found audio: {mp3_file}")
             break
 
-    if mp3_file is None:
-        # Try WAV fallback
-        wav_candidates = [
-            os.path.join(script_dir, 'FaithlessInsomnia.wav'),
-            os.path.join(script_dir, 'faithlessinsomnia.wav'),
-            'FaithlessInsomnia.wav',
-        ]
-        for w in wav_candidates:
-            if os.path.exists(w):
-                print(f"  Found WAV: {w}")
-                samples = load_wav(w)
-                if samples is not None:
-                    print(f"  Loaded WAV: {len(samples)} samples, {len(samples)/48000:.1f}s")
-                    return samples
-        print("  No audio file found")
-        return None
+    # Try WAV first (preserves stereo)
+    wav_candidates = []
+    if mp3_file:
+        wav_candidates.append(mp3_file.rsplit('.', 1)[0] + '.wav')
+    wav_candidates += [
+        os.path.join(script_dir, 'FaithlessInsomnia.wav'),
+        os.path.join(script_dir, 'faithlessinsomnia.wav'),
+        'FaithlessInsomnia.wav',
+    ]
+    for w in wav_candidates:
+        if os.path.exists(w):
+            print(f"  Found WAV: {w}")
+            samples, nch = load_wav(w)
+            if samples is not None:
+                dur = len(samples) // nch if nch == 1 else len(samples)
+                print(f"  Loaded WAV: {dur}/48000={dur/48000:.1f}s, {nch}ch")
+                return samples, nch
 
-    # Method 1: pydub
+    if mp3_file is None:
+        print("  No audio file found")
+        return None, 1
+
+    # Method: pydub
     try:
         from pydub import AudioSegment
         audio = AudioSegment.from_mp3(mp3_file)
-        audio = audio.set_frame_rate(48000).set_channels(1).set_sample_width(2)
-        raw = np.frombuffer(audio.raw_data, dtype=np.int16)
-        samples = raw.astype(np.float32) / 32768.0
-        print(f"  Loaded via pydub: {len(samples)/48000:.1f}s")
-        return samples
+        # Keep stereo for WFM
+        nch = audio.channels
+        audio = audio.set_frame_rate(48000).set_sample_width(2)
+        raw = np.frombuffer(audio.raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+        if nch == 2:
+            left = raw[0::2]; right = raw[1::2]
+            samples = np.column_stack([left, right]).astype(np.float32)
+        else:
+            samples = raw.astype(np.float32)
+        print(f"  Loaded via pydub: {len(samples)//nch/48000:.1f}s, {nch}ch")
+        return samples, nch
     except Exception as e:
         print(f"  pydub: {e}")
 
-    # Method 2: ffmpeg from various paths
+    # Method: ffmpeg (stereo preserved)
     import subprocess
     ffmpeg_paths = [
         os.path.join(script_dir, 'ffmpeg.exe'),
@@ -122,85 +138,48 @@ def load_audio(mp3_path=None):
     for fp in ffmpeg_paths:
         try:
             r = subprocess.run([fp, '-i', mp3_file, '-f', 's16le', '-acodec', 'pcm_s16le',
-                                '-ac', '1', '-ar', '48000', '-v', 'quiet', '-'],
+                                '-ac', '2', '-ar', '48000', '-v', 'quiet', '-'],
                                capture_output=True, timeout=120)
             if r.returncode == 0 and len(r.stdout) > 1000:
-                samples = np.frombuffer(r.stdout, dtype=np.int16).astype(np.float32) / 32768.0
-                print(f"  Loaded via ffmpeg ({fp}): {len(samples)/48000:.1f}s")
-                return samples
+                raw = np.frombuffer(r.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+                left = raw[0::2]; right = raw[1::2]
+                samples = np.column_stack([left, right]).astype(np.float32)
+                print(f"  Loaded via ffmpeg ({fp}): {len(left)/48000:.1f}s, 2ch")
+                return samples, 2
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
-        except Exception:
-            continue
-    print("  ffmpeg: not found")
-
-    # Method 3: PowerShell + .NET MediaFoundation decode to WAV then read
-    try:
-        wav_tmp = os.path.join(script_dir, '_temp_decoded.wav')
-        ps_script = f'''
-Add-Type -AssemblyName PresentationCore
-$player = New-Object System.Windows.Media.MediaPlayer
-$player.Open([System.Uri]::new("{os.path.abspath(mp3_file)}"))
-Start-Sleep -Milliseconds 500
-$duration = $player.NaturalDuration.TimeSpan.TotalSeconds
-$player.Close()
-
-# Use NAudio-like approach with .NET
-[System.Reflection.Assembly]::LoadWithPartialName("WindowsBase") | Out-Null
-$src = New-Object System.Uri("{os.path.abspath(mp3_file)}")
-# Simple approach: use ffmpeg from Windows Store or just output silence marker
-"DURATION:$duration"
-'''
-        # This is too complex, skip
-        raise Exception("PowerShell method not reliable")
-    except Exception:
-        pass
-
-    # Method 4: Try reading as WAV (maybe user already converted)
-    wav_path = mp3_file.rsplit('.', 1)[0] + '.wav'
-    if os.path.exists(wav_path):
-        samples = load_wav(wav_path)
-        if samples is not None:
-            print(f"  Loaded WAV fallback: {len(samples)/48000:.1f}s")
-            return samples
 
     print("  All decode methods failed.")
-    print("  TIP: Convert MP3 to WAV manually and place in same directory:")
-    print(f"       FaithlessInsomnia.wav (16-bit, any sample rate)")
-    return None
+    return None, 1
 
 
 # ============================================================
-# Broadcast config — each station emulates a real radio transmitter
+# Broadcast config
 # ============================================================
 
-# NFM stations (PMR/Amateur — real handheld telsiz)
-# Real NFM: 300Hz-3kHz voice band, 50µs pre-emphasis, max deviation ±2.5kHz (12.5kHz ch)
+# NFM stations (PMR/Amateur)
 FM_NFM_FREQS = [145000000, 446000000]
-NFM_DEVIATION = 2500       # ±2.5 kHz max deviation (12.5kHz channel)
-NFM_AUDIO_LOW  = 300.0     # Hz — voice HPF
-NFM_AUDIO_HIGH = 3000.0    # Hz — voice LPF
-NFM_PREEMPH_TAU = 50e-6    # 50µs pre-emphasis (European standard)
+NFM_DEVIATION = 2500
+NFM_AUDIO_LOW  = 300.0
+NFM_AUDIO_HIGH = 3000.0
+NFM_PREEMPH_TAU = 50e-6
 
-# WFM station (FM broadcast radio)
-# Real WFM: 30Hz-15kHz audio, 50µs pre-emphasis (EUR) or 75µs (US), ±75kHz deviation
+# WFM station (FM broadcast — STEREO)
 FM_WFM_FREQS = [100000000]
-WFM_DEVIATION = 75000      # ±75 kHz max deviation
-WFM_AUDIO_HIGH = 15000.0   # Hz — broadcast audio max
-WFM_PREEMPH_TAU = 50e-6    # 50µs pre-emphasis (European)
+WFM_DEVIATION = 75000
+WFM_AUDIO_HIGH = 15000.0
+WFM_PREEMPH_TAU = 50e-6
+WFM_PILOT_FREQ = 19000.0       # 19 kHz pilot tone
+WFM_PILOT_LEVEL = 0.08         # ~8% of total deviation (standard is 8-10%)
 
-# Combined FM list
 FM_BROADCAST_FREQS = FM_NFM_FREQS + FM_WFM_FREQS
 
-# AM stations (airband — real aviation telsiz)
-# ETSI EN 300 676-1: DSB-FC (A3E), 300Hz-3kHz voice, 8.33kHz channel
-AM_BROADCAST_FREQS = [119100000]  # 119.100 MHz airband
-AM_MODULATION_DEPTH = 0.50  # 50% modulation depth
+# AM stations (airband)
+AM_BROADCAST_FREQS = [119100000]
+AM_MODULATION_DEPTH = 0.50
 AIRBAND_AUDIO_LOW  = 300.0
 AIRBAND_AUDIO_HIGH = 3000.0
-AIRBAND_CHANNEL_BW = 8330   # 8.33 kHz (ICAO EUR)
 
-# Combined list for range checks
 ALL_BROADCAST_FREQS = FM_BROADCAST_FREQS + AM_BROADCAST_FREQS
 
 
@@ -211,7 +190,7 @@ class HackRFEmulator:
         self.audio_port = audio_port
         self.mp3_path = mp3_path
 
-        self.frequency = 145000000
+        self.frequency = 100000000   # Default to WFM station
         self.sample_rate = 2000000
         self.vga_gain = 40
         self.lna_gain = 40
@@ -220,32 +199,30 @@ class HackRFEmulator:
         self.amp_enable = False
         self.modulation_index = 0.40
         self.amplitude = 0.10
-        self.modulation_type = 0  # 0=NFM, 1=WFM, 2=AM (from client)
+        self.modulation_type = 0
         self.is_tx_mode = False
 
-        self.chunk_samples = 32768  # larger chunks for smoother streaming
+        self.chunk_samples = 32768
         self.sample_counter = 0
 
         self.mp3_samples = None
+        self.mp3_channels = 1
         self.audio_pos = {}
         self.audio_rate = 48000
 
-        # Pre-compute airband bandpass filter (300Hz-3kHz at 48kHz sample rate)
+        # Filters
         self.airband_bp_taps = self._design_bandpass(
             AIRBAND_AUDIO_LOW, AIRBAND_AUDIO_HIGH, self.audio_rate, num_taps=127)
-        self.airband_bp_state = {}  # per-station filter delay line
-
-        # Pre-compute NFM voice bandpass filter (300Hz-3kHz at 48kHz)
+        self.airband_bp_state = {}
         self.nfm_bp_taps = self._design_bandpass(
             NFM_AUDIO_LOW, NFM_AUDIO_HIGH, self.audio_rate, num_taps=127)
         self.nfm_bp_state = {}
-
-        # Pre-compute WFM audio lowpass filter (15kHz at 48kHz)
         self.wfm_lp_taps = self._design_lowpass(WFM_AUDIO_HIGH, self.audio_rate, num_taps=63)
         self.wfm_lp_state = {}
+        self.preemph_state = {}
 
-        # Pre-emphasis filter state (per-station)
-        self.preemph_state = {}  # stores previous sample for each station
+        # WFM stereo pilot phase (continuous across chunks)
+        self.pilot_phase = {}
 
         self.tx_audio_buffer = bytearray()
         self.tx_audio_lock = threading.Lock()
@@ -256,93 +233,80 @@ class HackRFEmulator:
         self.audio_clients = []
         self.data_lock = threading.Lock()
         self.total_bytes_sent = 0
-
-        # Pre-buffer queue for smooth streaming
         self.iq_queue = queue.Queue(maxsize=8)
 
-    def _get_audio_chunk(self, station_freq, num_samples):
+    # ── Audio ──
+
+    def _get_audio_chunk_stereo(self, station_freq, num_samples):
+        """Return (left, right) arrays. If mono source, returns identical L/R."""
         if self.mp3_samples is None:
-            # 440Hz fallback
             if station_freq not in self.audio_pos:
                 self.audio_pos[station_freq] = 0.0
             ph = self.audio_pos[station_freq]
             t = ph + np.arange(num_samples, dtype=np.float64) * (2*np.pi*440/self.audio_rate)
             self.audio_pos[station_freq] = float(t[-1]) % (2*np.pi)
-            return np.sin(t).astype(np.float32)
+            mono = np.sin(t).astype(np.float32)
+            return mono, mono.copy()
 
         if station_freq not in self.audio_pos:
-            self.audio_pos[station_freq] = hash(station_freq) % max(1, len(self.mp3_samples)//3)
+            total = len(self.mp3_samples) if self.mp3_channels == 1 else len(self.mp3_samples)
+            self.audio_pos[station_freq] = hash(station_freq) % max(1, total // 3)
 
         pos = self.audio_pos[station_freq]
-        total = len(self.mp3_samples)
-        chunk = np.zeros(num_samples, dtype=np.float32)
-        rem = num_samples; wp = 0
-        while rem > 0:
-            take = min(rem, total - pos)
-            chunk[wp:wp+take] = self.mp3_samples[pos:pos+take]
-            wp += take; rem -= take; pos += take
-            if pos >= total: pos = 0
-        self.audio_pos[station_freq] = pos
-        return chunk
+
+        if self.mp3_channels == 2:
+            total = len(self.mp3_samples)  # rows
+            left = np.zeros(num_samples, dtype=np.float32)
+            right = np.zeros(num_samples, dtype=np.float32)
+            rem = num_samples; wp = 0
+            while rem > 0:
+                take = min(rem, total - pos)
+                left[wp:wp+take] = self.mp3_samples[pos:pos+take, 0]
+                right[wp:wp+take] = self.mp3_samples[pos:pos+take, 1]
+                wp += take; rem -= take; pos += take
+                if pos >= total: pos = 0
+            self.audio_pos[station_freq] = pos
+            return left, right
+        else:
+            total = len(self.mp3_samples)
+            chunk = np.zeros(num_samples, dtype=np.float32)
+            rem = num_samples; wp = 0
+            while rem > 0:
+                take = min(rem, total - pos)
+                chunk[wp:wp+take] = self.mp3_samples[pos:pos+take]
+                wp += take; rem -= take; pos += take
+                if pos >= total: pos = 0
+            self.audio_pos[station_freq] = pos
+            return chunk, chunk.copy()
+
+    def _get_audio_chunk_mono(self, station_freq, num_samples):
+        """Return mono audio chunk."""
+        left, _ = self._get_audio_chunk_stereo(station_freq, num_samples)
+        return left
+
+    # ── Filters ──
 
     @staticmethod
     def _design_bandpass(f_low, f_high, fs, num_taps=127):
-        """Design a FIR bandpass filter using windowed-sinc method (Hamming).
-        300Hz-3kHz bandpass for airband voice channel simulation."""
         n = np.arange(num_taps)
         M = num_taps // 2
-        # Low-pass at f_high
         fc_hi = f_high / fs
         h_hi = np.where(n == M, 2*fc_hi,
                         np.sin(2*np.pi*fc_hi*(n - M)) / (np.pi*(n - M)))
-        # Low-pass at f_low
         fc_lo = f_low / fs
         h_lo = np.where(n == M, 2*fc_lo,
                         np.sin(2*np.pi*fc_lo*(n - M)) / (np.pi*(n - M)))
-        # Bandpass = HPF(f_low) via spectral inversion of LPF
         h_bp = h_hi - h_lo
-        # Hamming window
         w = 0.54 - 0.46 * np.cos(2*np.pi*n / (num_taps - 1))
         h_bp *= w
-        # Normalize passband gain to 1.0
-        # Evaluate gain at center of passband
         f_center = (f_low + f_high) / 2.0
         omega = 2 * np.pi * f_center / fs
         gain = np.abs(np.sum(h_bp * np.exp(-1j * omega * n)))
-        if gain > 0:
-            h_bp /= gain
+        if gain > 0: h_bp /= gain
         return h_bp.astype(np.float64)
-
-    def _apply_airband_filter(self, audio, station_freq):
-        """Apply 300Hz-3kHz bandpass filter with persistent state per station."""
-        key = f"bp_{station_freq}"
-        taps = self.airband_bp_taps
-        ntaps = len(taps)
-
-        # Get or create delay line
-        if key not in self.airband_bp_state:
-            self.airband_bp_state[key] = np.zeros(ntaps - 1, dtype=np.float64)
-        delay = self.airband_bp_state[key]
-
-        # Prepend delay line for overlap-save convolution
-        extended = np.concatenate([delay, audio.astype(np.float64)])
-        out = np.zeros(len(audio), dtype=np.float64)
-        for i in range(len(audio)):
-            out[i] = np.dot(taps, extended[i:i+ntaps])
-
-        # Save tail for next call
-        if len(audio) >= ntaps - 1:
-            self.airband_bp_state[key] = audio[-(ntaps-1):].astype(np.float64)
-        else:
-            keep = (ntaps - 1) - len(audio)
-            self.airband_bp_state[key] = np.concatenate([
-                delay[-keep:], audio.astype(np.float64)])
-
-        return out.astype(np.float32)
 
     @staticmethod
     def _design_lowpass(f_cutoff, fs, num_taps=63):
-        """Design a FIR lowpass filter using windowed-sinc (Hamming)."""
         n = np.arange(num_taps)
         M = num_taps // 2
         fc = f_cutoff / fs
@@ -351,44 +315,30 @@ class HackRFEmulator:
         w = 0.54 - 0.46 * np.cos(2*np.pi*n / (num_taps - 1))
         h *= w
         s = np.sum(h)
-        if s > 0:
-            h /= s
+        if s > 0: h /= s
         return h.astype(np.float64)
 
     def _apply_fir_filter(self, audio, taps, state_dict, station_freq, prefix="fir"):
-        """Apply FIR filter with persistent state per station."""
         key = f"{prefix}_{station_freq}"
         ntaps = len(taps)
-
         if key not in state_dict:
             state_dict[key] = np.zeros(ntaps - 1, dtype=np.float64)
         delay = state_dict[key]
-
         extended = np.concatenate([delay, audio.astype(np.float64)])
         out = np.zeros(len(audio), dtype=np.float64)
         for i in range(len(audio)):
             out[i] = np.dot(taps, extended[i:i+ntaps])
-
         if len(audio) >= ntaps - 1:
             state_dict[key] = audio[-(ntaps-1):].astype(np.float64)
         else:
             keep = (ntaps - 1) - len(audio)
-            state_dict[key] = np.concatenate([
-                delay[-keep:], audio.astype(np.float64)])
-
+            state_dict[key] = np.concatenate([delay[-keep:], audio.astype(np.float64)])
         return out.astype(np.float32)
 
-    def _apply_preemphasis(self, audio, tau, station_freq):
-        """Apply FM pre-emphasis filter: H(s) = 1 + s*tau
-        Discrete: y[n] = x[n] - alpha * x[n-1], where alpha = 1/(1 + 2*pi*tau*fs)
-        This boosts high frequencies like a real FM transmitter."""
-        key = f"preemph_{station_freq}"
+    def _apply_preemphasis(self, audio, tau, station_freq, suffix=""):
+        key = f"preemph_{station_freq}{suffix}"
         if key not in self.preemph_state:
             self.preemph_state[key] = 0.0
-
-        # Pre-emphasis: first-order high-shelf
-        # y[n] = x[n] + alpha * (x[n] - x[n-1])
-        # alpha = tau * fs (time constant × sample rate)
         alpha = tau * self.audio_rate
         prev = self.preemph_state[key]
         out = np.zeros_like(audio)
@@ -396,27 +346,78 @@ class HackRFEmulator:
             out[i] = audio[i] + alpha * (audio[i] - prev)
             prev = audio[i]
         self.preemph_state[key] = float(prev)
-
-        # Normalize to prevent clipping from boost
         peak = np.max(np.abs(out))
-        if peak > 0.95:
-            out *= 0.95 / peak
-
+        if peak > 0.95: out *= 0.95 / peak
         return out
+
+    # ── WFM Stereo MPX Signal Generation ──
+
+    def _generate_wfm_mpx(self, bf, num_iq_samples, dt):
+        """Generate stereo FM MPX baseband signal.
+
+        MPX composite signal:
+          mpx(t) = (L+R)/2                           (mono, 30Hz-15kHz)
+                 + pilot * sin(2π·19kHz·t)            (pilot tone)
+                 + (L-R)/2 * sin(2π·38kHz·t)          (stereo difference on DSB-SC subcarrier)
+
+        This is the standard FM stereo broadcast format per ITU-R BS.450.
+        """
+        dur = num_iq_samples * dt
+        na = int(dur * self.audio_rate) + 1
+
+        left, right = self._get_audio_chunk_stereo(bf, na)
+
+        # LPF both channels at 15kHz
+        left = self._apply_fir_filter(left, self.wfm_lp_taps,
+                                      self.wfm_lp_state, bf, "wfm_lp_L")
+        right = self._apply_fir_filter(right, self.wfm_lp_taps,
+                                       self.wfm_lp_state, bf, "wfm_lp_R")
+
+        # Pre-emphasis on each channel separately
+        left = self._apply_preemphasis(left, WFM_PREEMPH_TAU, bf, "_L")
+        right = self._apply_preemphasis(right, WFM_PREEMPH_TAU, bf, "_R")
+
+        # L+R (mono sum) and L-R (stereo difference)
+        mono = (left + right) * 0.5
+        diff = (left - right) * 0.5
+
+        # Resample to IQ sample rate
+        mono_r = np.interp(np.linspace(0, len(mono)-1, num_iq_samples),
+                           np.arange(len(mono)), mono)
+        diff_r = np.interp(np.linspace(0, len(diff)-1, num_iq_samples),
+                           np.arange(len(diff)), diff)
+
+        # Generate pilot tone and 38kHz subcarrier (phase-coherent)
+        key_pilot = f"pilot_{bf}"
+        if key_pilot not in self.pilot_phase:
+            self.pilot_phase[key_pilot] = 0.0
+
+        pilot_start = self.pilot_phase[key_pilot]
+        t_idx = np.arange(num_iq_samples, dtype=np.float64)
+        pilot_phase_arr = pilot_start + 2 * np.pi * WFM_PILOT_FREQ * t_idx * dt
+        self.pilot_phase[key_pilot] = float(pilot_phase_arr[-1]) % (2 * np.pi * 1000)
+
+        pilot = WFM_PILOT_LEVEL * np.sin(pilot_phase_arr)
+        subcarrier = np.sin(2.0 * pilot_phase_arr)  # 38kHz = 2 × 19kHz
+
+        # MPX composite: mono + pilot + stereo_diff*subcarrier
+        # Levels: mono ~90% deviation, pilot ~8%, stereo diff ~45%
+        mpx = 0.45 * mono_r + pilot + 0.45 * diff_r * subcarrier
+
+        return mpx
+
+    # ── Noise ──
 
     def _space_noise(self, n, fs):
         t = (self.sample_counter + np.arange(n, dtype=np.float64)) / fs
-        # Whistler sweep
         sw1 = np.sin(2*np.pi * 800 * np.sin(2*np.pi*0.3*t) * t) * 0.15
         sw2 = np.cos(2*np.pi * 500 * np.cos(2*np.pi*0.17*t) * t) * 0.1
-        # Crackle bursts
         burst = np.abs(np.sin(2*np.pi*2.3*t))**8
         crackle = np.random.normal(0,1,n) * burst * 0.2
-        # Rumble
         rumble = 0.04 * np.sin(2*np.pi*23*t + 3*np.sin(2*np.pi*0.1*t))
-        i_s = sw1 + crackle + rumble
-        q_s = sw2 + np.roll(crackle, 50) + rumble*0.7
-        return i_s, q_s
+        return sw1 + crackle + rumble, sw2 + np.roll(crackle, 50) + rumble*0.7
+
+    # ── IQ Generation ──
 
     def _generate_iq(self):
         n = self.chunk_samples
@@ -428,7 +429,6 @@ class HackRFEmulator:
         q_acc = np.zeros(n, dtype=np.float64)
         has_music = False
 
-        # FM broadcast stations
         for bf in FM_BROADCAST_FREQS:
             fo = bf - self.frequency
             if abs(fo) > half_bw: continue
@@ -438,27 +438,24 @@ class HackRFEmulator:
             fm_dev = WFM_DEVIATION if is_wfm else NFM_DEVIATION
             amp = 0.60
 
-            dur = n * dt
-            na = int(dur * self.audio_rate) + 1
-            audio = self._get_audio_chunk(bf, na)
-
             if is_wfm:
-                # WFM transmitter chain: LPF 15kHz → pre-emphasis 50µs → FM mod
-                audio = self._apply_fir_filter(audio, self.wfm_lp_taps,
-                                               self.wfm_lp_state, bf, "wfm_lp")
-                audio = self._apply_preemphasis(audio, WFM_PREEMPH_TAU, bf)
+                # WFM stereo: generate MPX composite, then FM modulate
+                mpx = self._generate_wfm_mpx(bf, n, dt)
+                inst_freq = fo + fm_dev * mpx
             else:
-                # NFM transmitter chain: BPF 300-3kHz → pre-emphasis 50µs → FM mod
+                # NFM mono
+                dur = n * dt
+                na = int(dur * self.audio_rate) + 1
+                audio = self._get_audio_chunk_mono(bf, na)
                 audio = self._apply_fir_filter(audio, self.nfm_bp_taps,
                                                self.nfm_bp_state, bf, "nfm_bp")
                 audio = self._apply_preemphasis(audio, NFM_PREEMPH_TAU, bf)
                 audio = np.clip(audio, -0.95, 0.95)
+                audio_r = np.interp(np.linspace(0, len(audio)-1, n),
+                                    np.arange(len(audio)), audio)
+                inst_freq = fo + fm_dev * audio_r
 
-            audio_r = np.interp(np.linspace(0, len(audio)-1, n), np.arange(len(audio)), audio)
-
-            inst_freq = fo + fm_dev * audio_r
             phase = np.cumsum(inst_freq) * dt * 2 * np.pi
-
             key = f"c_{bf}"
             if key not in self.audio_pos: self.audio_pos[key] = 0.0
             phase += self.audio_pos[key]
@@ -467,49 +464,27 @@ class HackRFEmulator:
             i_acc += amp * np.cos(phase)
             q_acc += amp * np.sin(phase)
 
-        # AM broadcast stations — DSB-FC (A3E) per ETSI EN 300 676-1
-        # Airband: 8.33kHz channel, 300-3kHz voice band
+        # AM
         for bf in AM_BROADCAST_FREQS:
             fo = bf - self.frequency
             if abs(fo) > half_bw: continue
             has_music = True
-
-            # Carrier amplitude — sets int8 dynamic range utilization
-            # With 50% mod depth: envelope swings 0.5 to 1.5 × carrier
-            # carrier=0.70 → IQ peak = 0.70*1.5*gain ≈ 0.23 → int8 ≈ 29 (good SNR)
             amp = 0.70
-
             dur = n * dt
             na = int(dur * self.audio_rate) + 1
-            audio = self._get_audio_chunk(bf, na)
-
-            # 1. Apply 300Hz-3kHz bandpass filter (airband voice channel)
-            audio = self._apply_airband_filter(audio, bf)
-
-            # 2. Limiter — prevent over-modulation (keep envelope > 0)
-            # With 50% depth, audio must stay within ±1.0 to keep envelope positive
-            # Clip to ±0.95 for safety margin
+            audio = self._get_audio_chunk_mono(bf, na)
+            audio = self._apply_fir_filter(audio, self.airband_bp_taps,
+                                           self.airband_bp_state, bf, "am_bp")
             audio = np.clip(audio, -0.95, 0.95)
-
-            # 3. Resample filtered audio to IQ sample rate
-            audio_r = np.interp(np.linspace(0, len(audio)-1, n), np.arange(len(audio)), audio)
-
-            # 4. DSB-FC AM: s(t) = A · (1 + m·audio(t)) · cos(2π·f·t)
-            # This is the standard aviation AM formula per ICAO Annex 10
-            # m = modulation index (0.0 to 1.0)
-            # envelope = 1 + m*audio, always positive when |audio| ≤ 1/m
+            audio_r = np.interp(np.linspace(0, len(audio)-1, n),
+                                np.arange(len(audio)), audio)
             envelope = 1.0 + AM_MODULATION_DEPTH * audio_r
-
-            # 5. Carrier phase — continuous across chunks
             t = (self.sample_counter + np.arange(n, dtype=np.float64)) / fs
             carrier_phase = 2 * np.pi * fo * t
-
             key = f"am_{bf}"
             if key not in self.audio_pos: self.audio_pos[key] = 0.0
             carrier_phase += self.audio_pos[key]
             self.audio_pos[key] = float(carrier_phase[-1]) % (2*np.pi*10000)
-
-            # 6. Generate IQ — DSB-FC with both sidebands symmetric around carrier
             i_acc += amp * envelope * np.cos(carrier_phase)
             q_acc += amp * envelope * np.sin(carrier_phase)
 
@@ -520,7 +495,6 @@ class HackRFEmulator:
         i_acc += np.random.normal(0, 0.012, n)
         q_acc += np.random.normal(0, 0.012, n)
 
-        # Gain scaling: S3-S5 at mid, S7 at max
         total_gain_db = self.vga_gain * 0.2 + self.lna_gain * 0.2
         if self.amp_enable: total_gain_db += 4
         g = 10**(total_gain_db / 60) * 0.12
@@ -542,6 +516,8 @@ class HackRFEmulator:
         if fg > 2: e -= (fg-2)*5
         elif fg < 0.1: e -= (0.1-fg)*10
         return max(-60, min(15, e))
+
+    # ── Command Handler ──
 
     def handle_command(self, cmd):
         p = cmd.strip().split(':'); c = p[0].upper()
@@ -588,8 +564,8 @@ class HackRFEmulator:
         return "ERROR\n"
 
     # ── TCP ──
+
     def _iq_producer(self):
-        """Generate IQ chunks into queue."""
         while self.running:
             if self.is_tx_mode or not self.data_clients:
                 time.sleep(0.02); continue
@@ -602,7 +578,6 @@ class HackRFEmulator:
                 self._log(f"IQ gen err: {e}"); time.sleep(0.01)
 
     def _data_stream(self):
-        """Send IQ at exact real-time rate using clock-based pacing."""
         bytes_per_sec = 0
         stream_start = 0.0
         total_streamed = 0
@@ -616,9 +591,8 @@ class HackRFEmulator:
                 total_streamed = 0
                 time.sleep(0.02); continue
 
-            # Initialize stream timing on first chunk
             if stream_start == 0.0:
-                bytes_per_sec = self.sample_rate * 2  # 2 bytes per IQ pair
+                bytes_per_sec = self.sample_rate * 2
                 stream_start = time.perf_counter()
                 total_streamed = 0
 
@@ -627,7 +601,6 @@ class HackRFEmulator:
             except queue.Empty:
                 continue
 
-            # Send data
             dead = []
             with self.data_lock:
                 for c in self.data_clients:
@@ -639,16 +612,11 @@ class HackRFEmulator:
                     except: pass
 
             total_streamed += len(iq)
-
-            # Calculate when this many bytes should have been sent
             target_time = stream_start + total_streamed / bytes_per_sec
             now = time.perf_counter()
             wait = target_time - now
-
-            if wait > 0.001:
-                time.sleep(wait)
+            if wait > 0.001: time.sleep(wait)
             elif wait < -0.5:
-                # We're way behind, reset timing
                 stream_start = time.perf_counter()
                 total_streamed = 0
 
@@ -695,7 +663,7 @@ class HackRFEmulator:
     def start(self):
         self.running=True
         print("  Loading audio...")
-        self.mp3_samples = load_audio(self.mp3_path)
+        self.mp3_samples, self.mp3_channels = load_audio(self.mp3_path)
 
         svs=[]
         for port in (self.data_port,self.control_port,self.audio_port):
@@ -704,19 +672,21 @@ class HackRFEmulator:
             s.bind(('0.0.0.0',port)); s.listen(5); svs.append(s)
 
         print("="*60)
-        print("  HackRF TCP Emulator v7 - Real Radio Emulation")
+        print("  HackRF TCP Emulator v8 - Stereo FM + NFM + AM")
         print("="*60)
         print(f"  Ports: {self.data_port}/{self.control_port}/{self.audio_port}")
-        print(f"  Audio: {'LOADED '+str(len(self.mp3_samples)//48000)+'s' if self.mp3_samples is not None else '440Hz FALLBACK'}")
+        ch_str = f"{self.mp3_channels}ch" if self.mp3_samples is not None else "NONE"
+        dur_str = f"{len(self.mp3_samples)//self.mp3_channels//48000 if self.mp3_channels==1 else len(self.mp3_samples)//48000}s" if self.mp3_samples is not None else ""
+        print(f"  Audio: {ch_str} {dur_str}" if self.mp3_samples is not None else "  Audio: 440Hz FALLBACK")
+        print(f"\n  WFM Stations (STEREO broadcast — 19kHz pilot + 38kHz subcarrier):")
+        for bf in FM_WFM_FREQS:
+            print(f"    {bf/1e6:>10.3f} MHz [WFM-S] dev=+/-{WFM_DEVIATION/1000:.0f}kHz")
         print(f"\n  NFM Stations (voice radio — 300-3kHz BPF, {NFM_PREEMPH_TAU*1e6:.0f}us pre-emph):")
         for bf in FM_NFM_FREQS:
-            print(f"    {bf/1e6:>10.3f} MHz [NFM] dev=+/-{NFM_DEVIATION/1000:.1f}kHz")
-        print(f"\n  WFM Stations (broadcast — 15kHz LPF, {WFM_PREEMPH_TAU*1e6:.0f}us pre-emph):")
-        for bf in FM_WFM_FREQS:
-            print(f"    {bf/1e6:>10.3f} MHz [WFM] dev=+/-{WFM_DEVIATION/1000:.0f}kHz")
-        print(f"\n  AM Stations (airband DSB-FC A3E — 300-3kHz BPF, 8.33kHz ch):")
+            print(f"    {bf/1e6:>10.3f} MHz [NFM]   dev=+/-{NFM_DEVIATION/1000:.1f}kHz")
+        print(f"\n  AM Stations (airband DSB-FC A3E):")
         for bf in AM_BROADCAST_FREQS:
-            print(f"    {bf/1e6:>10.3f} MHz [AM]  depth={AM_MODULATION_DEPTH*100:.0f}%")
+            print(f"    {bf/1e6:>10.3f} MHz [AM]    depth={AM_MODULATION_DEPTH*100:.0f}%")
         print(f"\n  Other frequencies -> space noise")
         print(f"\n  Waiting for connections...\n{'='*60}")
 
@@ -744,11 +714,11 @@ class HackRFEmulator:
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser()
+    p=argparse.ArgumentParser(description="HackRF TCP Emulator v8 - Stereo FM Broadcast")
     p.add_argument('--data-port',type=int,default=5000)
     p.add_argument('--control-port',type=int,default=5001)
     p.add_argument('--audio-port',type=int,default=5002)
-    p.add_argument('--mp3',type=str,default=None)
+    p.add_argument('--mp3',type=str,default=None, help="Path to audio file (mp3/wav)")
     a=p.parse_args()
     emu=HackRFEmulator(a.data_port,a.control_port,a.audio_port,a.mp3)
     signal.signal(signal.SIGINT,lambda s,f:setattr(emu,'running',False))

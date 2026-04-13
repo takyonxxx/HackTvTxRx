@@ -73,6 +73,29 @@ void MainWindow::setupUi()
 
     setWindowTitle("HackTvRxTx");
 
+    // Global dark theme
+    setStyleSheet(
+        "QMainWindow { background-color: #0d1117; }"
+        "QGroupBox { background-color: #161b22; color: #c9d1d9; }"
+        "QComboBox { background-color: #21262d; color: #c9d1d9; border: 1px solid #30363d; "
+        "border-radius: 3px; padding: 3px 6px; font-size: 11px; }"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox QAbstractItemView { background-color: #21262d; color: #c9d1d9; "
+        "selection-background-color: #30363d; }"
+        "QCheckBox { color: #c9d1d9; font-size: 11px; }"
+        "QLineEdit { background-color: #21262d; color: #c9d1d9; border: 1px solid #30363d; "
+        "border-radius: 3px; padding: 3px 6px; }"
+        "QPushButton { background-color: #21262d; color: #c9d1d9; border: 1px solid #30363d; "
+        "border-radius: 4px; padding: 6px 12px; font-weight: bold; font-size: 11px; }"
+        "QPushButton:hover { background-color: #30363d; }"
+        "QPushButton:pressed { background-color: #0d1117; }"
+        "QSlider::groove:horizontal { border: 1px solid #30363d; height: 6px; "
+        "background: #21262d; border-radius: 3px; }"
+        "QSlider::handle:horizontal { background: #58a6ff; width: 14px; "
+        "margin: -4px 0; border-radius: 7px; }"
+        "QTextBrowser { background-color: #0d1117; color: #8b949e; border: 1px solid #21262d; }"
+    );
+
     QWidget *centralWidget = new QWidget(this);
     mainLayout = new QVBoxLayout(centralWidget);
     mainLayout->setSpacing(2);
@@ -114,13 +137,16 @@ void MainWindow::setupUi()
     fileDialog = new QFileDialog(this);
     fileDialog->setFileMode(QFileDialog::ExistingFile);
 
-    onOperatingModeChanged(m_opMode);
+    // Set combo to match loaded/default mode
+    int modeIdx = operatingModeCombo->findData(m_opMode);
+    if (modeIdx >= 0) operatingModeCombo->setCurrentIndex(modeIdx);
+    onOperatingModeChanged(modeIdx);
 }
 
 void MainWindow::addDeviceGroup()
 {
-    QGroupBox *grp = new QGroupBox("Device Settings", this);
-    QGridLayout *lay = new QGridLayout(grp);
+    deviceGroup = new QGroupBox("Device Settings", this);
+    QGridLayout *lay = new QGridLayout(deviceGroup);
     lay->setVerticalSpacing(4);
     lay->setHorizontalSpacing(8);
     lay->setContentsMargins(10, 18, 10, 6);
@@ -131,13 +157,35 @@ void MainWindow::addDeviceGroup()
     devLabel->setStyleSheet(ls);
     outputCombo = new QComboBox(this);
     outputCombo->addItem("HackRF", "hackrf");
+    outputCombo->addItem("HackRF TCP", "hackrftcp");
+    outputCombo->addItem("RTL-SDR TCP", "rtlsdrtcp");
     outputCombo->addItem("RtlSdr", "rtlsdr");
+    connect(outputCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), [this]() {
+        QString dev = outputCombo->currentData().toString();
+        bool isTcp = (dev == "hackrftcp" || dev == "rtlsdrtcp");
+        tcpAddressLabel->setVisible(isTcp);
+        tcpAddressEdit->setVisible(isTcp);
+        // Set default port hint based on device
+        if (dev == "hackrftcp")
+            tcpAddressEdit->setPlaceholderText("127.0.0.1 (ports 5000-5002)");
+        else if (dev == "rtlsdrtcp")
+            tcpAddressEdit->setPlaceholderText("127.0.0.1:1234");
+        if (m_initDone) saveSettings();
+    });
+
+    // TCP address field (shown only when HackRF TCP selected)
+    tcpAddressLabel = new QLabel("Addr:", this);
+    tcpAddressLabel->setStyleSheet(ls);
+    tcpAddressLabel->setVisible(false);
+    tcpAddressEdit = new QLineEdit("127.0.0.1", this);
+    tcpAddressEdit->setMaximumWidth(120);
+    tcpAddressEdit->setVisible(false);
 
     QLabel *modeLabel = new QLabel("Mode:", this);
     modeLabel->setStyleSheet(ls);
     operatingModeCombo = new QComboBox(this);
-    operatingModeCombo->addItem("NFM Radio",    MODE_NFM);
     operatingModeCombo->addItem("WFM Radio",    MODE_WFM);
+    operatingModeCombo->addItem("NFM Radio",    MODE_NFM);
     operatingModeCombo->addItem("AM Radio",     MODE_AM);
     operatingModeCombo->addItem("FM File TX",   MODE_FM_FILE);
     operatingModeCombo->addItem("TV File TX",   MODE_TV_FILE);
@@ -157,11 +205,30 @@ void MainWindow::addDeviceGroup()
     connect(sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onSampleRateChanged);
 
-    ampEnabled = new QCheckBox("Amp", this);
-    ampEnabled->setMinimumWidth(65);
+    ampEnabled = new QCheckBox("RF Amp (TX)", this);
+    ampEnabled->setMinimumWidth(90);
     connect(ampEnabled, &QCheckBox::stateChanged, [this]() {
         if (m_isProcessing && m_hackTvLib)
             m_hackTvLib->setAmpEnable(ampEnabled->isChecked());
+        if (m_initDone) saveSettings();
+    });
+
+    stereoEnabled = new QCheckBox("Stereo", this);
+    stereoEnabled->setChecked(true);
+    stereoEnabled->setMinimumWidth(65);
+    connect(stereoEnabled, &QCheckBox::stateChanged, [this]() {
+        m_forceMono = !stereoEnabled->isChecked();
+        if (fmDemodulator) fmDemodulator->setForceMono(m_forceMono);
+        if (m_forceMono) {
+            m_stereoLabel->setText("MONO");
+            m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 18px; color: #FF9900; }");
+        } else {
+            bool st = fmDemodulator ? fmDemodulator->isStereo() : false;
+            m_stereoLabel->setText(st ? "STEREO" : "");
+            m_stereoLabel->setStyleSheet(st
+                ? "QLabel { font-weight: bold; font-size: 18px; color: #00FF66; }"
+                : "QLabel { font-weight: bold; font-size: 18px; color: #666666; }");
+        }
         if (m_initDone) saveSettings();
     });
 
@@ -172,10 +239,13 @@ void MainWindow::addDeviceGroup()
     lay->addWidget(bwLabel, 1, 0);
     lay->addWidget(sampleRateCombo, 1, 1);
     lay->addWidget(ampEnabled, 1, 2);
+    lay->addWidget(stereoEnabled, 1, 3);
+    lay->addWidget(tcpAddressLabel, 1, 4);
+    lay->addWidget(tcpAddressEdit, 1, 5);
 
     lay->setColumnStretch(1, 2);
     lay->setColumnStretch(3, 3);
-    mainLayout->addWidget(grp);
+    mainLayout->addWidget(deviceGroup);
 }
 
 void MainWindow::addRxGroup()
@@ -185,8 +255,8 @@ void MainWindow::addRxGroup()
     freqCtrl->setDigitColor(QColor("#FFC300"));
     freqCtrl->setFrequency(m_frequency);
     connect(freqCtrl, &CFreqCtrl::newFrequency, this, &MainWindow::onFreqCtrl_setFrequency);
-    freqCtrl->setMinimumHeight(58);
-    freqCtrl->setMaximumHeight(75);
+    freqCtrl->setMinimumHeight(68);
+    freqCtrl->setMaximumHeight(90);
 
     cPlotter = new CPlotter(this);
     cPlotter->setSampleRate(m_sampleRate);
@@ -214,6 +284,7 @@ void MainWindow::addRxGroup()
         freqCtrl->setFrequency(m_frequency);
         cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
         if (m_isProcessing && m_hackTvLib) m_hackTvLib->setFrequency(m_frequency);
+        if (m_tcpConnected) sendTcpCommand(QString("SET_FREQ:%1").arg(m_frequency));
         saveSettings();
     });
 
@@ -301,18 +372,21 @@ void MainWindow::addRxGroup()
         lnaLevelLabel->setText(QString::number(v));
         m_lnaGain = v;
         if (m_isProcessing && m_hackTvLib) m_hackTvLib->setLnaGain(v);
+        if (m_tcpConnected) sendTcpCommand(QString("SET_LNA_GAIN:%1").arg(v));
         saveSettings();
     });
     connect(vgaSlider, &QSlider::valueChanged, [this](int v) {
         vgaLevelLabel->setText(QString::number(v));
         m_vgaGain = v;
         if (m_isProcessing && m_hackTvLib) m_hackTvLib->setVgaGain(v);
+        if (m_tcpConnected) sendTcpCommand(QString("SET_VGA_GAIN:%1").arg(v));
         saveSettings();
     });
     connect(rxAmpSlider, &QSlider::valueChanged, [this](int v) {
         rxAmpLevelLabel->setText(QString::number(v));
         m_rxAmpGain = v;
         if (m_isProcessing && m_hackTvLib) m_hackTvLib->setRxAmpGain(v);
+        if (m_tcpConnected) sendTcpCommand(QString("SET_RX_AMP_GAIN:%1").arg(v));
         saveSettings();
     });
 
@@ -533,8 +607,8 @@ void MainWindow::onOperatingModeChanged(int index)
     bool isFmFile = (m_opMode == MODE_FM_FILE);
     bool isTvMode = (m_opMode >= MODE_TV_FILE);
 
-    // Show/hide groups
-    rxGroup->setVisible(true); // spectrum always visible
+    // Show/hide groups — TV modes hide RX (no spectrum needed)
+    rxGroup->setVisible(!isTvMode);
     radioTxGroup->setVisible(isRadio || isFmFile);
     tvTxGroup->setVisible(isTvMode || isFmFile);
 
@@ -558,7 +632,7 @@ void MainWindow::onOperatingModeChanged(int index)
         ffmpegOptionsEdit->setVisible(false);
     }
 
-    // FM-specific RX controls
+    // FM-specific RX controls: ModIdx and DeEmph only for NFM/WFM
     bool showFmControls = (m_opMode == MODE_NFM || m_opMode == MODE_WFM);
     rxModIndexLabel->setVisible(showFmControls);
     rxModIndexSlider->setVisible(showFmControls);
@@ -567,16 +641,28 @@ void MainWindow::onOperatingModeChanged(int index)
     rxDeemphSlider->setVisible(showFmControls);
     rxDeemphLevelLabel->setVisible(showFmControls);
 
+    // Stereo checkbox only relevant for WFM
+    stereoEnabled->setVisible(m_opMode == MODE_WFM);
+
     // Stereo label
     if (m_opMode == MODE_AM) {
         m_stereoLabel->setText("AM");
-        m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #FF9900; }");
+        m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 18px; color: #FF9900; }");
+    } else if (isTvMode) {
+        m_stereoLabel->setText("");
     } else {
         m_stereoLabel->setText("");
-        m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #666666; }");
+        m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 18px; color: #666666; }");
     }
 
     applyModePresets();
+    applyModeTheme();
+
+    // Auto-restart if already running (mode change requires new demodulator)
+    if (m_initDone && m_isProcessing.load()) {
+        stopAll();
+        QTimer::singleShot(200, this, [this]() { startRx(); });
+    }
 
     if (m_initDone) saveSettings();
 }
@@ -639,6 +725,113 @@ void MainWindow::applyModePresets()
 }
 
 // ============================================================
+// Mode-aware Theme
+// ============================================================
+
+void MainWindow::applyModeTheme()
+{
+    // Mode accent colors: NFM=green, WFM=blue, AM=orange, FM File=teal, TV=purple
+    switch (m_opMode) {
+    case MODE_NFM:
+        m_modeAccentColor = "#00cc66";
+        m_modeAccentDark  = "#0a3a1a";
+        break;
+    case MODE_WFM:
+        m_modeAccentColor = "#3399ff";
+        m_modeAccentDark  = "#0a1a3a";
+        break;
+    case MODE_AM:
+        m_modeAccentColor = "#ff9933";
+        m_modeAccentDark  = "#3a2a0a";
+        break;
+    case MODE_FM_FILE:
+        m_modeAccentColor = "#00ccaa";
+        m_modeAccentDark  = "#0a3a2a";
+        break;
+    default: // TV modes
+        m_modeAccentColor = "#aa66ff";
+        m_modeAccentDark  = "#2a0a3a";
+        break;
+    }
+
+    // Device group
+    deviceGroup->setStyleSheet(QString(
+        "QGroupBox { font-weight: bold; border: 1px solid %1; border-radius: 5px; margin-top: 0.5ex; "
+        "background-color: %2; } "
+        "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top center; "
+        "padding: 0 8px; color: %1; }")
+        .arg(m_modeAccentColor, m_modeAccentDark));
+
+    // RX group
+    rxGroup->setStyleSheet(QString(
+        "QGroupBox { font-weight: bold; border: 1px solid %1; border-radius: 5px; margin-top: 0.5ex; } "
+        "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top center; "
+        "padding: 0 8px; color: %1; }")
+        .arg(m_modeAccentColor));
+
+    // Radio TX group
+    radioTxGroup->setStyleSheet(QString(
+        "QGroupBox { font-weight: bold; border: 1px solid #cc5522; border-radius: 5px; margin-top: 0.5ex; } "
+        "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top center; "
+        "padding: 0 8px; color: #ff8844; }"));
+
+    // TV TX group
+    tvTxGroup->setStyleSheet(QString(
+        "QGroupBox { font-weight: bold; border: 1px solid %1; border-radius: 5px; margin-top: 0.5ex; } "
+        "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top center; "
+        "padding: 0 8px; color: %1; }")
+        .arg(m_modeAccentColor));
+
+    // Start button color
+    startStopButton->setStyleSheet(QString(
+        "QPushButton { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 %1, stop:1 %2); "
+        "color: #ffffff; border: 1px solid %1; border-radius: 4px; padding: 6px 15px; "
+        "font-weight: bold; font-size: 12px; }"
+        "QPushButton:pressed { background: %2; }")
+        .arg(m_modeAccentColor, m_modeAccentDark));
+
+    // FreqCtrl digit color matches mode
+    if (m_opMode == MODE_AM)
+        freqCtrl->setDigitColor(QColor("#FFB833"));
+    else if (m_opMode == MODE_NFM)
+        freqCtrl->setDigitColor(QColor("#66FF99"));
+    else if (m_opMode == MODE_WFM)
+        freqCtrl->setDigitColor(QColor("#66CCFF"));
+    else
+        freqCtrl->setDigitColor(QColor("#FFC300"));
+
+    // Plotter FFT fill color matches mode
+    if (m_opMode == MODE_NFM)
+        cPlotter->setFftPlotColor(QColor("#88FFAA"));
+    else if (m_opMode == MODE_WFM)
+        cPlotter->setFftPlotColor(QColor("#88CCFF"));
+    else if (m_opMode == MODE_AM)
+        cPlotter->setFftPlotColor(QColor("#FFCC88"));
+    else
+        cPlotter->setFftPlotColor(QColor("#CEECF5"));
+
+    // Update slider handle colors to match mode
+    QString sliderStyle = QString(
+        "QSlider::groove:horizontal { border: 1px solid #30363d; height: 6px; "
+        "background: #21262d; border-radius: 3px; }"
+        "QSlider::handle:horizontal { background: %1; width: 14px; "
+        "margin: -4px 0; border-radius: 7px; }").arg(m_modeAccentColor);
+
+    for (QSlider* s : {volumeSlider, lnaSlider, vgaSlider, rxAmpSlider,
+                       rxGainSlider, rxModIndexSlider, rxDeemphSlider})
+        s->setStyleSheet(sliderStyle);
+
+    // TX sliders keep warm orange
+    QString txSliderStyle =
+        "QSlider::groove:horizontal { border: 1px solid #30363d; height: 6px; "
+        "background: #21262d; border-radius: 3px; }"
+        "QSlider::handle:horizontal { background: #ff8844; width: 14px; "
+        "margin: -4px 0; border-radius: 7px; }";
+    for (QSlider* s : {txAmplitudeSlider, txModIndexSlider, txPowerSlider})
+        s->setStyleSheet(txSliderStyle);
+}
+
+// ============================================================
 // START / STOP
 // ============================================================
 
@@ -653,6 +846,13 @@ void MainWindow::onStartStopClicked()
 
 void MainWindow::startRx()
 {
+    // TCP mode — connect to emulator directly, skip HackTvLib
+    if (isTcpMode()) {
+        startTcpRx();
+        return;
+    }
+
+    // USB mode — use HackTvLib
     // Create HackTvLib
     if (m_hackTvLib) {
         m_hackTvLib->clearCallbacks();
@@ -752,12 +952,12 @@ void MainWindow::startRx()
             connect(fmDemodulator.get(), &FMDemodulator::stereoStatusChanged, this, [this](bool stereo) {
                 if (m_forceMono) {
                     m_stereoLabel->setText("MONO");
-                    m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #FF9900; }");
+                    m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 18px; color: #FF9900; }");
                 } else {
                     m_stereoLabel->setText(stereo ? "STEREO" : "");
                     m_stereoLabel->setStyleSheet(stereo
-                        ? "QLabel { font-weight: bold; font-size: 16px; color: #00FF66; }"
-                        : "QLabel { font-weight: bold; font-size: 16px; color: #666666; }");
+                        ? "QLabel { font-weight: bold; font-size: 18px; color: #00FF66; }"
+                        : "QLabel { font-weight: bold; font-size: 18px; color: #666666; }");
                 }
             });
         }
@@ -799,6 +999,7 @@ void MainWindow::stopAll()
     m_isTx = false;
     stopMicCapture();
     stopFilePlayback();
+    stopTcpRx();
 
     if (m_hackTvLib) {
         m_hackTvLib->clearCallbacks();
@@ -842,13 +1043,17 @@ void MainWindow::onPttPressed()
     // Build TX command
     std::string srStr = std::to_string(m_sampleRate);
     std::string freqStr = std::to_string(m_frequency);
+    std::string devStr = outputCombo->currentData().toString().toStdString();
     std::vector<std::string> args = {
-        "-o", "hackrf",
+        "-o", devStr,
         "--rx-tx-mode", "tx",
         "-s", srStr,
         "-f", freqStr,
         "-a", "fmtransmitter"
     };
+    if (devStr == "hackrftcp") {
+        args.insert(args.end(), {"-D", tcpAddressEdit->text().trimmed().toStdString()});
+    }
 
     m_hackTvLib->setArguments(args);
     m_hackTvLib->setLogCallback([this](const std::string& msg) {
@@ -956,7 +1161,14 @@ void MainWindow::keyReleaseEvent(QKeyEvent *event)
 QStringList MainWindow::buildRxCommand()
 {
     QStringList args;
-    args << "-o" << outputCombo->currentData().toString();
+    QString device = outputCombo->currentData().toString();
+    args << "-o" << device;
+
+    // For TCP devices, pass the address
+    if (device == "hackrftcp") {
+        args << "-D" << tcpAddressEdit->text().trimmed();
+    }
+
     args << "--rx-tx-mode" << "rx";
     args << "-s" << QString::number(m_sampleRate);
     args << "-f" << QString::number(m_frequency);
@@ -966,8 +1178,13 @@ QStringList MainWindow::buildRxCommand()
 QStringList MainWindow::buildTvTxCommand()
 {
     QStringList args;
-    args << "-o" << "hackrf";
+    QString device = outputCombo->currentData().toString();
+    args << "-o" << device;
     args << "--rx-tx-mode" << "tx";
+
+    if (device == "hackrftcp") {
+        args << "-D" << tcpAddressEdit->text().trimmed();
+    }
 
     if (ampEnabled->isChecked()) args << "-a";
     if (colorDisabled->isChecked()) args << "--nocolour";
@@ -1095,6 +1312,7 @@ void MainWindow::onFreqCtrl_setFrequency(qint64 freq)
     m_frequency = freq;
     cPlotter->setCenterFreq(static_cast<quint64>(freq));
     if (m_isProcessing && m_hackTvLib) m_hackTvLib->setFrequency(freq);
+    if (m_tcpConnected) sendTcpCommand(QString("SET_FREQ:%1").arg(freq));
     saveSettings();
 }
 
@@ -1105,6 +1323,7 @@ void MainWindow::on_plotter_newDemodFreq(qint64 freq, qint64 delta)
     cPlotter->setCenterFreq(static_cast<quint64>(freq));
     freqCtrl->setFrequency(freq);
     if (m_isProcessing && m_hackTvLib) m_hackTvLib->setFrequency(freq);
+    if (m_tcpConnected) sendTcpCommand(QString("SET_FREQ:%1").arg(freq));
     saveSettings();
 }
 
@@ -1126,6 +1345,7 @@ void MainWindow::onSampleRateChanged(int index)
     cPlotter->setSampleRate(m_sampleRate);
     cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
     if (m_isProcessing && m_hackTvLib) m_hackTvLib->setSampleRate(m_sampleRate);
+    if (m_tcpConnected) sendTcpCommand(QString("SET_SAMPLE_RATE:%1").arg(m_sampleRate));
     if (fmDemodulator) fmDemodulator->setSampleRate(static_cast<double>(m_sampleRate));
     if (amDemodulator) amDemodulator->setSampleRate(static_cast<double>(m_sampleRate));
     saveSettings();
@@ -1409,7 +1629,7 @@ void MainWindow::loadSettings()
     s.beginGroup("Rf");
     m_frequency = s.value("frequency", 145000000).toLongLong();
     m_sampleRate = s.value("samplerate", 2000000).toInt();
-    m_opMode = s.value("opMode", 0).toInt();
+    m_opMode = s.value("opMode", 1).toInt();
     if (s.contains("tx_amplitude_i")) tx_amplitude = s.value("tx_amplitude_i").toInt() / 1000.0f;
     if (s.contains("tx_modulation_index_i")) tx_modulation_index = s.value("tx_modulation_index_i").toInt() / 1000.0f;
     m_volumeLevel = s.value("m_volumeLevel", 10).toInt();
@@ -1431,12 +1651,260 @@ void MainWindow::closeEvent(QCloseEvent *event)
     exitApp();
 }
 
+// ============================================================
+// TCP Client (for HackRF TCP emulator)
+// ============================================================
+
+void MainWindow::sendTcpCommand(const QString& cmd)
+{
+    if (isRtlTcpMode()) {
+        // RTL-SDR TCP: binary 5-byte commands on data socket
+        if (!m_tcpDataSocket || m_tcpDataSocket->state() != QAbstractSocket::ConnectedState) return;
+        QByteArray pkt(5, 0);
+        QStringList parts = cmd.split(':');
+        QString c = parts[0].toUpper();
+        quint32 val = parts.size() > 1 ? parts[1].toUInt() : 0;
+        quint8 cmdByte = 0;
+        if (c == "SET_FREQ")         cmdByte = 0x01;
+        else if (c == "SET_SAMPLE_RATE") cmdByte = 0x02;
+        else if (c == "SET_LNA_GAIN" || c == "SET_VGA_GAIN") { cmdByte = 0x04; /* gain in tenths */ val *= 10; }
+        else if (c == "SET_RX_AMP_GAIN") { cmdByte = 0x04; val *= 10; }
+        else if (c == "SET_AMP_ENABLE")  cmdByte = 0x0F; // bias tee
+        else return; // unsupported
+        pkt[0] = static_cast<char>(cmdByte);
+        pkt[1] = static_cast<char>((val >> 24) & 0xFF);
+        pkt[2] = static_cast<char>((val >> 16) & 0xFF);
+        pkt[3] = static_cast<char>((val >> 8) & 0xFF);
+        pkt[4] = static_cast<char>(val & 0xFF);
+        m_tcpDataSocket->write(pkt);
+        m_tcpDataSocket->flush();
+        return;
+    }
+    // HackRF TCP: text protocol on control socket
+    if (!m_tcpCtrlSocket || m_tcpCtrlSocket->state() != QAbstractSocket::ConnectedState) return;
+    m_tcpCtrlSocket->write((cmd + "\n").toUtf8());
+    m_tcpCtrlSocket->flush();
+}
+
+void MainWindow::startTcpRx()
+{
+    stopTcpRx();
+
+    QString addr = tcpAddressEdit->text().trimmed();
+    if (addr.isEmpty()) addr = "127.0.0.1";
+    bool rtlMode = isRtlTcpMode();
+
+    if (rtlMode) {
+        // ── RTL-SDR TCP: single port, binary protocol, uint8 IQ ──
+        int port = 1234;
+        if (addr.contains(':')) {
+            QStringList parts = addr.split(':');
+            addr = parts[0];
+            port = parts[1].toInt();
+        }
+
+        qDebug() << "RTL-SDR TCP connecting to" << addr << "port" << port;
+
+        m_tcpDataSocket = new QTcpSocket(this);
+        m_tcpDataSocket->setReadBufferSize(1024 * 1024);
+        m_tcpDataSocket->connectToHost(addr, port);
+        if (!m_tcpDataSocket->waitForConnected(3000)) {
+            qDebug() << "RTL-SDR TCP connect failed:" << m_tcpDataSocket->errorString();
+            delete m_tcpDataSocket; m_tcpDataSocket = nullptr;
+            return;
+        }
+
+        // Read and discard 12-byte dongle info header
+        if (m_tcpDataSocket->waitForReadyRead(2000)) {
+            QByteArray hdr = m_tcpDataSocket->read(12);
+            qDebug() << "RTL-SDR header:" << hdr.left(4) << "size=" << hdr.size();
+        }
+
+        // IQ data handler — uint8 centered at 127
+        connect(m_tcpDataSocket, &QTcpSocket::readyRead, this, [this]() {
+            if (m_shuttingDown.load() || m_isTx) return;
+            m_tcpBuffer.append(m_tcpDataSocket->readAll());
+
+            const int chunkSize = 262144;
+            while (m_tcpBuffer.size() >= chunkSize) {
+                QByteArray chunk = m_tcpBuffer.left(chunkSize);
+                m_tcpBuffer.remove(0, chunkSize);
+
+                const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk.constData());
+                const int n = chunkSize / 2;
+                auto sp = std::make_shared<std::vector<std::complex<float>>>(n);
+                for (int i = 0; i < n; i++)
+                    (*sp)[i] = std::complex<float>((data[i*2] - 127.5f) / 128.0f,
+                                                    (data[i*2+1] - 127.5f) / 128.0f);
+
+                QtConcurrent::run(m_threadPool, [this, sp]() { processDemod(*sp); });
+                QtConcurrent::run(m_threadPool, [this, sp]() { processFft(*sp); });
+            }
+        });
+
+        connect(m_tcpDataSocket, &QTcpSocket::disconnected, this, [this]() {
+            qDebug() << "RTL-SDR TCP disconnected";
+            if (m_isProcessing.load()) stopAll();
+        });
+
+        qDebug() << "RTL-SDR TCP connected - streaming IQ";
+
+        // Send initial config via binary commands
+        // (sendTcpCommand will use binary format since isRtlTcpMode)
+        // We need m_tcpDataSocket set first, which it is now
+        sendTcpCommand(QString("SET_FREQ:%1").arg(m_frequency));
+        sendTcpCommand(QString("SET_SAMPLE_RATE:%1").arg(m_sampleRate));
+        sendTcpCommand(QString("SET_LNA_GAIN:%1").arg(m_lnaGain));
+
+    } else {
+        // ── HackRF TCP: 3 ports, text protocol, int8 IQ ──
+        int dataPort = 5000, ctrlPort = 5001, audioPort = 5002;
+        if (addr.contains(':')) {
+            QStringList parts = addr.split(':');
+            addr = parts[0];
+            dataPort = parts[1].toInt();
+            ctrlPort = dataPort + 1;
+            audioPort = dataPort + 2;
+        }
+
+        qDebug() << "HackRF TCP connecting to" << addr << "ports" << dataPort << ctrlPort << audioPort;
+
+        // Control socket
+        m_tcpCtrlSocket = new QTcpSocket(this);
+        m_tcpCtrlSocket->connectToHost(addr, ctrlPort);
+        if (!m_tcpCtrlSocket->waitForConnected(3000)) {
+            qDebug() << "TCP control connect failed:" << m_tcpCtrlSocket->errorString();
+            delete m_tcpCtrlSocket; m_tcpCtrlSocket = nullptr;
+            return;
+        }
+
+        sendTcpCommand(QString("SET_FREQ:%1").arg(m_frequency));
+        sendTcpCommand(QString("SET_SAMPLE_RATE:%1").arg(m_sampleRate));
+        sendTcpCommand(QString("SET_LNA_GAIN:%1").arg(m_lnaGain));
+        sendTcpCommand(QString("SET_VGA_GAIN:%1").arg(m_vgaGain));
+        sendTcpCommand(QString("SET_RX_AMP_GAIN:%1").arg(m_rxAmpGain));
+        sendTcpCommand(QString("SET_AMP_ENABLE:%1").arg(ampEnabled->isChecked() ? 1 : 0));
+        sendTcpCommand("SWITCH_RX");
+
+        // Audio socket
+        m_tcpAudioSocket = new QTcpSocket(this);
+        m_tcpAudioSocket->connectToHost(addr, audioPort);
+        if (!m_tcpAudioSocket->waitForConnected(2000)) {
+            delete m_tcpAudioSocket; m_tcpAudioSocket = nullptr;
+        }
+
+        // Data socket — int8 IQ
+        m_tcpDataSocket = new QTcpSocket(this);
+        m_tcpDataSocket->setReadBufferSize(1024 * 1024);
+        connect(m_tcpDataSocket, &QTcpSocket::readyRead, this, [this]() {
+            if (m_shuttingDown.load() || m_isTx) return;
+            m_tcpBuffer.append(m_tcpDataSocket->readAll());
+
+            const int chunkSize = 262144;
+            while (m_tcpBuffer.size() >= chunkSize) {
+                QByteArray chunk = m_tcpBuffer.left(chunkSize);
+                m_tcpBuffer.remove(0, chunkSize);
+
+                const int8_t* data = reinterpret_cast<const int8_t*>(chunk.constData());
+                const int n = chunkSize / 2;
+                auto sp = std::make_shared<std::vector<std::complex<float>>>(n);
+                for (int i = 0; i < n; i++)
+                    (*sp)[i] = std::complex<float>(data[i*2] / 128.0f, data[i*2+1] / 128.0f);
+
+                QtConcurrent::run(m_threadPool, [this, sp]() { processDemod(*sp); });
+                QtConcurrent::run(m_threadPool, [this, sp]() { processFft(*sp); });
+            }
+        });
+
+        connect(m_tcpDataSocket, &QTcpSocket::disconnected, this, [this]() {
+            if (m_isProcessing.load()) stopAll();
+        });
+
+        m_tcpDataSocket->connectToHost(addr, dataPort);
+        if (!m_tcpDataSocket->waitForConnected(3000)) {
+            qDebug() << "TCP data connect failed";
+            stopTcpRx();
+            return;
+        }
+        qDebug() << "HackRF TCP connected - streaming IQ";
+    }
+
+    // Create demodulators (common for both protocols)
+    amDemodulator.reset();
+    fmDemodulator.reset();
+    if (m_opMode == MODE_AM) {
+        amDemodulator = std::make_unique<AMDemodulator>(
+            static_cast<double>(m_sampleRate), static_cast<double>(m_rxBandwidth));
+    } else {
+        double fmBw = (m_opMode == MODE_WFM) ? 150000.0 : 12500.0;
+        fmDemodulator = std::make_unique<FMDemodulator>(
+            static_cast<double>(m_sampleRate), fmBw);
+        fmDemodulator->setOutputGain(rxGain);
+        fmDemodulator->setRxModIndex(rxModIndex);
+        fmDemodulator->setDeemphTau(static_cast<float>(rxDeemph));
+        fmDemodulator->setForceMono(m_forceMono);
+        connect(fmDemodulator.get(), &FMDemodulator::stereoStatusChanged, this, [this](bool stereo) {
+            if (m_forceMono) {
+                m_stereoLabel->setText("MONO");
+                m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 18px; color: #FF9900; }");
+            } else {
+                m_stereoLabel->setText(stereo ? "STEREO" : "");
+                m_stereoLabel->setStyleSheet(stereo
+                    ? "QLabel { font-weight: bold; font-size: 18px; color: #00FF66; }"
+                    : "QLabel { font-weight: bold; font-size: 18px; color: #666666; }");
+            }
+        });
+    }
+
+    cPlotter->setSampleRate(m_sampleRate);
+    cPlotter->setSpanFreq(static_cast<quint32>(m_sampleRate));
+    cPlotter->setCenterFreq(static_cast<quint64>(m_frequency));
+
+    m_tcpConnected = true;
+    m_isProcessing.store(true);
+    m_isTx = false;
+    startStopButton->setText("STOP");
+
+    txRxIndicator->setText(rtlMode ? "RX - RTL TCP" : "RX - HackRF TCP");
+    txRxIndicator->setStyleSheet(
+        "font-size: 16px; font-weight: bold; color: #00FF66; "
+        "background-color: #1A3A1A; border: 2px solid #00FF66; border-radius: 8px; padding: 6px;");
+
+    if (m_opMode >= MODE_NFM && m_opMode <= MODE_AM) {
+        startMicCapture();
+    }
+}
+
+void MainWindow::stopTcpRx()
+{
+    m_tcpConnected = false;
+    m_tcpBuffer.clear();
+
+    if (m_tcpDataSocket) {
+        m_tcpDataSocket->disconnect();
+        m_tcpDataSocket->abort();
+        delete m_tcpDataSocket;
+        m_tcpDataSocket = nullptr;
+    }
+    if (m_tcpCtrlSocket) {
+        m_tcpCtrlSocket->abort();
+        delete m_tcpCtrlSocket;
+        m_tcpCtrlSocket = nullptr;
+    }
+    if (m_tcpAudioSocket) {
+        m_tcpAudioSocket->abort();
+        delete m_tcpAudioSocket;
+        m_tcpAudioSocket = nullptr;
+    }
+}
+
 void MainWindow::exitApp()
 {
     m_shuttingDown.store(true);
     m_isProcessing.store(false);
     stopMicCapture();
     stopFilePlayback();
+    stopTcpRx();
     if (m_hackTvLib) {
         m_hackTvLib->clearCallbacks();
         m_hackTvLib->stop();
@@ -1455,15 +1923,8 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 {
     if (obj == m_stereoLabel && event->type() == QEvent::MouseButtonPress) {
         if (m_opMode == MODE_AM) return true;
-        m_forceMono = !m_forceMono;
-        if (fmDemodulator) fmDemodulator->setForceMono(m_forceMono);
-        if (m_forceMono) {
-            m_stereoLabel->setText("MONO");
-            m_stereoLabel->setStyleSheet("QLabel { font-weight: bold; font-size: 16px; color: #FF9900; }");
-        } else {
-            bool st = fmDemodulator ? fmDemodulator->isStereo() : false;
-            m_stereoLabel->setText(st ? "STEREO" : "");
-        }
+        // Toggle via checkbox (which triggers the stateChanged handler)
+        stereoEnabled->setChecked(!stereoEnabled->isChecked());
         return true;
     }
     return QMainWindow::eventFilter(obj, event);

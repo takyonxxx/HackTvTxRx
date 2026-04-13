@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE QtCreatorProject>
-<!-- Written by QtCreator 16.0.0, 2026-04-13T15:12:56. -->
+<!-- Written by QtCreator 16.0.0, 2026-04-13T17:09:14. -->
 <qtcreator>
  <data>
   <variable>EnvironmentId</variable>
@@ -169,7 +169,7 @@
     <value type="bool" key="RunConfiguration.UseCppDebuggerAuto">true</value>
     <value type="bool" key="RunConfiguration.UseLibrarySearchPath">true</value>
     <value type="bool" key="RunConfiguration.UseQmlDebuggerAuto">true</value>
-    <value type="QString" key="RunConfiguration.WorkingDirectory.default">C:/Users/MSI/Desktop/buildHackTvGui</value>
+    <value type="QString" key="RunConfiguration.WorkingDirectory.default">C:/Users/MSI/Desktop/buildHackTvGui/release</value>
    </valuemap>
    <value type="qlonglong" key="ProjectExplorer.Target.RunConfigurationCount">1</value>
   </valuemap>
