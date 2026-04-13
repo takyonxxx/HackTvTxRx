@@ -13,20 +13,7 @@ std::vector<float> AMDemodulator::demodulate(const std::vector<std::complex<floa
 {
     if (samples.empty()) return {};
 
-    // Remove IQ DC offset (HackRF DC bias)
     auto iq = samples;
-    {
-        float sumI = 0.0f, sumQ = 0.0f;
-        for (const auto& s : iq) {
-            sumI += s.real();
-            sumQ += s.imag();
-        }
-        float meanI = sumI / iq.size();
-        float meanQ = sumQ / iq.size();
-        for (auto& s : iq) {
-            s = std::complex<float>(s.real() - meanI, s.imag() - meanQ);
-        }
-    }
 
     // IQ decimation
     for (auto& stage : m_iqStages) {
@@ -42,7 +29,7 @@ std::vector<float> AMDemodulator::demodulate(const std::vector<std::complex<floa
         iq = std::move(tmp);
     }
 
-    // SDRangel-style AM demod: envelope + AGC DC removal
+    // AM demod: magnitude → AGC → DC block
     auto audio = amDemod(iq);
 
     // Real decimation to get closer to 48kHz
@@ -65,6 +52,16 @@ std::vector<float> AMDemodulator::demodulate(const std::vector<std::complex<floa
         std::vector<float> tmp;
         applyFIR(audio, tmp, m_audioFilterTaps, m_audioFilterHistory);
         audio = std::move(tmp);
+    }
+
+    // Output peak limiter
+    for (size_t i = 0; i < audio.size(); i++) {
+        float absVal = std::abs(audio[i]);
+        m_audioRms += 0.0005f * (absVal - m_audioRms);
+        float threshold = std::max(m_audioRms * 4.0f, 0.15f);
+        if (absVal > threshold) {
+            audio[i] = (audio[i] > 0) ? threshold : -threshold;
+        }
     }
 
     return audio;
@@ -91,6 +88,17 @@ void AMDemodulator::rebuildChain()
     m_realStages.clear();
     m_iqBwHistory.clear();
     m_audioFilterHistory.clear();
+
+    // Reset demod state
+    m_agcAmp = 0.0f;  // 0 = will auto-init from first chunk's actual level
+    m_dcOffset = 0.0f;
+    m_dcBlockerX = 0.0f;
+    m_dcBlockerY = 0.0f;
+    m_dcI = 0.0f;
+    m_dcQ = 0.0f;
+    m_audioRms = 0.05f;
+
+    qDebug() << "AM rebuildChain: inputRate=" << m_inputRate << "bandwidth=" << m_bandwidth;
 
     double rate = m_inputRate;
     double iqTarget = std::max(m_bandwidth * 6.0, 60000.0);
@@ -131,8 +139,8 @@ void AMDemodulator::rebuildChain()
         rate = newRate;
     }
 
-    float audioCutoff = std::min(4000.0f, static_cast<float>(m_bandwidth / 2.0));
-    m_audioFilterTaps = designLPF(31, audioCutoff, 48000.0f);
+    float audioCutoff = std::min(3500.0f, static_cast<float>(m_bandwidth / 2.0));
+    m_audioFilterTaps = designLPF(63, audioCutoff, 48000.0f);  // 63 taps for sharper cutoff
 
     // SDR++ style: LPF cutoff = bandwidth/2
     double postDecimRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
@@ -142,43 +150,68 @@ void AMDemodulator::rebuildChain()
     } else {
         m_iqBandwidthTaps.clear();
     }
+
+    qDebug() << "AM chain built: iqStages=" << m_iqStages.size()
+             << "realStages=" << m_realStages.size()
+             << "postDecimRate=" << postDecimRate
+             << "iqBwCutoff=" << defaultBW
+             << "audioCutoff=" << audioCutoff;
 }
 
-// AM Demodulation — SDR++ style
-// Two modes: CARRIER AGC (AGC on IQ before demod) or AUDIO AGC (AGC on audio after demod)
-// SDR++ uses carrier AGC by default for AM
-// Flow: IQ AGC → magnitude → DC block → LPF
+// AM Demodulation — v4
+// Simplified: magnitude → peak-hold AGC → DC block
+// The key problem was AGC instability on small chunks. Solution: use a very
+// slow per-sample peak tracker that converges over hundreds of chunks, not one.
 std::vector<float> AMDemodulator::amDemod(const std::vector<std::complex<float>>& signal)
 {
     if (signal.empty()) return {};
     const size_t n = signal.size();
     std::vector<float> out(n);
 
-    // SDR++ carrier AGC parameters
-    const float agcRate = 0.003f;
-
-    // 1. Carrier AGC - normalize IQ amplitude BEFORE envelope detection
-    // This keeps the carrier at constant level, preserving modulation depth
+    // Step 1: Magnitude (envelope detection) — NO IQ DC removal
+    // IQ DC removal was destroying AM info in small chunks.
+    // The BW filter already centers the signal; DC spike is outside passband.
     for (size_t i = 0; i < n; i++) {
-        float mag = std::sqrt(signal[i].real() * signal[i].real() +
-                              signal[i].imag() * signal[i].imag());
-
-        // Track carrier amplitude
-        m_agcAmp += agcRate * (mag - m_agcAmp);
-
-        float gain = (m_agcAmp > 1e-6f) ? (1.0f / m_agcAmp) : 1.0f;
-
-        // Apply AGC to IQ, then take magnitude
-        float normI = signal[i].real() * gain;
-        float normQ = signal[i].imag() * gain;
-        out[i] = std::sqrt(normI * normI + normQ * normQ);
+        float I = signal[i].real();
+        float Q = signal[i].imag();
+        out[i] = std::sqrt(I * I + Q * Q);
     }
 
-    // 2. DC blocker - remove the now-normalized carrier (which is ~1.0)
+    // Step 2: Per-sample peak-hold AGC
+    // Track carrier level with very slow attack/decay (sample-rate based).
+    // At 66kHz post-decim rate, alpha=0.0001 → time constant = 10000 samples = 150ms
+    // This is slow enough to not follow audio modulation (lowest audio = 300Hz = 3.3ms)
+    // but fast enough to track signal level changes.
+    const float agcAlpha = 0.0001f;
+
+    // Auto-initialize on first use
+    if (m_agcAmp < 1e-6f && n > 0) {
+        // Calculate initial level from first chunk
+        float sum = 0.0f;
+        for (size_t i = 0; i < n; i++) sum += out[i];
+        m_agcAmp = sum / static_cast<float>(n);
+        if (m_agcAmp < 1e-6f) m_agcAmp = 0.01f;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        // Slow exponential follower on magnitude
+        m_agcAmp += agcAlpha * (out[i] - m_agcAmp);
+
+        // Normalize so carrier sits at ~1.0
+        float gain = (m_agcAmp > 1e-6f) ? (1.0f / m_agcAmp) : 1.0f;
+        if (gain > 50.0f) gain = 50.0f;
+        out[i] *= gain;
+    }
+
+    // Step 3: DC blocker — remove the carrier (now ~1.0), leaving audio modulation
+    // y[n] = x[n] - x[n-1] + R * y[n-1]
+    // R = 0.999 at 66kHz → HPF cutoff ~10Hz — well below 300Hz voice band
+    const float R = 0.999f;
     for (size_t i = 0; i < n; i++) {
         float x = out[i];
-        float y = x - m_dcOffset;
-        m_dcOffset += y * 0.001f;
+        float y = x - m_dcBlockerX + R * m_dcBlockerY;
+        m_dcBlockerX = x;
+        m_dcBlockerY = y;
         out[i] = y;
     }
 

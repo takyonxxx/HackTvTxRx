@@ -171,11 +171,37 @@ $src = New-Object System.Uri("{os.path.abspath(mp3_file)}")
 
 
 # ============================================================
-# Broadcast config
+# Broadcast config — each station emulates a real radio transmitter
 # ============================================================
-BROADCAST_FREQS = [145000000, 446000000, 100000000]
-NFM_DEVIATION = 2500
-WFM_DEVIATION = 75000
+
+# NFM stations (PMR/Amateur — real handheld telsiz)
+# Real NFM: 300Hz-3kHz voice band, 50µs pre-emphasis, max deviation ±2.5kHz (12.5kHz ch)
+FM_NFM_FREQS = [145000000, 446000000]
+NFM_DEVIATION = 2500       # ±2.5 kHz max deviation (12.5kHz channel)
+NFM_AUDIO_LOW  = 300.0     # Hz — voice HPF
+NFM_AUDIO_HIGH = 3000.0    # Hz — voice LPF
+NFM_PREEMPH_TAU = 50e-6    # 50µs pre-emphasis (European standard)
+
+# WFM station (FM broadcast radio)
+# Real WFM: 30Hz-15kHz audio, 50µs pre-emphasis (EUR) or 75µs (US), ±75kHz deviation
+FM_WFM_FREQS = [100000000]
+WFM_DEVIATION = 75000      # ±75 kHz max deviation
+WFM_AUDIO_HIGH = 15000.0   # Hz — broadcast audio max
+WFM_PREEMPH_TAU = 50e-6    # 50µs pre-emphasis (European)
+
+# Combined FM list
+FM_BROADCAST_FREQS = FM_NFM_FREQS + FM_WFM_FREQS
+
+# AM stations (airband — real aviation telsiz)
+# ETSI EN 300 676-1: DSB-FC (A3E), 300Hz-3kHz voice, 8.33kHz channel
+AM_BROADCAST_FREQS = [119100000]  # 119.100 MHz airband
+AM_MODULATION_DEPTH = 0.50  # 50% modulation depth
+AIRBAND_AUDIO_LOW  = 300.0
+AIRBAND_AUDIO_HIGH = 3000.0
+AIRBAND_CHANNEL_BW = 8330   # 8.33 kHz (ICAO EUR)
+
+# Combined list for range checks
+ALL_BROADCAST_FREQS = FM_BROADCAST_FREQS + AM_BROADCAST_FREQS
 
 
 class HackRFEmulator:
@@ -194,6 +220,7 @@ class HackRFEmulator:
         self.amp_enable = False
         self.modulation_index = 0.40
         self.amplitude = 0.10
+        self.modulation_type = 0  # 0=NFM, 1=WFM, 2=AM (from client)
         self.is_tx_mode = False
 
         self.chunk_samples = 32768  # larger chunks for smoother streaming
@@ -202,6 +229,23 @@ class HackRFEmulator:
         self.mp3_samples = None
         self.audio_pos = {}
         self.audio_rate = 48000
+
+        # Pre-compute airband bandpass filter (300Hz-3kHz at 48kHz sample rate)
+        self.airband_bp_taps = self._design_bandpass(
+            AIRBAND_AUDIO_LOW, AIRBAND_AUDIO_HIGH, self.audio_rate, num_taps=127)
+        self.airband_bp_state = {}  # per-station filter delay line
+
+        # Pre-compute NFM voice bandpass filter (300Hz-3kHz at 48kHz)
+        self.nfm_bp_taps = self._design_bandpass(
+            NFM_AUDIO_LOW, NFM_AUDIO_HIGH, self.audio_rate, num_taps=127)
+        self.nfm_bp_state = {}
+
+        # Pre-compute WFM audio lowpass filter (15kHz at 48kHz)
+        self.wfm_lp_taps = self._design_lowpass(WFM_AUDIO_HIGH, self.audio_rate, num_taps=63)
+        self.wfm_lp_state = {}
+
+        # Pre-emphasis filter state (per-station)
+        self.preemph_state = {}  # stores previous sample for each station
 
         self.tx_audio_buffer = bytearray()
         self.tx_audio_lock = threading.Lock()
@@ -241,6 +285,125 @@ class HackRFEmulator:
         self.audio_pos[station_freq] = pos
         return chunk
 
+    @staticmethod
+    def _design_bandpass(f_low, f_high, fs, num_taps=127):
+        """Design a FIR bandpass filter using windowed-sinc method (Hamming).
+        300Hz-3kHz bandpass for airband voice channel simulation."""
+        n = np.arange(num_taps)
+        M = num_taps // 2
+        # Low-pass at f_high
+        fc_hi = f_high / fs
+        h_hi = np.where(n == M, 2*fc_hi,
+                        np.sin(2*np.pi*fc_hi*(n - M)) / (np.pi*(n - M)))
+        # Low-pass at f_low
+        fc_lo = f_low / fs
+        h_lo = np.where(n == M, 2*fc_lo,
+                        np.sin(2*np.pi*fc_lo*(n - M)) / (np.pi*(n - M)))
+        # Bandpass = HPF(f_low) via spectral inversion of LPF
+        h_bp = h_hi - h_lo
+        # Hamming window
+        w = 0.54 - 0.46 * np.cos(2*np.pi*n / (num_taps - 1))
+        h_bp *= w
+        # Normalize passband gain to 1.0
+        # Evaluate gain at center of passband
+        f_center = (f_low + f_high) / 2.0
+        omega = 2 * np.pi * f_center / fs
+        gain = np.abs(np.sum(h_bp * np.exp(-1j * omega * n)))
+        if gain > 0:
+            h_bp /= gain
+        return h_bp.astype(np.float64)
+
+    def _apply_airband_filter(self, audio, station_freq):
+        """Apply 300Hz-3kHz bandpass filter with persistent state per station."""
+        key = f"bp_{station_freq}"
+        taps = self.airband_bp_taps
+        ntaps = len(taps)
+
+        # Get or create delay line
+        if key not in self.airband_bp_state:
+            self.airband_bp_state[key] = np.zeros(ntaps - 1, dtype=np.float64)
+        delay = self.airband_bp_state[key]
+
+        # Prepend delay line for overlap-save convolution
+        extended = np.concatenate([delay, audio.astype(np.float64)])
+        out = np.zeros(len(audio), dtype=np.float64)
+        for i in range(len(audio)):
+            out[i] = np.dot(taps, extended[i:i+ntaps])
+
+        # Save tail for next call
+        if len(audio) >= ntaps - 1:
+            self.airband_bp_state[key] = audio[-(ntaps-1):].astype(np.float64)
+        else:
+            keep = (ntaps - 1) - len(audio)
+            self.airband_bp_state[key] = np.concatenate([
+                delay[-keep:], audio.astype(np.float64)])
+
+        return out.astype(np.float32)
+
+    @staticmethod
+    def _design_lowpass(f_cutoff, fs, num_taps=63):
+        """Design a FIR lowpass filter using windowed-sinc (Hamming)."""
+        n = np.arange(num_taps)
+        M = num_taps // 2
+        fc = f_cutoff / fs
+        h = np.where(n == M, 2*fc,
+                     np.sin(2*np.pi*fc*(n - M)) / (np.pi*(n - M)))
+        w = 0.54 - 0.46 * np.cos(2*np.pi*n / (num_taps - 1))
+        h *= w
+        s = np.sum(h)
+        if s > 0:
+            h /= s
+        return h.astype(np.float64)
+
+    def _apply_fir_filter(self, audio, taps, state_dict, station_freq, prefix="fir"):
+        """Apply FIR filter with persistent state per station."""
+        key = f"{prefix}_{station_freq}"
+        ntaps = len(taps)
+
+        if key not in state_dict:
+            state_dict[key] = np.zeros(ntaps - 1, dtype=np.float64)
+        delay = state_dict[key]
+
+        extended = np.concatenate([delay, audio.astype(np.float64)])
+        out = np.zeros(len(audio), dtype=np.float64)
+        for i in range(len(audio)):
+            out[i] = np.dot(taps, extended[i:i+ntaps])
+
+        if len(audio) >= ntaps - 1:
+            state_dict[key] = audio[-(ntaps-1):].astype(np.float64)
+        else:
+            keep = (ntaps - 1) - len(audio)
+            state_dict[key] = np.concatenate([
+                delay[-keep:], audio.astype(np.float64)])
+
+        return out.astype(np.float32)
+
+    def _apply_preemphasis(self, audio, tau, station_freq):
+        """Apply FM pre-emphasis filter: H(s) = 1 + s*tau
+        Discrete: y[n] = x[n] - alpha * x[n-1], where alpha = 1/(1 + 2*pi*tau*fs)
+        This boosts high frequencies like a real FM transmitter."""
+        key = f"preemph_{station_freq}"
+        if key not in self.preemph_state:
+            self.preemph_state[key] = 0.0
+
+        # Pre-emphasis: first-order high-shelf
+        # y[n] = x[n] + alpha * (x[n] - x[n-1])
+        # alpha = tau * fs (time constant × sample rate)
+        alpha = tau * self.audio_rate
+        prev = self.preemph_state[key]
+        out = np.zeros_like(audio)
+        for i in range(len(audio)):
+            out[i] = audio[i] + alpha * (audio[i] - prev)
+            prev = audio[i]
+        self.preemph_state[key] = float(prev)
+
+        # Normalize to prevent clipping from boost
+        peak = np.max(np.abs(out))
+        if peak > 0.95:
+            out *= 0.95 / peak
+
+        return out
+
     def _space_noise(self, n, fs):
         t = (self.sample_counter + np.arange(n, dtype=np.float64)) / fs
         # Whistler sweep
@@ -265,17 +428,32 @@ class HackRFEmulator:
         q_acc = np.zeros(n, dtype=np.float64)
         has_music = False
 
-        for bf in BROADCAST_FREQS:
+        # FM broadcast stations
+        for bf in FM_BROADCAST_FREQS:
             fo = bf - self.frequency
             if abs(fo) > half_bw: continue
             has_music = True
 
-            fm_dev = WFM_DEVIATION if bf == 100000000 else NFM_DEVIATION
-            amp = 0.25 if bf == 100000000 else 0.20
+            is_wfm = bf in FM_WFM_FREQS
+            fm_dev = WFM_DEVIATION if is_wfm else NFM_DEVIATION
+            amp = 0.60
 
             dur = n * dt
             na = int(dur * self.audio_rate) + 1
             audio = self._get_audio_chunk(bf, na)
+
+            if is_wfm:
+                # WFM transmitter chain: LPF 15kHz → pre-emphasis 50µs → FM mod
+                audio = self._apply_fir_filter(audio, self.wfm_lp_taps,
+                                               self.wfm_lp_state, bf, "wfm_lp")
+                audio = self._apply_preemphasis(audio, WFM_PREEMPH_TAU, bf)
+            else:
+                # NFM transmitter chain: BPF 300-3kHz → pre-emphasis 50µs → FM mod
+                audio = self._apply_fir_filter(audio, self.nfm_bp_taps,
+                                               self.nfm_bp_state, bf, "nfm_bp")
+                audio = self._apply_preemphasis(audio, NFM_PREEMPH_TAU, bf)
+                audio = np.clip(audio, -0.95, 0.95)
+
             audio_r = np.interp(np.linspace(0, len(audio)-1, n), np.arange(len(audio)), audio)
 
             inst_freq = fo + fm_dev * audio_r
@@ -288,6 +466,52 @@ class HackRFEmulator:
 
             i_acc += amp * np.cos(phase)
             q_acc += amp * np.sin(phase)
+
+        # AM broadcast stations — DSB-FC (A3E) per ETSI EN 300 676-1
+        # Airband: 8.33kHz channel, 300-3kHz voice band
+        for bf in AM_BROADCAST_FREQS:
+            fo = bf - self.frequency
+            if abs(fo) > half_bw: continue
+            has_music = True
+
+            # Carrier amplitude — sets int8 dynamic range utilization
+            # With 50% mod depth: envelope swings 0.5 to 1.5 × carrier
+            # carrier=0.70 → IQ peak = 0.70*1.5*gain ≈ 0.23 → int8 ≈ 29 (good SNR)
+            amp = 0.70
+
+            dur = n * dt
+            na = int(dur * self.audio_rate) + 1
+            audio = self._get_audio_chunk(bf, na)
+
+            # 1. Apply 300Hz-3kHz bandpass filter (airband voice channel)
+            audio = self._apply_airband_filter(audio, bf)
+
+            # 2. Limiter — prevent over-modulation (keep envelope > 0)
+            # With 50% depth, audio must stay within ±1.0 to keep envelope positive
+            # Clip to ±0.95 for safety margin
+            audio = np.clip(audio, -0.95, 0.95)
+
+            # 3. Resample filtered audio to IQ sample rate
+            audio_r = np.interp(np.linspace(0, len(audio)-1, n), np.arange(len(audio)), audio)
+
+            # 4. DSB-FC AM: s(t) = A · (1 + m·audio(t)) · cos(2π·f·t)
+            # This is the standard aviation AM formula per ICAO Annex 10
+            # m = modulation index (0.0 to 1.0)
+            # envelope = 1 + m*audio, always positive when |audio| ≤ 1/m
+            envelope = 1.0 + AM_MODULATION_DEPTH * audio_r
+
+            # 5. Carrier phase — continuous across chunks
+            t = (self.sample_counter + np.arange(n, dtype=np.float64)) / fs
+            carrier_phase = 2 * np.pi * fo * t
+
+            key = f"am_{bf}"
+            if key not in self.audio_pos: self.audio_pos[key] = 0.0
+            carrier_phase += self.audio_pos[key]
+            self.audio_pos[key] = float(carrier_phase[-1]) % (2*np.pi*10000)
+
+            # 6. Generate IQ — DSB-FC with both sidebands symmetric around carrier
+            i_acc += amp * envelope * np.cos(carrier_phase)
+            q_acc += amp * envelope * np.sin(carrier_phase)
 
         if not has_music:
             ni, nq = self._space_noise(n, fs)
@@ -349,10 +573,17 @@ class HackRFEmulator:
             elif c=="SET_AMPLITUDE" and len(p)==2:
                 v=float(p[1])
                 if 0<=v<=2: self.amplitude=v; return f"OK: Amp={v}\n"
+            elif c=="SET_MODULATION_TYPE" and len(p)==2:
+                v=int(p[1])
+                if v in(0,1,2):
+                    self.modulation_type=v
+                    names={0:"NFM",1:"WFM",2:"AM"}
+                    self._log(f"ModType->{names[v]}")
+                    return f"OK: Modulation={names[v]}\n"
             elif c=="SWITCH_RX": self.is_tx_mode=False; self.sample_counter=0; self._log("RX"); return "OK: Switched to RX mode\n"
             elif c=="SWITCH_TX": self.is_tx_mode=True; self._log(f"TX {self.calculate_tx_power_dbm():.1f}dBm"); return "OK: Switched to TX mode\n"
             elif c=="GET_STATUS": return f"Mode:{'TX'if self.is_tx_mode else'RX'} {self.frequency/1e6:.3f}MHz TXpwr:{self.calculate_tx_power_dbm():.1f}dBm\n"
-            elif c=="HELP": return "SET_FREQ SET_SAMPLE_RATE SET_VGA_GAIN SET_LNA_GAIN SET_RX_AMP_GAIN SET_TX_AMP_GAIN SET_AMP_ENABLE SET_MODULATION_INDEX SET_AMPLITUDE SWITCH_RX SWITCH_TX GET_STATUS\n"
+            elif c=="HELP": return "SET_FREQ SET_SAMPLE_RATE SET_VGA_GAIN SET_LNA_GAIN SET_RX_AMP_GAIN SET_TX_AMP_GAIN SET_AMP_ENABLE SET_MODULATION_INDEX SET_MODULATION_TYPE SET_AMPLITUDE SWITCH_RX SWITCH_TX GET_STATUS\n"
         except: pass
         return "ERROR\n"
 
@@ -473,15 +704,20 @@ class HackRFEmulator:
             s.bind(('0.0.0.0',port)); s.listen(5); svs.append(s)
 
         print("="*60)
-        print("  HackRF TCP Emulator v5")
+        print("  HackRF TCP Emulator v7 - Real Radio Emulation")
         print("="*60)
         print(f"  Ports: {self.data_port}/{self.control_port}/{self.audio_port}")
         print(f"  Audio: {'LOADED '+str(len(self.mp3_samples)//48000)+'s' if self.mp3_samples is not None else '440Hz FALLBACK'}")
-        print(f"\n  Broadcast (MP3/tone):")
-        for bf in BROADCAST_FREQS:
-            m="WFM" if bf==100000000 else "NFM"
-            print(f"    {bf/1e6:>10.3f} MHz [{m}]")
-        print(f"  Other frequencies -> space noise")
+        print(f"\n  NFM Stations (voice radio — 300-3kHz BPF, {NFM_PREEMPH_TAU*1e6:.0f}us pre-emph):")
+        for bf in FM_NFM_FREQS:
+            print(f"    {bf/1e6:>10.3f} MHz [NFM] dev=+/-{NFM_DEVIATION/1000:.1f}kHz")
+        print(f"\n  WFM Stations (broadcast — 15kHz LPF, {WFM_PREEMPH_TAU*1e6:.0f}us pre-emph):")
+        for bf in FM_WFM_FREQS:
+            print(f"    {bf/1e6:>10.3f} MHz [WFM] dev=+/-{WFM_DEVIATION/1000:.0f}kHz")
+        print(f"\n  AM Stations (airband DSB-FC A3E — 300-3kHz BPF, 8.33kHz ch):")
+        for bf in AM_BROADCAST_FREQS:
+            print(f"    {bf/1e6:>10.3f} MHz [AM]  depth={AM_MODULATION_DEPTH*100:.0f}%")
+        print(f"\n  Other frequencies -> space noise")
         print(f"\n  Waiting for connections...\n{'='*60}")
 
         ts=[
@@ -498,7 +734,7 @@ class HackRFEmulator:
                 time.sleep(5)
                 if self.data_clients:
                     m="TX"if self.is_tx_mode else"RX"
-                    ns=sum(1 for bf in BROADCAST_FREQS if abs(bf-self.frequency)<=self.sample_rate/2)
+                    ns=sum(1 for bf in ALL_BROADCAST_FREQS if abs(bf-self.frequency)<=self.sample_rate/2)
                     self._log(f"[{m}] {self.frequency/1e6:.3f}MHz {'MUSIC'if ns else'NOISE'} {self.total_bytes_sent/(1024*1024):.0f}MB")
         except KeyboardInterrupt: print("\nStop")
         self.running=False

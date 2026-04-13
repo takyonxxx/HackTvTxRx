@@ -37,35 +37,31 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
     }
 
     // 2b. FM IF Noise Reduction (SDR++ FMNR)
-    // Isolates the FM carrier's instantaneous frequency, strips all noise
     if (m_fmnrEnabled && !isWBFM) {
         applyFMNR(iq);
     }
 
-    // 3. FM demodulate — produces MPX baseband
+    // 3. FM demodulate
     double fmRate = m_iqStages.empty() ? m_inputRate : m_iqStages.back().outputRate;
     auto mpx = fmDemod(iq, fmRate);
 
-    // WBFM: Stereo decode at MPX rate (must be >= 76 kHz for 38 kHz subcarrier)
+    // WBFM: Stereo decode
     if (isWBFM && fmRate >= 76000.0) {
         return decodeStereo(mpx, fmRate);
     }
 
-    // NBFM / fallback mono path
-    // 4. Real-valued decimation stages
+    // NBFM mono path
     for (auto& stage : m_realStages) {
         std::vector<float> tmp;
         decimateReal(mpx, tmp, stage.taps, stage.factor, stage.realHistory);
         mpx = std::move(tmp);
     }
 
-    // 5. Resample to 48 kHz
     double lastRate = m_realStages.empty() ? fmRate : m_realStages.back().outputRate;
     if (std::abs(lastRate - 48000.0) > 1.0) {
         mpx = resample(mpx, lastRate, 48000.0);
     }
 
-    // 6. De-emphasis (BEFORE audio LPF — GNU Radio standard for NFM)
     if (m_deemphTau > 0.0f) {
         float dt = 1.0f / 48000.0f;
         float alphaD = m_deemphTau / (m_deemphTau + dt);
@@ -75,22 +71,32 @@ std::vector<float> FMDemodulator::demodulate(const std::vector<std::complex<floa
         }
     }
 
-    // 7-8. Audio LPF (controlled by slider) — HPF skipped (was making sound muffled)
     {
         std::vector<float> tmp;
         applyFIR(mpx, tmp, m_audioFilterTaps, m_audioFilterHistory);
         mpx = std::move(tmp);
     }
 
-    // 9. DC removal
     removeDC(m_dcX1L, m_dcY1L, mpx);
 
-    // 10. Volume gain + soft limiter + mono→stereo interleave
+    // Adaptive peak limiter
+    for (size_t i = 0; i < mpx.size(); i++) {
+        float absVal = std::abs(mpx[i]);
+        m_nfmAudioRms += 0.001f * (absVal - m_nfmAudioRms);
+        float threshold = std::max(m_nfmAudioRms * 4.0f, 0.3f);
+        if (absVal > threshold) {
+            mpx[i] = (mpx[i] > 0) ? threshold : -threshold;
+        }
+    }
+
+    // Volume gain + soft limiter + mono→stereo interleave
     std::vector<float> stereoOut(mpx.size() * 2);
     for (size_t i = 0; i < mpx.size(); i++) {
         float s = mpx[i] * m_outputGain;
-        if (s > 1.0f) s = 1.0f;
-        else if (s < -1.0f) s = -1.0f;
+        // Soft clipper: linear below ±0.6, smooth tanh compression above
+        if (s > 0.6f) s = 0.6f + 0.4f * std::tanh((s - 0.6f) * 2.0f);
+        else if (s < -0.6f) s = -0.6f + 0.4f * std::tanh((s + 0.6f) * 2.0f);
+        // Smoothing between consecutive samples to reduce hard edges
         s = s * 0.5f + m_prevClipSample * 0.5f;
         m_prevClipSample = s;
         stereoOut[i * 2]     = s;
@@ -250,12 +256,16 @@ std::vector<float> FMDemodulator::decodeStereo(const std::vector<float>& mpx, do
     for (size_t i = 0; i < outLen; i++) {
         float l = leftAudio[i] * m_outputGain;
         float r = rightAudio[i] * m_outputGain;
-        if (l > 1.0f) l = 0.75f;
-        else if (l < -1.0f) l = -0.75f;
-        else l = l - (l * l * l) / 4.0f;
-        if (r > 1.0f) r = 0.75f;
-        else if (r < -1.0f) r = -0.75f;
-        else r = r - (r * r * r) / 4.0f;
+        // Soft clipper: linear below ±0.6, smooth tanh compression above
+        if (l > 0.6f) l = 0.6f + 0.4f * std::tanh((l - 0.6f) * 2.0f);
+        else if (l < -0.6f) l = -0.6f + 0.4f * std::tanh((l + 0.6f) * 2.0f);
+        if (r > 0.6f) r = 0.6f + 0.4f * std::tanh((r - 0.6f) * 2.0f);
+        else if (r < -0.6f) r = -0.6f + 0.4f * std::tanh((r + 0.6f) * 2.0f);
+        // Smoothing
+        l = l * 0.5f + m_prevClipL * 0.5f;
+        r = r * 0.5f + m_prevClipR * 0.5f;
+        m_prevClipL = l;
+        m_prevClipR = r;
         stereoOut[i * 2]     = l;
         stereoOut[i * 2 + 1] = r;
     }
@@ -592,12 +602,20 @@ std::vector<float> FMDemodulator::fmDemod(const std::vector<std::complex<float>>
 
     for (size_t i = 0; i < signal.size(); i++) {
         float cphase = std::atan2(signal[i].imag(), signal[i].real());
+
         float delta = cphase - m_lastPhase;
 
         if (delta > static_cast<float>(M_PI)) delta -= 2.0f * static_cast<float>(M_PI);
         if (delta < -static_cast<float>(M_PI)) delta += 2.0f * static_cast<float>(M_PI);
 
         out[i] = delta * gain;
+
+        // Clamp FM demod output to reasonable range (±1.0)
+        // Real NFM with 2.5kHz deviation at 50kHz rate produces ±0.3 max
+        // Anything beyond ±1.0 is phase noise or transient
+        if (out[i] > 1.0f) out[i] = 1.0f;
+        else if (out[i] < -1.0f) out[i] = -1.0f;
+
         m_lastPhase = cphase;
     }
 

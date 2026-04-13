@@ -69,6 +69,7 @@ private:
     float m_prevClipSample = 0.0f;  // NBFM clip smoothing
     float m_prevClipL = 0.0f;       // WFM L clip smoothing
     float m_prevClipR = 0.0f;       // WFM R clip smoothing
+    float m_nfmAudioRms = 0.1f;     // NFM adaptive peak limiter
 
     std::vector<DecimStage> m_iqStages;
     std::vector<DecimStage> m_realStages;  // only for NBFM
@@ -98,7 +99,7 @@ private:
 
     // FM IF Noise Reduction (amplitude limiter + smoothing)
     bool m_fmnrEnabled = false;
-    std::vector<std::complex<float>> m_fmnrBuffer;  // history for moving average
+    std::vector<std::complex<float>> m_fmnrBuffer;
 
     void rebuildChain();
     void applyFMNR(std::vector<std::complex<float>>& iq);

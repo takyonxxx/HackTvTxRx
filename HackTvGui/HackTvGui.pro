@@ -12,9 +12,12 @@ message($$PARENT_DIR)
 win32 {
     WIN_LIB_DIR = $$absolute_path($$PARENT_DIR/lib/windows)
     INCLUDEPATH += $$PARENT_DIR/HackTvLib
-    # Add lib/windows to DLL search path (no copy needed)
-    # DLLs are loaded from lib/windows at runtime
     LIBS += -L$$WIN_LIB_DIR -lHackTvLib
+
+    # Copy DLLs to build output so exe can find them at runtime
+    WIN_LIB_DIR_NATIVE = $$shell_path($$WIN_LIB_DIR)
+    QMAKE_POST_LINK += xcopy /Y /D \"$$WIN_LIB_DIR_NATIVE\\*.dll\" \"$$shell_path($$OUT_PWD/release/)\" $$escape_expand(\\n\\t)
+    QMAKE_POST_LINK += xcopy /Y /D \"$$WIN_LIB_DIR_NATIVE\\*.dll\" \"$$shell_path($$OUT_PWD/)\" $$escape_expand(\\n\\t)
 }
 
 macx {

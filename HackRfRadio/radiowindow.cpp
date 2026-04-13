@@ -844,8 +844,10 @@ void RadioWindow::processIqBuffer()
         audio.resize(mono.size() * 2);
         for (size_t i = 0; i < mono.size(); i++) {
             float s = mono[i] * amGain;
-            if (s > 0.9f) s = 0.9f + 0.1f * std::tanh((s - 0.9f) * 8.0f);
-            else if (s < -0.9f) s = -0.9f + 0.1f * std::tanh((s + 0.9f) * 8.0f);
+            // Soft clipper: linear below ±0.6, smooth tanh compression above
+            // This preserves audio detail at normal levels while preventing crackle at peaks
+            if (s > 0.6f) s = 0.6f + 0.4f * std::tanh((s - 0.6f) * 2.0f);
+            else if (s < -0.6f) s = -0.6f + 0.4f * std::tanh((s + 0.6f) * 2.0f);
             audio[i * 2]     = s;
             audio[i * 2 + 1] = s;
         }
@@ -1015,15 +1017,15 @@ void RadioWindow::onModulationChanged(int index)
             m_gainDialog->blockSignals(true);
             m_gainDialog->setVgaGain(15);
             m_gainDialog->setLnaGain(20);
-            m_gainDialog->setRxGain(400);      // 4.00
+            m_gainDialog->setRxGain(300);      // 3.00
             m_gainDialog->setRxModIndex(50);   // 0.50
-            m_gainDialog->setDeemph(0);        // OFF
-            m_gainDialog->setAudioLpf(70);     // 7.0 kHz
+            m_gainDialog->setDeemph(50);       // 50µs (matches NFM pre-emphasis)
+            m_gainDialog->setAudioLpf(40);     // 4.0 kHz (voice band)
             m_gainDialog->blockSignals(false);
-            m_fmDemod->setOutputGain(4.0f);
+            m_fmDemod->setOutputGain(3.0f);
             m_fmDemod->setRxModIndex(0.5f);
-            m_fmDemod->setDeemphTau(0.0f);
-            m_fmDemod->setAudioLPF(7000.0f);
+            m_fmDemod->setDeemphTau(50.0f);
+            m_fmDemod->setAudioLPF(4000.0f);
         }
         m_mainIfBwSlider->blockSignals(true);
         m_mainIfBwSlider->setValue(25);
@@ -1042,14 +1044,14 @@ void RadioWindow::onModulationChanged(int index)
             m_gainDialog->blockSignals(true);
             m_gainDialog->setVgaGain(20);
             m_gainDialog->setLnaGain(40);
-            m_gainDialog->setRxGain(200);      // 2.00
+            m_gainDialog->setRxGain(300);      // 3.00
             m_gainDialog->setRxModIndex(100);  // 1.00
-            m_gainDialog->setDeemph(0);        // OFF
+            m_gainDialog->setDeemph(50);       // 50µs (matches WFM pre-emphasis)
             m_gainDialog->setAudioLpf(80);     // 8.0 kHz
             m_gainDialog->blockSignals(false);
-            m_fmDemod->setOutputGain(2.0f);
+            m_fmDemod->setOutputGain(3.0f);
             m_fmDemod->setRxModIndex(1.0f);
-            m_fmDemod->setDeemphTau(0.0f);
+            m_fmDemod->setDeemphTau(50.0f);
             m_fmDemod->setAudioLPF(8000.0f);
         }
         m_mainIfBwSlider->blockSignals(true);
@@ -1069,7 +1071,7 @@ void RadioWindow::onModulationChanged(int index)
             m_gainDialog->blockSignals(true);
             m_gainDialog->setVgaGain(20);
             m_gainDialog->setLnaGain(40);
-            m_gainDialog->setRxGain(500);      // 5.0
+            m_gainDialog->setRxGain(300);      // 3.0
             m_gainDialog->setRxModIndex(100);  // 1.00
             m_gainDialog->setDeemph(0);        // OFF
             m_gainDialog->setAudioLpf(50);     // 5.0 kHz

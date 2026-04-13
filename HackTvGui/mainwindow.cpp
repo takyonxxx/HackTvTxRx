@@ -587,9 +587,9 @@ void MainWindow::applyModePresets()
     case MODE_NFM:
         m_rxBandwidth = 12500;
         lnaSlider->setValue(20); vgaSlider->setValue(20);
-        rxGainSlider->setValue(20);       // 2.0
+        rxGainSlider->setValue(30);       // 3.0
         rxModIndexSlider->setValue(15);   // 1.5
-        rxDeemphSlider->setValue(0);
+        rxDeemphSlider->setValue(50);     // 50µs pre-emphasis match
         txAmplitudeSlider->setValue(50);  // 0.50
         txModIndexSlider->setValue(40);   // 0.40
         sampleRateCombo->setCurrentIndex(0); // 2 MHz
@@ -597,9 +597,9 @@ void MainWindow::applyModePresets()
     case MODE_WFM:
         m_rxBandwidth = 150000;
         lnaSlider->setValue(40); vgaSlider->setValue(20);
-        rxGainSlider->setValue(15);       // 1.5
+        rxGainSlider->setValue(30);       // 3.0
         rxModIndexSlider->setValue(15);   // 1.5
-        rxDeemphSlider->setValue(0);
+        rxDeemphSlider->setValue(50);     // 50µs pre-emphasis match
         txAmplitudeSlider->setValue(50);
         txModIndexSlider->setValue(40);
         sampleRateCombo->setCurrentIndex(0);
@@ -607,7 +607,7 @@ void MainWindow::applyModePresets()
     case MODE_AM:
         m_rxBandwidth = 10500;
         lnaSlider->setValue(40); vgaSlider->setValue(20);
-        rxGainSlider->setValue(10);       // 1.0
+        rxGainSlider->setValue(30);       // 3.0
         rxModIndexSlider->setValue(10);
         rxDeemphSlider->setValue(0);
         txAmplitudeSlider->setValue(25);  // 0.25 for AM
@@ -1032,8 +1032,9 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
             audio.resize(mono.size() * 2);
             for (size_t i = 0; i < mono.size(); i++) {
                 float s = mono[i] * amGain;
-                if (s > 0.9f) s = 0.9f + 0.1f * std::tanh((s - 0.9f) * 8.0f);
-                else if (s < -0.9f) s = -0.9f + 0.1f * std::tanh((s + 0.9f) * 8.0f);
+                // Soft clipper: linear below ±0.6, smooth tanh compression above
+                if (s > 0.6f) s = 0.6f + 0.4f * std::tanh((s - 0.6f) * 2.0f);
+                else if (s < -0.6f) s = -0.6f + 0.4f * std::tanh((s + 0.6f) * 2.0f);
                 audio[i*2] = s;
                 audio[i*2+1] = s;
             }
@@ -1045,7 +1046,11 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
             if (m_opMode == MODE_AM) {
                 audioOutput->enqueueAudio(std::move(audio));
             } else {
-                for (auto& s : audio) s = std::clamp(s * audioGain, -0.9f, 0.9f);
+                for (auto& s : audio) {
+                    s *= audioGain;
+                    if (s > 0.6f) s = 0.6f + 0.4f * std::tanh((s - 0.6f) * 2.0f);
+                    else if (s < -0.6f) s = -0.6f + 0.4f * std::tanh((s + 0.6f) * 2.0f);
+                }
                 audioOutput->enqueueAudio(std::move(audio));
             }
         }

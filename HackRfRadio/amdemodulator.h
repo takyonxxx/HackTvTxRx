@@ -49,8 +49,19 @@ private:
     // DC blocker state (SDR++ style)
     float m_dcOffset = 0.0f;
 
-    // AGC state (SDR++ style)
-    float m_agcAmp = 1.0f;
+    // Proper DC blocker state (first-order HPF)
+    float m_dcBlockerX = 0.0f;  // previous input
+    float m_dcBlockerY = 0.0f;  // previous output
+
+    // Running IQ DC removal
+    float m_dcI = 0.0f;
+    float m_dcQ = 0.0f;
+
+    // AGC state
+    float m_agcAmp = 0.0f;  // 0 = auto-init from first chunk
+
+    // Output peak limiter
+    float m_audioRms = 0.05f;  // running RMS estimate
 
     void rebuildChain();
 
