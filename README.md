@@ -1,6 +1,6 @@
 # HackTvRxTx - SDR Transceiver & Analog TV Decoder
 
-A Qt 6.x based SDR (Software Defined Radio) application for HackRF One and RTL-SDR devices. Includes wideband FM receiver with real-time FFT spectrum analyzer, waterfall display, FM stereo transmitter (mic & file), analog TV PAL B/G transmitter, and a standalone PAL-B/G TV decoder with real-time FM audio demodulation.
+A Qt 6.x based SDR (Software Defined Radio) application for HackRF One and RTL-SDR devices. Includes wideband FM stereo receiver with real-time FFT spectrum analyzer, waterfall display, FM stereo transmitter (mic & file), analog TV PAL B/G transmitter, and a standalone PAL-B/G TV decoder with real-time FM audio demodulation.
 
 Based on [fsphil/hacktv](https://github.com/fsphil/hacktv) with significant modifications for cross-platform GUI operation.
 
@@ -9,6 +9,12 @@ Based on [fsphil/hacktv](https://github.com/fsphil/hacktv) with significant modi
 ## Features
 
 ### HackTvGui - SDR Transceiver
+- **Multi-Device Support**: HackRF One (USB), HackRF TCP (emulator/remote), RTL-SDR TCP (emulator/remote), RTL-SDR (USB) — select from device dropdown with auto-configured connection parameters
+- **Mode-Aware UI**: Dynamic theme colors per operating mode — NFM (green), WFM (blue), AM (orange), FM File TX (teal), TV modes (purple). GroupBox borders, slider handles, FFT fill, frequency digits, and START button all change color with mode. TV modes auto-hide the RX panel for a cleaner layout
+- **WFM Stereo Decode**: Real-time 19 kHz pilot tone detection via PLL, 38 kHz DSB-SC subcarrier recovery, L+R / L-R channel separation with de-emphasis — true FM stereo broadcast reception. Stereo/Mono toggle via checkbox or click on STEREO indicator
+- **Multiple Modulations**: WFM (default, 150 kHz BW), NFM (12.5 kHz BW), AM (10.5 kHz BW) with mode-specific presets for gain, modulation index, de-emphasis, and bandwidth auto-applied on mode change
+- **Auto-Restart on Mode Change**: Switching between WFM/NFM/AM while running automatically stops and restarts with new demodulator — no manual stop/start needed
+- **TCP Client (Built-in)**: Direct TCP connection to HackRF TCP emulator (3-port text protocol) or RTL-SDR TCP emulator (single-port rtl_tcp binary protocol). GUI sends SET_FREQ, SET_SAMPLE_RATE, SET_LNA_GAIN, SET_VGA_GAIN commands in real-time as sliders change
 - **RX Mode**: Wideband FM receiver with real-time audio demodulation
 - **TX Mode**: Analog TV transmitter supporting PAL-I, PAL-B/G, PAL-D/K, PAL-M, PAL-N, SECAM-L, SECAM-D/K, NTSC-M, NTSC-A and more
 - **FM Stereo Transmitter (Mic)**: Real-time microphone input FM stereo transmitter with 19 kHz pilot tone and 38 kHz DSB-SC subcarrier per FM broadcasting standard
@@ -18,13 +24,31 @@ Based on [fsphil/hacktv](https://github.com/fsphil/hacktv) with significant modi
 - **OpenGL Spectrum Analyzer**: GPU-accelerated FFT spectrum display with smooth antialiased rendering
 - **Waterfall Display**: Real-time scrolling waterfall with SDR#-style color palette (dark blue → cyan → yellow → red)
 - **Band Overlay**: Known frequency band allocations displayed on spectrum (FM Broadcast, Ham Radio, Aviation, Marine VHF, TV bands, Cellular, ISM/WiFi, etc.)
-- **Frequency Control**: Click-to-tune on spectrum, mouse wheel tuning with digit-proportional step size, draggable filter bandwidth
-- **Adjustable Gains**: LNA, VGA, TX Amp, RX Amp with real-time control
+- **Frequency Control**: Click-to-tune on spectrum, mouse wheel tuning with digit-proportional step size, draggable filter bandwidth. Enlarged frequency display (68-90px height)
+- **Adjustable Gains**: LNA, VGA, TX Amp, RX Amp with real-time control — slider handles color-match the active mode
 - **Multiple Sample Rates**: 2, 4, 8, 10, 12.5, 16, 20 MHz
 - **European TV Channels**: Pre-configured E2-E69 channel list
 - **Video Input Sources**: File (MP4/FLV), test pattern, RTSP stream via FFmpeg
-- **Fixed Window Size**: 1024×740 fixed layout for consistent UI across all modes
+- **Global Dark Theme**: GitHub-dark inspired stylesheet — consistent dark backgrounds, rounded controls, mode-aware accent colors
 - **Cross-platform**: Windows (MinGW 64-bit) and macOS
+
+### TCP Emulators
+
+Software emulators that generate realistic RF signals (WFM stereo, NFM, AM) over TCP — no hardware needed for development and testing.
+
+#### HackRF TCP Emulator (`hackrf_emulator.py`)
+- **3-Port Protocol**: Data (5000), Control (5001), Audio (5002) — text-based command protocol compatible with HackTvGui "HackRF TCP" and HackRfRadio
+- **WFM Stereo Broadcast**: Full MPX composite signal — 19 kHz pilot tone + 38 kHz DSB-SC subcarrier with per-channel 50µs pre-emphasis. Stereo WAV files preserve L/R channel separation
+- **NFM Voice Radio**: 300 Hz-3 kHz bandpass filtered voice with 50µs pre-emphasis, +/-2.5 kHz deviation (PMR/amateur simulation at 145 MHz, 446 MHz)
+- **AM Airband**: DSB-FC (A3E) at 119.1 MHz with 50% modulation depth, 300 Hz-3 kHz voice bandpass (ICAO standard)
+- **Space Noise**: Whistler sweeps, burst crackle, and rumble on empty frequencies
+- **Audio Sources**: WAV/MP3 file playback (pydub or ffmpeg decode), 440 Hz tone fallback
+- **Real-time Pacing**: Clock-based IQ streaming at exact sample rate with pre-buffer queue
+
+#### RTL-SDR TCP Emulator (`rtlsdr_emulator.py`)
+- **rtl_tcp Binary Protocol**: Single port (default 1234), 12-byte dongle header ("RTL0" + R820T tuner type), 5-byte binary commands — compatible with any rtl_tcp client and HackTvGui "RTL-SDR TCP" device mode
+- **Same Signal Engine**: Identical WFM stereo, NFM, AM, and space noise generation as HackRF emulator
+- **uint8 IQ Format**: Unsigned 8-bit IQ centered at 127 (RTL-SDR native format), vs HackRF's signed int8
 
 ### PALBDecoder - Analog TV Receiver
 - **PAL-B/G Video Decoder**: Real-time analog TV reception and decoding at 720x576 resolution with SDRangel-style sync detection
@@ -55,23 +79,65 @@ Based on [fsphil/hacktv](https://github.com/fsphil/hacktv) with significant modi
 
 ### HackRfRadio - TCP Remote SDR Radio
 
-A standalone Qt 6.x radio client that connects to HackRfTcp over TCP/IP, enabling remote SDR operation from any device on the network. Designed for both desktop and touch-friendly mobile-style interfaces.
+A standalone Qt 6.x radio client that connects to HackRfTcp or HackRF TCP Emulator over TCP/IP, enabling remote SDR operation from any device on the network. Designed for both desktop and touch-friendly mobile-style interfaces.
 
 - **FM Stereo Decode**: Real-time 19 kHz pilot tone detection via Goertzel algorithm, PLL-based 38 kHz subcarrier recovery, L/R channel separation — true stereo FM broadcast reception
 - **Stereo Indicator**: Live STEREO/MONO status display with click-to-toggle forced mono mode
-- **Multiple Modulations**: WFM (Wide FM), NFM (Narrow FM), AM demodulation
+- **Multiple Modulations**: WFM (Wide FM), NFM (Narrow FM), AM demodulation with mode-specific presets (gain, modulation index, de-emphasis, audio LPF, IF bandwidth all auto-configured per mode)
 - **Spectrum Analyzer**: Real-time FFT spectrum display (CPlotter) with SDRuno-style gradient fill, band overlay, adaptive frequency labels
 - **Signal Meter**: CMeter dBFS bar with real-time level tracking
+- **Squelch**: Adjustable squelch threshold — audio muted when signal level drops below threshold
 - **Remote Operation**: Connects to HackRfTcp server over WiFi/LAN — HackRF can run on a Raspberry Pi while the radio client runs on any PC
-- **Adjustable Parameters**: VGA, LNA, RX Gain, IF Bandwidth, Modulation Index, De-emphasis — all settings auto-saved and restored
-- **PTT Transmit**: Push-to-talk FM transmit via microphone with real-time audio streaming to server
-- **Bandwidth Selection**: 2, 4, 8, 10, 12.5, 16, 20 MHz sample rates
-- **Band Presets**: VHF/UHF amateur, FM broadcast, marine, PMR446, CB and custom frequencies
+- **Adjustable Parameters**: VGA, LNA, RX Gain, IF Bandwidth, Modulation Index, De-emphasis, Audio LPF — all settings auto-saved and restored via dedicated settings page
+- **PTT Transmit**: Push-to-talk FM transmit via microphone with real-time audio streaming to server. TX power estimation displayed (dBm)
+- **Bandwidth Selection**: 2, 4, 8, 10, 12.5, 16, 20 MHz sample rates with +/- cycling buttons
+- **Band Presets**: 2m amateur, Marine VHF, FM broadcast, PMR446, 70cm amateur, FRS, LPD433, CB 27 MHz, and Custom — auto-selects appropriate modulation per band
+- **Device Toggle**: HackRF/RTL-SDR device selection sent to server (PTT disabled for RTL-SDR)
 - **Low-latency Audio**: Dedicated writer thread with stereo output, buffer priming, and QAudioSink volume control for instant response
+- **Touch-Friendly UI**: Mobile-optimized layout (393x852 default), large cycling buttons, scrollable interface, Android-compatible
 
 ![HackRfRadio Screenshot](hackrfradio_screen.png)
 
 ## Architecture
+
+### HackTvGui TCP Client Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  HackTvGui Device Selection                                      │
+│                                                                  │
+│  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐           │
+│  │  HackRF     │  │ HackRF TCP   │  │ RTL-SDR TCP  │           │
+│  │  (USB)      │  │ (Emulator)   │  │ (Emulator)   │           │
+│  └──────┬──────┘  └──────┬───────┘  └──────┬───────┘           │
+│         │                │                  │                    │
+│         ▼                ▼                  ▼                    │
+│    HackTvLib       3-port TCP          Single-port TCP           │
+│    C++ DLL         text protocol       rtl_tcp binary            │
+│                    Data:5000           Port:1234                 │
+│                    Ctrl:5001           12-byte header             │
+│                    Audio:5002          5-byte commands            │
+│                    int8 IQ             uint8 IQ (center=127)     │
+│         │                │                  │                    │
+│         └────────────────┴──────────────────┘                    │
+│                          │                                       │
+│                          ▼                                       │
+│              262144-byte IQ chunks                               │
+│              → complex<float> conversion                         │
+│              → processDemod() (thread pool)                      │
+│              → processFft() (thread pool)                        │
+│                          │                                       │
+│              ┌───────────┴───────────┐                           │
+│              ▼                       ▼                           │
+│         FMDemodulator           AMDemodulator                    │
+│         (stereo PLL)            (envelope det)                   │
+│              │                       │                           │
+│              └───────────┬───────────┘                           │
+│                          ▼                                       │
+│                    AudioOutput                                   │
+│                    (48 kHz stereo)                                │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ### PAL-B/G Audio Demodulation Pipeline
 
@@ -110,8 +176,6 @@ HackRF IQ (16 MHz)
        ▼
   Audio Output (48 kHz, 16-bit stereo, 10ms chunks)
 ```
-
-The decimation chain is dynamically computed by `rebuildDecimationChain()` when the sample rate changes. At each stage, the algorithm greedily selects the largest safe integer decimation factor. Complex IQ decimation runs before FM demod (critical — FM demod on wideband signal produces noise), then remaining stages run on the real-valued demodulated audio.
 
 ### FM Transmitter Audio Pipeline
 
@@ -167,7 +231,7 @@ The decimation chain is dynamically computed by `rebuildDecimationChain()` when 
 
 ### Ring Buffer Design
 
-The audio pipeline uses a lock-free single-producer single-consumer (SPSC) ring buffer (1M float samples ≈ 11 seconds stereo @ 44.1kHz) shared between the audio source thread and the HackRF TX callback:
+The audio pipeline uses a lock-free single-producer single-consumer (SPSC) ring buffer (1M float samples ~ 11 seconds stereo @ 44.1kHz) shared between the audio source thread and the HackRF TX callback:
 
 - **Producer** (audio thread): PortAudioInput callback or AudioFileInput decode thread writes stereo interleaved float samples via `ringWrite()`
 - **Consumer** (TX callback): `apply_fm_modulation()` reads stereo samples via `ringRead()`, feeds to MPX generator
@@ -187,13 +251,19 @@ HackTvRxTx/
 │   ├── modulation.h       # StereoMPXGenerator, FrequencyModulator, RationalResampler
 │   ├── stream_tx.h        # Legacy double-buffer (used by video TX mode)
 │   └── hacktv/            # Video encoding, modulation, RF output
-├── HackTvGui/             # Main SDR transceiver GUI application
-│   ├── mainwindow.cpp/h   # Main application window
+├── HackTvGui/             # Main SDR transceiver GUI (USB + TCP)
+│   ├── mainwindow.cpp/h   # Main window — USB + TCP client, mode-aware UI
 │   ├── glplotter.cpp/h    # OpenGL spectrum analyzer & waterfall
 │   ├── freqctrl.cpp/h     # Frequency digit display widget
 │   ├── meter.cpp/h        # Signal level meter widget
 │   ├── audiooutput.cpp/h  # Audio playback engine
-│   └── modulator.h        # FM/AM modulation DSP (RX side)
+│   ├── fmdemodulator.cpp/h # FM demodulator with stereo PLL decode
+│   ├── amdemodulator.cpp/h # AM envelope demodulator
+│   └── constants.h        # FFT, frequency macros
+├── Emulator/              # TCP emulators (no hardware needed)
+│   ├── hackrf_emulator.py # HackRF TCP emulator (3-port, stereo WFM/NFM/AM)
+│   ├── rtlsdr_emulator.py # RTL-SDR TCP emulator (rtl_tcp protocol)
+│   └── FaithlessInsomnia.wav # Sample audio for broadcast simulation
 ├── PALBDecoder/           # Standalone PAL-B/G TV decoder application
 │   ├── MainWindow.cpp/h   # Decoder GUI with video display & HackRF control
 │   ├── PALDecoder.cpp/h   # PAL video decoding engine (sync, AGC, color)
@@ -204,17 +274,17 @@ HackTvRxTx/
 ├── HackRfTcp/             # HackRF TCP IQ Server (headless, runs on Raspberry Pi)
 │   ├── main.cpp           # Server entry point
 │   └── sdrdevice.cpp/h    # TCP streaming IQ server (data port + control port)
-├── HackRfRadio/           # TCP Remote SDR Radio Client
+├── HackRfRadio/           # TCP Remote SDR Radio Client (mobile-friendly)
 │   ├── radiowindow.cpp/h  # Main radio GUI (spectrum, meter, PTT, controls)
-│   ├── fmdemodulator.cpp/h # FM demodulator with stereo decode (pilot PLL, 38kHz subcarrier)
+│   ├── fmdemodulator.cpp/h # FM demodulator with stereo decode
 │   ├── amdemodulator.cpp/h # AM envelope demodulator
 │   ├── audioplayback.cpp/h # Stereo audio output (dedicated writer thread)
 │   ├── audiocapture.cpp/h # Microphone capture for PTT transmit
 │   ├── tcpclient.cpp/h    # TCP client (IQ data + control + audio channels)
 │   ├── frequencywidget.cpp/h # Touch-friendly frequency digit display
 │   ├── gainsettingsdialog.* # Gain & TX parameters dialog
-│   ├── glplotter.cpp/h    # OpenGL spectrum analyzer (from HackTvGui)
-│   ├── meter.cpp/h        # Signal level meter (from HackTvGui)
+│   ├── glplotter.cpp/h    # OpenGL spectrum analyzer
+│   ├── meter.cpp/h        # Signal level meter
 │   └── constants.h        # FFT, frequency macros, gain limits
 ├── include/               # Shared headers
 └── lib/                   # Pre-built libraries (windows/macos/linux)
@@ -226,6 +296,8 @@ HackTvRxTx/
 |--------|----|----|-------|
 | HackRF One | Yes | Yes | Full duplex, 1 MHz - 6 GHz |
 | RTL-SDR | Yes | No | RX only, various tuner chips |
+| HackRF TCP Emulator | Yes | No | Software emulator, no hardware needed |
+| RTL-SDR TCP Emulator | Yes | No | Software emulator, rtl_tcp protocol |
 
 ## Requirements
 
@@ -233,6 +305,35 @@ HackTvRxTx/
 - C++17 compiler
 - MinGW 64-bit (Windows) or Clang/GCC (macOS/Linux)
 - MSYS2 (Windows only, for dependencies)
+- Python 3 + numpy (for TCP emulators only)
+
+## Quick Start (Emulator — No Hardware)
+
+```bash
+# 1. Install numpy
+pip install numpy
+
+# 2. Start the HackRF TCP emulator
+python Emulator/hackrf_emulator.py
+
+# 3. In HackTvGui: Device → "HackRF TCP", Addr → "127.0.0.1", click START
+# 4. Tune to 100.000 MHz → hear stereo FM music
+# 5. Tune to 145.000 MHz → hear NFM voice
+# 6. Tune to 119.100 MHz, switch to AM → hear AM airband voice
+```
+
+For RTL-SDR TCP emulator:
+```bash
+python Emulator/rtlsdr_emulator.py --port 1234
+# In HackTvGui: Device → "RTL-SDR TCP", Addr → "127.0.0.1:1234", click START
+```
+
+For HackRfRadio (TCP-only client):
+```bash
+python Emulator/hackrf_emulator.py
+# In HackRfRadio: enter 127.0.0.1, click Connect
+# Tap mode button to cycle NFM → WFM → AM
+```
 
 ## Build Instructions
 
@@ -255,6 +356,7 @@ pacman -S --needed \
   mingw-w64-x86_64-fftw \
   mingw-w64-x86_64-portaudio \
   mingw-w64-x86_64-opus \
+  mingw-w64-x86_64-svt-av1 \
   mingw-w64-x86_64-x264 \
   mingw-w64-x86_64-x265 \
   mingw-w64-x86_64-zlib \
@@ -272,9 +374,13 @@ Open `HackTvLib/HackTvLib.pro` in Qt Creator with Desktop Qt 6.x MinGW 64-bit ki
 
 **5. Build HackTvGui:**
 
-Open `HackTvGui/HackTvGui.pro` in Qt Creator, build and run.
+Open `HackTvGui/HackTvGui.pro` in Qt Creator, build and run. The post-build step automatically copies all required DLLs (Qt via `windeployqt`, MSYS2 via `xcopy *.dll`) into the `release/` folder.
 
-**6. Build PALBDecoder (optional):**
+**6. Build HackRfRadio (optional):**
+
+Open `HackRfRadio/HackRfRadio.pro` in Qt Creator, build and run.
+
+**7. Build PALBDecoder (optional):**
 
 Open `PALBDecoder/PALBDecoder.pro` in Qt Creator, build and run.
 
