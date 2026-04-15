@@ -1240,9 +1240,7 @@ void MainWindow::processDemod(const std::vector<std::complex<float>>& samples)
                     if (a > maxRaw) maxRaw = a;
                     float g = std::fabs(mono[i] * amGain);
                     if (g > maxGained) maxGained = g;
-                }
-                qDebug("AM: samples=%zu maxRaw=%.4f amGain=%.2f maxGained=%.4f audioGain=%.2f",
-                       mono.size(), maxRaw, amGain, maxGained, audioGain);
+                }                
             }
 
             // AM demod returns mono, duplicate to stereo with gain + soft clip
