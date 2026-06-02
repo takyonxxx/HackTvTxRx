@@ -13,73 +13,48 @@ win32 {
     DEFINES += WINVER=0x0601
     DEFINES += __USE_MINGW_ANSI_STDIO=1
 
+    # Bagimliliklar hala MSYS2'den geliyor (FFmpeg, hackrf, rtlsdr, fftw...).
+    # Qt bunlari kendi MinGW'si icin saglamadigindan header/import lib'ler
+    # MSYS2'den alinir, derleyici Qt'nin mingw1310'u olsa bile.
     MSYS2_PATH = C:/msys64/mingw64
 
-    # Include paths for dependencies from MSYS2
     INCLUDEPATH += $$MSYS2_PATH/include
     INCLUDEPATH += $$MSYS2_PATH/include/libusb-1.0
 
-    # Library paths - ORDER MATTERS!
     LIBS += -L$$MSYS2_PATH/lib
     LIBS += -L$$MSYS2_PATH/bin
 
-    # CRITICAL: Add pthread and Windows libraries FIRST
-    LIBS += -lwinpthread -lpthread
-    LIBS += -lws2_32 -lmingw32 -lmingwex
-
-    # HackRF and USB (depends on pthread)
+    LIBS += -lws2_32
     LIBS += -lhackrf -lusb-1.0
-
-    # Audio/Signal processing libraries
     LIBS += -lfftw3f -lfdk-aac -lopus -lrtlsdr
-
-    # FFmpeg libraries (ORDER MATTERS - most dependent first)
     LIBS += -lavdevice -lavfilter -lavformat -lavcodec -lswresample -lswscale -lavutil
-
-    # Additional Windows runtime libraries
     LIBS += -lm -lz -lbz2
 
-    # Static linking for C++ runtime to avoid DLL dependencies
+    # --- HackTvLib.dll'i GCC/C++ runtime acisindan self-contained yap ---
+    # libgcc + libstdc++ + winpthread statik => DLL'in kendisi
+    # libgcc_s_seh-1 / libstdc++-6 / libwinpthread-1 DLL'lerine bagli olmaz.
     QMAKE_LFLAGS += -static-libgcc -static-libstdc++
-
-    # Enable large address aware (for 32-bit builds) - CORRECTED SYNTAX
-    # Only use for 32-bit builds, comment out for 64-bit
-    # QMAKE_LFLAGS += -Wl,--large-address-aware
-
-    # Export all symbols for DLL (optional, can cause larger DLL)
-    # QMAKE_LFLAGS += -Wl,--export-all-symbols
-
-    # Better: Export only needed symbols
+    QMAKE_LFLAGS += -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
     QMAKE_LFLAGS += -Wl,--enable-auto-import
 
-    # Compiler flags
     QMAKE_CXXFLAGS += -fpermissive
     QMAKE_CXXFLAGS += -D__STDC_CONSTANT_MACROS
     QMAKE_CXXFLAGS += -D__STDC_FORMAT_MACROS
-
-    # For nanosleep compatibility
     QMAKE_CXXFLAGS += -D_POSIX_C_SOURCE=200112L
     QMAKE_CXXFLAGS += -D_GNU_SOURCE
 
-    # Define the target library directory
     DESTDIR = $$PWD/../lib/windows
-
-    # Create the directory if it doesn't exist
     !exists($$DESTDIR) {
         system(mkdir $$shell_path($$DESTDIR))
     }
 
-    # Windows uses different naming for debug/release builds
     CONFIG(debug, debug|release) {
-        TARGET = HackTvLibd  # Add 'd' suffix for debug builds
+        TARGET = HackTvLibd
         QMAKE_CXXFLAGS += -g -O0
     } else {
         TARGET = HackTvLib
         QMAKE_CXXFLAGS += -O2
     }
-
-    # Copy required DLLs to output directory (optional)
-    # QMAKE_POST_LINK += $$quote(cmd /c copy /y $$shell_path($$MSYS2_PATH/bin/libwinpthread-1.dll) $$shell_path($$DESTDIR))
 }
 
 macx {
