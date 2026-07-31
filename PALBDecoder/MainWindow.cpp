@@ -224,13 +224,13 @@ void MainWindow::setupUI()
     chromaGainLayout->addWidget(new QLabel("Chroma Gain:", this));
 
     m_chromaGainSlider = new QSlider(Qt::Horizontal, this);
-    m_chromaGainSlider->setRange(0, 200);
+    m_chromaGainSlider->setRange(0, 500);
     m_chromaGainSlider->setValue(75);
     m_chromaGainSlider->setMinimumWidth(200);
     chromaGainLayout->addWidget(m_chromaGainSlider);
 
     m_chromaGainSpinBox = new QDoubleSpinBox(this);
-    m_chromaGainSpinBox->setRange(0.0, 2.0);
+    m_chromaGainSpinBox->setRange(0.0, 5.0);
     m_chromaGainSpinBox->setSingleStep(0.01);
     m_chromaGainSpinBox->setValue(0.75);
     m_chromaGainSpinBox->setDecimals(2);
