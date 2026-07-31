@@ -123,13 +123,24 @@ private:
     std::deque<std::complex<float>> m_videoFilterDelay;
     std::vector<float> m_lumaFilterTaps;
     std::deque<float> m_lumaFilterDelay;
-    std::vector<float> m_chromaFilterTaps;
-    std::deque<float> m_chromaUFilterDelay;
-    std::deque<float> m_chromaVFilterDelay;
+    std::vector<float> m_chromaFilterTaps;      // 4.43 MHz band-pass (pre-demod)
+    std::deque<float> m_chromaBandDelay;        // BPF delay line
+    float m_chromaLPUState;                     // post-demod one-pole LPF (U)
+    float m_chromaLPVState;                     // post-demod one-pole LPF (V)
+    float m_chromaLPCoeff;
 
     float m_dcBlockerX1;
     float m_dcBlockerY1;
+    float m_dcBlockAlpha;         // computed per sample rate (~30 Hz cutoff)
     int m_resampleCounter;
+
+    // Sync path one-pole LPF (noise reduction before threshold detection)
+    float m_syncLPState;
+    float m_syncLPCoeff;
+
+    // Sync flywheel lock state
+    int  m_syncLockCount;         // consecutive good syncs
+    bool m_syncLocked;            // true after sustained good syncs
 
     // Audio carrier notch filter (IIR biquad) - removes 5.5 MHz beat after AM demod
     float m_notchB0, m_notchB1, m_notchB2, m_notchA1, m_notchA2;
@@ -187,9 +198,15 @@ private:
 
     // ========== Color ==========
     bool m_vPhaseAlternate;
-    std::vector<float> m_colorCarrierSin;
+    // Subcarrier NCO: exact phase accumulator + one-cycle sin/cos LUT.
+    // (The old scheme indexed a ~100-cycle table whose length truncation
+    // caused a ~120 deg phase JUMP at every wrap - several times per line -
+    // which made coherent chroma demodulation impossible.)
+    std::vector<float> m_colorCarrierSin;   // one full cycle, SC_LUT_SIZE entries
     std::vector<float> m_colorCarrierCos;
-    int m_colorCarrierIndex;
+    double m_scPhase;                        // accumulated phase [0, 2pi)
+    double m_scPhaseInc;                     // 2*pi*fsc/fs
+    static constexpr int SC_LUT_SIZE = 4096;
     std::vector<float> m_prevLineU;
     std::vector<float> m_prevLineV;
 
@@ -217,7 +234,18 @@ private:
 
     // Phase-locked reference (derived from burst)
     float m_chromaRefPhase;       // reference phase for chroma demod this line
-    float m_burstPhaseSmoothed;   // low-pass filtered burst phase (reduces jitter)
+
+    // Swinging-burst mean-axis tracking:
+    // PAL burst alternates +/-45 deg around a mean axis (= U axis + 180 deg).
+    // Vector-averaging two consecutive line bursts removes the alternation,
+    // giving a stable U-axis reference and per-line V-switch detection.
+    bool  m_burstMeanInit;        // mean axis has been initialized
+    float m_burstMeanPhase;       // smoothed mean burst axis angle
+    float m_prevBurstAngle;       // previous line's measured burst angle
+    bool  m_prevBurstValid;       // previous line had a valid burst
+    bool  m_burstSeenThisLine;    // burst extracted on current line
+    int   m_burstMissCount;       // consecutive lines without valid burst
+    bool  m_chromaMute;           // mute chroma when burst absent (B/W signal)
 
     // Cached sin/cos of reference phase (computed once per line after burst extraction)
     float m_chromaCosRef;         // cos(m_chromaRefPhase)
@@ -236,8 +264,7 @@ private:
     std::vector<float> designBandPassFIR(float centerFreq, float bandwidth, float sampleRate, int numTaps);
     std::complex<float> applyVideoFilter(const std::complex<float>& sample);
     float applyLumaFilter(float sample);
-    float applyChromaFilterU(float sample);
-    float applyChromaFilterV(float sample);
+    float applyChromaBandFilter(float sample);
     float dcBlock(float sample);
     float normalizeAndAGC(float sample);
     void processSample(float sample);
@@ -246,10 +273,8 @@ private:
     void buildFrame();
     float clipValue(float value, float min, float max);
     void yuv2rgb(float y, float u, float v, uint8_t& r, uint8_t& g, uint8_t& b);
-    void accumulateBurst(float sample);
+    void accumulateBurst(float sample, float cosVal, float sinVal);
     void extractBurstPhase();
-    float chromaDemodU(float sample);
-    float chromaDemodV(float sample);
 };
 
 #endif

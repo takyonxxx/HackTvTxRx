@@ -2,10 +2,31 @@
 #include <QDebug>
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+
+// ============================================================
+// Colour decoding trim constants
+// ============================================================
+// PAL_HUE_OFFSET_DEG: if all hues look uniformly ROTATED (e.g. skin tones
+//   greenish/purplish but stable), adjust this in small steps (+/-15..90).
+// PAL_VSWITCH_POLARITY: if colours look DESATURATED with only blue/yellow
+//   tint remaining (V cancels in line averaging), set this to 1.
+// PAL_V_AXIS_SIGN: if hues look MIRRORED (red <-> cyan-green swapped),
+//   set this to -1.0f.
+#define PAL_HUE_OFFSET_DEG   0.0f
+#define PAL_VSWITCH_POLARITY 0
+#define PAL_V_AXIS_SIGN      1.0f
+
+static inline float wrapPi(float a)
+{
+    while (a >  static_cast<float>(M_PI)) a -= 2.0f * static_cast<float>(M_PI);
+    while (a < -static_cast<float>(M_PI)) a += 2.0f * static_cast<float>(M_PI);
+    return a;
+}
 
 PALDecoder::PALDecoder(QObject *parent)
     : QObject(parent)
@@ -47,9 +68,17 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_vSyncDetectThreshold(0)
     , m_fieldDetectThreshold1(0)
     , m_fieldDetectThreshold2(0)
+    , m_chromaLPUState(0.0f)
+    , m_chromaLPVState(0.0f)
+    , m_chromaLPCoeff(0.3f)
     , m_dcBlockerX1(0.0f)
     , m_dcBlockerY1(0.0f)
+    , m_dcBlockAlpha(0.99998f)
     , m_resampleCounter(0)
+    , m_syncLPState(0.5f)
+    , m_syncLPCoeff(0.4f)
+    , m_syncLockCount(0)
+    , m_syncLocked(false)
     , m_notchB0(1.0f), m_notchB1(0.0f), m_notchB2(0.0f), m_notchA1(0.0f), m_notchA2(0.0f)
     , m_notchX1(0.0f), m_notchX2(0.0f), m_notchY1(0.0f), m_notchY2(0.0f)
     , m_chromaNotchB0(1.0f), m_chromaNotchB1(0.0f), m_chromaNotchB2(0.0f), m_chromaNotchA1(0.0f), m_chromaNotchA2(0.0f)
@@ -80,7 +109,8 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_syncErrorAccum(0.0)
     , m_lastSyncQuality(0.0f)
     , m_vPhaseAlternate(false)
-    , m_colorCarrierIndex(0)
+    , m_scPhase(0.0)
+    , m_scPhaseInc(0.0)
     , m_burstStartSample(0)
     , m_burstEndSample(0)
     , m_burstCorrI(0.0f)
@@ -92,7 +122,13 @@ PALDecoder::PALDecoder(QObject *parent)
     , m_burstAmplitude(0.0f)
     , m_burstValid(false)
     , m_chromaRefPhase(0.0f)
-    , m_burstPhaseSmoothed(0.0f)
+    , m_burstMeanInit(false)
+    , m_burstMeanPhase(0.0f)
+    , m_prevBurstAngle(0.0f)
+    , m_prevBurstValid(false)
+    , m_burstSeenThisLine(false)
+    , m_burstMissCount(0)
+    , m_chromaMute(true)
     , m_chromaCosRef(1.0f)
     , m_chromaSinRef(0.0f)
     , m_burstAmpSmoothed(0.04f)
@@ -142,6 +178,18 @@ void PALDecoder::setSampleRate(int sampleRate)
     initBurstPLL();
     rebuildColorLUT();
 
+    // DC blocker: ~30 Hz cutoff. The previous fixed alpha=0.995 gave a
+    // ~10 kHz cutoff (time constant shorter than one 64 us line!), which
+    // tilted every line and made the sync tip level content-dependent.
+    float rateF = static_cast<float>(m_sampleRate);
+    m_dcBlockAlpha = 1.0f - (2.0f * static_cast<float>(M_PI) * 30.0f) / rateF;
+    if (m_dcBlockAlpha < 0.99f) m_dcBlockAlpha = 0.99f;
+
+    // Sync path one-pole LPF: ~1 MHz cutoff smooths 8-bit ADC noise on the
+    // threshold comparator without meaningfully delaying the sync edge.
+    m_syncLPCoeff = 1.0f - std::exp(-2.0f * static_cast<float>(M_PI) * 1.0e6f / rateF);
+    m_syncLPState = 0.5f;
+
     // Reset state
     m_resampleCounter = 0;
     m_sampleOffset = 0;
@@ -150,9 +198,11 @@ void PALDecoder::setSampleRate(int sampleRate)
     m_hSyncErrorCount = 0;
     m_lineIndex = 0;
     m_fieldIndex = 0;
-    m_colorCarrierIndex = 0;
+    m_scPhase = 0.0;
     m_syncPulseCounter = 0;
     m_syncPulseActive = false;
+    m_syncLockCount = 0;
+    m_syncLocked = false;
 
     // Reset burst PLL
     m_burstCorrI = 0.0f;
@@ -164,10 +214,16 @@ void PALDecoder::setSampleRate(int sampleRate)
     m_burstAmplitude = 0.0f;
     m_burstValid = false;
     m_chromaRefPhase = 0.0f;
-    m_burstPhaseSmoothed = 0.0f;
     m_chromaCosRef = 1.0f;
     m_chromaSinRef = 0.0f;
     m_burstAmpSmoothed = 0.04f;
+    m_burstMeanInit = false;
+    m_burstMeanPhase = 0.0f;
+    m_prevBurstAngle = 0.0f;
+    m_prevBurstValid = false;
+    m_burstSeenThisLine = false;
+    m_burstMissCount = 0;
+    m_chromaMute = true;
 
     // Reset AGC
     m_ampMin = -1.0f;
@@ -185,8 +241,11 @@ void PALDecoder::setSampleRate(int sampleRate)
     // Clear filter delays
     m_videoFilterDelay.clear();
     m_lumaFilterDelay.clear();
-    m_chromaUFilterDelay.clear();
-    m_chromaVFilterDelay.clear();
+    m_chromaBandDelay.clear();
+    m_chromaLPUState = 0.0f;
+    m_chromaLPVState = 0.0f;
+    // Post-demod chroma LPF: ~800 kHz (removes the 2*fsc product term)
+    m_chromaLPCoeff = 1.0f - std::exp(-2.0f * static_cast<float>(M_PI) * 8.0e5f / rateF);
 
 }
 
@@ -204,11 +263,12 @@ void PALDecoder::applyStandard()
     m_numberSamplesHSyncCrop      = static_cast<int>(HSYNC_CROP_FRAC * exactSPL);
 
     // Sync pulse width validation limits:
-    // Real H-sync pulse is 4.7 us. Accept pulses between ~1.5 us and ~8 us.
-    // Wider range because HackRF's 8-bit ADC + noise erodes pulse edges.
-    // This rejects short video content dips (< 1.5 us) and VSync broad pulses (> 8 us).
-    m_syncPulseMinWidth = static_cast<int>(1.5f / 64.0f * exactSPL);
-    m_syncPulseMaxWidth = static_cast<int>(8.0f / 64.0f * exactSPL);
+    // Real H-sync pulse is 4.7 us. Accept pulses between 3.0 us and 6.5 us.
+    // This rejects video content dips, VSync equalizing pulses (2.35 us)
+    // and VSync broad pulses (~27 us). With the sync-path LPF smoothing the
+    // comparator input, the measured width stays close to the true 4.7 us.
+    m_syncPulseMinWidth = static_cast<int>(3.0f / 64.0f * exactSPL);
+    m_syncPulseMaxWidth = static_cast<int>(6.5f / 64.0f * exactSPL);
 
     m_fieldDetectStartPos = static_cast<int>(FIELD_DETECT_START * exactSPL);
     m_fieldDetectEndPos   = static_cast<int>(FIELD_DETECT_END * exactSPL);
@@ -347,22 +407,23 @@ void PALDecoder::rebuildColorLUT()
 {
     float rate = static_cast<float>(m_sampleRate);
 
-    // Color carrier LUT at full sample rate (chroma runs before decimation)
     if (COLOR_CARRIER_FREQ >= rate / 2.0f) {
         m_colorCarrierSin.clear();
         m_colorCarrierCos.clear();
+        m_scPhaseInc = 0.0;
         return;
     }
 
-    int carrierSamples = static_cast<int>(rate / COLOR_CARRIER_FREQ * 100.0f + 0.5f);
-    if (carrierSamples < 200) carrierSamples = 200;
-    m_colorCarrierSin.resize(carrierSamples);
-    m_colorCarrierCos.resize(carrierSamples);
-    for (int i = 0; i < carrierSamples; i++) {
-        double phase = 2.0 * M_PI * COLOR_CARRIER_FREQ * i / static_cast<double>(rate);
+    // One full subcarrier cycle; the NCO phase accumulator indexes into it.
+    m_colorCarrierSin.resize(SC_LUT_SIZE);
+    m_colorCarrierCos.resize(SC_LUT_SIZE);
+    for (int i = 0; i < SC_LUT_SIZE; i++) {
+        double phase = 2.0 * M_PI * i / SC_LUT_SIZE;
         m_colorCarrierSin[i] = static_cast<float>(std::sin(phase));
         m_colorCarrierCos[i] = static_cast<float>(std::cos(phase));
     }
+    m_scPhaseInc = 2.0 * M_PI * COLOR_CARRIER_FREQ / static_cast<double>(rate);
+    m_scPhase = 0.0;
 }
 
 void PALDecoder::initBurstPLL()
@@ -374,20 +435,18 @@ void PALDecoder::initBurstPLL()
     // and ending ~7.85 us (burst duration ~2.25 us)
     // We use sample positions at FULL sample rate since chroma runs at full rate.
     float exactSPL = rate / (NB_LINES * FPS);
-    m_burstStartSample = static_cast<int>(5.6f / 64.0f * exactSPL);
-    m_burstEndSample   = static_cast<int>(7.85f / 64.0f * exactSPL);
+    // The burst is correlated on the SAME band-filtered signal used for
+    // chroma demodulation, so the linear-phase BPF group delay
+    // ((taps-1)/2 samples) shifts the burst window by the same amount and
+    // the phase reference stays exactly consistent with the demod path.
+    int groupDelay = m_chromaFilterTaps.empty()
+        ? 0 : (static_cast<int>(m_chromaFilterTaps.size()) - 1) / 2;
+    m_burstStartSample = static_cast<int>(5.6f / 64.0f * exactSPL) + groupDelay;
+    m_burstEndSample   = static_cast<int>(7.85f / 64.0f * exactSPL) + groupDelay;
 }
 
-void PALDecoder::accumulateBurst(float sample)
+void PALDecoder::accumulateBurst(float sample, float cosVal, float sinVal)
 {
-    if (m_colorCarrierSin.empty()) return;
-
-    int idx = m_colorCarrierIndex - 1;
-    if (idx < 0) idx += static_cast<int>(m_colorCarrierSin.size());
-
-    float cosVal = m_colorCarrierCos[idx];
-    float sinVal = m_colorCarrierSin[idx];
-
     m_burstCorrI += sample * cosVal;
     m_burstCorrQ += sample * sinVal;
     m_burstDCAccum += sample;
@@ -398,141 +457,106 @@ void PALDecoder::accumulateBurst(float sample)
 
 void PALDecoder::extractBurstPhase()
 {
-    if (m_burstSampleCount < 5) {
-        m_burstValid = false;
-        return;
-    }
-
-    float N = static_cast<float>(m_burstSampleCount);
+    int count = m_burstSampleCount;
+    float N = static_cast<float>(count);
 
     // Remove DC bias from correlation:
-    // Raw correlation: sum(sample * cos) = sum((DC + AC) * cos)
-    //                                    = DC * sum(cos) + sum(AC * cos)
-    // We want just sum(AC * cos), so subtract DC * sum(cos):
-    float dcMean = m_burstDCAccum / N;
-    float corrI = (m_burstCorrI - dcMean * m_burstCosAccum) / N;
-    float corrQ = (m_burstCorrQ - dcMean * m_burstSinAccum) / N;
+    //   sum(sample * cos) = DC * sum(cos) + sum(AC * cos)
+    float dcMean = (count > 0) ? (m_burstDCAccum / N) : 0.0f;
+    float corrI = (count > 0) ? ((m_burstCorrI - dcMean * m_burstCosAccum) / N) : 0.0f;
+    float corrQ = (count > 0) ? ((m_burstCorrQ - dcMean * m_burstSinAccum) / N) : 0.0f;
+
+    // Consume accumulators so this runs once per line
+    m_burstCorrI = 0.0f;
+    m_burstCorrQ = 0.0f;
+    m_burstDCAccum = 0.0f;
+    m_burstCosAccum = 0.0f;
+    m_burstSinAccum = 0.0f;
+    m_burstSampleCount = 0;
+    m_burstSeenThisLine = true;
 
     float amplitude = std::sqrt(corrI * corrI + corrQ * corrQ);
 
-    if (amplitude < 0.0005f) {
+    // Relative validity threshold: burst must be a meaningful fraction of
+    // the video amplitude range (rejects noise on B/W or vsync lines).
+    float minAmp = 0.008f * m_ampDelta;
+    if (minAmp < 0.0005f) minAmp = 0.0005f;
+
+    if (count < 8 || amplitude < minAmp) {
+#ifdef PAL_TEST_DEBUG
+        { static int di=0; if(++di%1499==0) std::printf("[burstINV] cnt=%d amp=%.5f minAmp=%.5f\n", count, amplitude, minAmp); }
+#endif
         m_burstValid = false;
+        m_prevBurstValid = false;
+        if (m_burstMissCount < 1000) m_burstMissCount++;
+        if (m_burstMissCount > 8) m_chromaMute = true;
         return;
     }
 
     m_burstValid = true;
     m_burstAmplitude = amplitude;
-
-    // The burst signal is: A * sin(2*pi*fsc*t + burst_phase)
-    // Our LUT is: sin(2*pi*fsc*n/fs), cos(2*pi*fsc*n/fs)
-    // Correlation gives: I = A*cos(burst_phase - LUT_phase), Q = A*sin(burst_phase - LUT_phase)
-    // So: measured_angle = atan2(Q, I) = burst_phase - LUT_initial_phase
-    //
-    // PAL burst nominal phase (relative to U subcarrier):
-    //   burst = sin(wt + 180 + 45) on V-normal lines  = sin(wt + 225 deg)
-    //   burst = sin(wt + 180 - 45) on V-inverted lines = sin(wt + 135 deg)
-    // This means burst_phase is 225 or 135 deg from the U=0 reference.
-    //
-    // For U demod we need: cos(wt + LUT_offset) aligned to U axis (0 deg)
-    // For V demod we need: sin(wt + LUT_offset) aligned to V axis (90 deg)
-    // where LUT_offset = measured_angle - burst_nominal
-    //
-    // Actually simpler: the measured angle tells us where our LUT's 0-phase is
-    // relative to the burst. The U reference is the burst phase minus the
-    // nominal burst angle.
-
-    float measuredAngle = std::atan2(corrQ, corrI);
-
-    // PAL burst nominal angle (the angle of the burst relative to U axis):
-    // Burst = U*sin(wt + 180+45) or U*sin(wt + 180-45)
-    // In terms of cos/sin decomposition of burst:
-    //   Line type A: burst at 225 deg = -cos(45)*cos(wt) - sin(45)*sin(wt) ... but
-    // Let's use a cleaner model:
-    //   The burst vector in (I,Q) space points at the burst phase angle.
-    //   On PAL-normal lines (V not inverted): burst phase = 225 deg (= -135 deg)
-    //   On PAL-inverted lines (V inverted):   burst phase = 135 deg
-    // Our LUT starts at phase=0 at sample 0 of the line. The measured angle
-    // is the LUT's accumulated phase at the burst position MINUS the burst's
-    // actual phase. So:
-    //   LUT_at_burst = measuredAngle + burst_actual_phase
-    // And we want the U-axis reference (0 deg). The phase correction to apply
-    // to our LUT for U demod = -(measuredAngle - burst_nominal)
-    //
-    // Even simpler approach: just use the raw measured phase directly.
-    // The measured phase IS the offset between our LUT and the burst.
-    // The burst's known angle tells us where U-axis is relative to the burst.
-    // refPhase = measuredAngle - burst_nominal_angle
-
-    float burstNominalRad;
-    if (m_vPhaseAlternate) {
-        // V-inverted line: burst at +135 deg
-        burstNominalRad = 135.0f * static_cast<float>(M_PI) / 180.0f;
-    } else {
-        // V-normal line: burst at +225 deg = -135 deg
-        burstNominalRad = -135.0f * static_cast<float>(M_PI) / 180.0f;
-    }
-
-    float refPhase = measuredAngle - burstNominalRad;
-
-    // Normalize to [-pi, pi]
-    while (refPhase > static_cast<float>(M_PI))  refPhase -= 2.0f * static_cast<float>(M_PI);
-    while (refPhase < -static_cast<float>(M_PI)) refPhase += 2.0f * static_cast<float>(M_PI);
-
-    // Smooth the phase with circular averaging
-    float alpha = 0.4f;
-    float dPhase = refPhase - m_burstPhaseSmoothed;
-    if (dPhase > static_cast<float>(M_PI))  dPhase -= 2.0f * static_cast<float>(M_PI);
-    if (dPhase < -static_cast<float>(M_PI)) dPhase += 2.0f * static_cast<float>(M_PI);
-    m_burstPhaseSmoothed += alpha * dPhase;
-    while (m_burstPhaseSmoothed > static_cast<float>(M_PI))  m_burstPhaseSmoothed -= 2.0f * static_cast<float>(M_PI);
-    while (m_burstPhaseSmoothed < -static_cast<float>(M_PI)) m_burstPhaseSmoothed += 2.0f * static_cast<float>(M_PI);
-
-    m_chromaRefPhase = m_burstPhaseSmoothed;
-
-    // Cache cos/sin for this line (avoids per-sample trig calls)
-    m_chromaCosRef = std::cos(m_chromaRefPhase);
-    m_chromaSinRef = std::sin(m_chromaRefPhase);
+    m_burstMissCount = 0;
+#ifdef PAL_TEST_DEBUG
+    { static long dn=0; ++dn;
+      if (dn>=25000 && dn<25012)
+        std::printf("[seq] n=%ld line=%d ang=%.1f mean=%.1f prevValid=%d\n",
+            dn, m_lineIndex, std::atan2(corrQ,corrI)*57.3f, m_burstMeanPhase*57.3f, (int)m_prevBurstValid); }
+#endif
 
     // Smooth burst amplitude for chroma AGC
     m_burstAmpSmoothed = m_burstAmpSmoothed * 0.9f + amplitude * 0.1f;
 
-    // Reset accumulators for next line
-    m_burstCorrI = 0.0f;
-    m_burstCorrQ = 0.0f;
-    m_burstSampleCount = 0;
-}
+    // ---- Swinging-burst mean-axis tracking ----
+    // Any narrowband component can be written s = X*cos(phi_lut) + Y*sin(phi_lut);
+    // the correlation returns exactly (X, Y), so the measured angle is the
+    // burst vector's angle in the LUT (cos, sin) plane.
+    //
+    // PAL burst sits at (U-axis + 180 +/- 45 deg), alternating each line.
+    // Vector-averaging two CONSECUTIVE line bursts cancels the +/-45 swing
+    // and yields the mean burst axis (= U axis + 180 deg) directly, without
+    // needing to know the line type in advance.
+    float measuredAngle = std::atan2(corrQ, corrI);
 
-float PALDecoder::chromaDemodU(float sample)
-{
-    if (m_colorCarrierSin.empty()) return 0.0f;
+    if (m_prevBurstValid) {
+        float mx = std::cos(measuredAngle) + std::cos(m_prevBurstAngle);
+        float my = std::sin(measuredAngle) + std::sin(m_prevBurstAngle);
+        // If the two vectors are near-opposite the mean is undefined; skip.
+        if (mx * mx + my * my > 0.1f) {
+            float meanTarget = std::atan2(my, mx);
+            if (!m_burstMeanInit) {
+                m_burstMeanPhase = meanTarget;
+                m_burstMeanInit = true;
+            } else {
+                float d = wrapPi(meanTarget - m_burstMeanPhase);
+                m_burstMeanPhase = wrapPi(m_burstMeanPhase + 0.25f * d);
+            }
+        }
+    }
+    m_prevBurstAngle = measuredAngle;
+    m_prevBurstValid = true;
 
-    int idx = m_colorCarrierIndex - 1;
-    if (idx < 0) idx += static_cast<int>(m_colorCarrierSin.size());
+    if (!m_burstMeanInit) return;
 
-    // U demod: multiply by cos(wt + refPhase)
-    // cos(wt + phi) = cos(wt)*cos(phi) - sin(wt)*sin(phi)
-    float carrier = m_colorCarrierCos[idx] * m_chromaCosRef
-                  - m_colorCarrierSin[idx] * m_chromaSinRef;
+    // ---- Per-line V-switch detection from burst residual ----
+    // Residual of this line's burst around the mean axis is +/-45 deg;
+    // its sign identifies the PAL switch state of THIS line. This replaces
+    // the blind every-line toggle (which loses phase across dropouts/vsync).
+    float resid = wrapPi(measuredAngle - m_burstMeanPhase);
+    bool vInverted = (resid > 0.0f);
+#if PAL_VSWITCH_POLARITY
+    vInverted = !vInverted;
+#endif
+    m_vPhaseAlternate = vInverted;
 
-    return sample * carrier;
-}
+    // ---- U-axis reference ----
+    // U axis = mean burst axis - 180 deg (+ optional hue trim).
+    float alphaU = wrapPi(m_burstMeanPhase - static_cast<float>(M_PI)
+                          + PAL_HUE_OFFSET_DEG * static_cast<float>(M_PI) / 180.0f);
+    m_chromaRefPhase = alphaU;
+    m_chromaCosRef = std::cos(alphaU);
+    m_chromaSinRef = std::sin(alphaU);
 
-float PALDecoder::chromaDemodV(float sample)
-{
-    if (m_colorCarrierSin.empty()) return 0.0f;
-
-    int idx = m_colorCarrierIndex - 1;
-    if (idx < 0) idx += static_cast<int>(m_colorCarrierSin.size());
-
-    // V demod: multiply by sin(wt + refPhase)
-    // sin(wt + phi) = sin(wt)*cos(phi) + cos(wt)*sin(phi)
-    float carrier = m_colorCarrierSin[idx] * m_chromaCosRef
-                  + m_colorCarrierCos[idx] * m_chromaSinRef;
-
-    // PAL V-switch: V phase alternates every line
-    float vSign = m_vPhaseAlternate ? -1.0f : 1.0f;
-
-    return sample * carrier * vSign;
+    m_chromaMute = false;
 }
 
 void PALDecoder::setTuneFrequency(uint64_t freqHz)
@@ -595,9 +619,15 @@ std::vector<float> PALDecoder::designBandPassFIR(float centerFreq, float bandwid
     int M = numTaps - 1;
     for (int n = 0; n < numTaps; n++) {
         float mm = n - M / 2.0f;
-        float h = (mm == 0.0f) ? 2.0f * bw :
-            (std::sin(2.0f * M_PI * (fc + bw) * mm) -
-             std::sin(2.0f * M_PI * (fc - bw) * mm)) / (M_PI * mm);
+        // LOW-PASS prototype (cutoff = bw/2), then modulate to fc.
+        // NOTE: the previous version used a band-pass difference-of-sincs
+        // kernel here AND modulated it by cos again, which double-shifted
+        // the band to DC and 2*fc. Combined with the passband-at-fc
+        // normalization this gave the "band-pass" a DC gain of ~14, so the
+        // envelope's DC leaked into the chroma path 14x stronger than the
+        // actual colour subcarrier.
+        float h = (mm == 0.0f) ? 2.0f * bw
+                               : std::sin(2.0f * M_PI * bw * mm) / (M_PI * mm);
         float w = 0.42f - 0.5f * std::cos(2.0f * M_PI * n / M) + 0.08f * std::cos(4.0f * M_PI * n / M);
         taps[n] = h * w * 2.0f * std::cos(2.0f * M_PI * fc * mm);
     }
@@ -634,30 +664,22 @@ float PALDecoder::applyLumaFilter(float sample)
     return out;
 }
 
-float PALDecoder::applyChromaFilterU(float sample)
+float PALDecoder::applyChromaBandFilter(float sample)
 {
-    m_chromaUFilterDelay.push_front(sample);
-    if (m_chromaUFilterDelay.size() > m_chromaFilterTaps.size()) m_chromaUFilterDelay.pop_back();
+    m_chromaBandDelay.push_front(sample);
+    if (m_chromaBandDelay.size() > m_chromaFilterTaps.size()) m_chromaBandDelay.pop_back();
     float out = 0.0f;
-    size_t n = std::min(m_chromaUFilterDelay.size(), m_chromaFilterTaps.size());
-    for (size_t i = 0; i < n; i++) out += m_chromaUFilterDelay[i] * m_chromaFilterTaps[i];
-    return out;
-}
-
-float PALDecoder::applyChromaFilterV(float sample)
-{
-    m_chromaVFilterDelay.push_front(sample);
-    if (m_chromaVFilterDelay.size() > m_chromaFilterTaps.size()) m_chromaVFilterDelay.pop_back();
-    float out = 0.0f;
-    size_t n = std::min(m_chromaVFilterDelay.size(), m_chromaFilterTaps.size());
-    for (size_t i = 0; i < n; i++) out += m_chromaVFilterDelay[i] * m_chromaFilterTaps[i];
+    size_t n = std::min(m_chromaBandDelay.size(), m_chromaFilterTaps.size());
+    for (size_t i = 0; i < n; i++) out += m_chromaBandDelay[i] * m_chromaFilterTaps[i];
     return out;
 }
 
 float PALDecoder::dcBlock(float sample)
 {
-    constexpr float alpha = 0.995f;
-    float out = sample - m_dcBlockerX1 + alpha * m_dcBlockerY1;
+    // Slow DC blocker (~30 Hz). Removes the AM-envelope DC without tilting
+    // video lines (previous 0.995 alpha acted like a 10 kHz high-pass and
+    // smeared the picture / destabilized sync).
+    float out = sample - m_dcBlockerX1 + m_dcBlockAlpha * m_dcBlockerY1;
     m_dcBlockerX1 = sample;
     m_dcBlockerY1 = out;
     return out;
@@ -676,8 +698,13 @@ float PALDecoder::normalizeAndAGC(float sample)
         // use a simple approach: shrink the range by 5% on each side
         // to approximate percentile-based AGC.
         float rawRange = m_effMax - m_effMin;
-        m_ampMax = m_effMax - rawRange * 0.02f;
-        m_ampMin = m_effMin + rawRange * 0.02f;
+        float newMax = m_effMax - rawRange * 0.02f;
+        float newMin = m_effMin + rawRange * 0.02f;
+        // Smooth the AGC transition: a hard jump every half frame shifted
+        // the sync tip level relative to the threshold and caused periodic
+        // sync dropouts. Blend 50% toward the new measurement instead.
+        m_ampMax += (newMax - m_ampMax) * 0.5f;
+        m_ampMin += (newMin - m_ampMin) * 0.5f;
         m_ampDelta = m_ampMax - m_ampMin;
         if (m_ampDelta <= 0.001f) m_ampDelta = 1.0f;
 
@@ -792,29 +819,64 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         // Chroma uses raw magnitude (before AGC) so it is unaffected.
         float video = m_videoInvert ? (1.0f - normalized) : normalized;
 
-        // Sync at full rate (inverted signal: sync tips are now LOW)
-        processSample(video);
+        // Sync at full rate (inverted signal: sync tips are now LOW).
+        // A light one-pole LPF (~1 MHz) feeds the sync comparator so ADC
+        // noise and chroma subcarrier ripple don't jitter the edge timing.
+        m_syncLPState += m_syncLPCoeff * (video - m_syncLPState);
+        processSample(m_syncLPState);
 
         // === CHROMA at FULL sample rate (before decimation) ===
         // Demod on raw magnitude — the chroma BPF (bandpass at 4.43 MHz)
         // inherently rejects DC and low-frequency luma content.
-        // Using magnitude instead of normalized because:
-        // 1. BPF already handles DC rejection (no need for dcBlock)
-        // 2. Raw magnitude preserves subcarrier amplitude for proper scaling
-        // 3. No AGC artifacts from normalizeAndAGC distorting chroma
         if (m_colorMode && !m_colorCarrierSin.empty()) {
-            float carrierCos = m_colorCarrierCos[m_colorCarrierIndex];
-            float carrierSin = m_colorCarrierSin[m_colorCarrierIndex];
-            m_colorCarrierIndex++;
-            if (m_colorCarrierIndex >= static_cast<int>(m_colorCarrierSin.size()))
-                m_colorCarrierIndex = 0;
+            // Subcarrier NCO: exact free-running phase, no wrap discontinuity
+            int lutIdx = static_cast<int>(m_scPhase * (SC_LUT_SIZE / (2.0 * M_PI))) & (SC_LUT_SIZE - 1);
+            float carrierCos = m_colorCarrierCos[lutIdx];
+            float carrierSin = m_colorCarrierSin[lutIdx];
+            m_scPhase += m_scPhaseInc;
+            if (m_scPhase >= 2.0 * M_PI) m_scPhase -= 2.0 * M_PI;
 
-            // Multiply magnitude by carrier, then bandpass filter extracts chroma
-            float chromaU = magnitude * carrierCos;
-            float chromaV = magnitude * carrierSin * (m_vPhaseAlternate ? -1.0f : 1.0f);
+            // --- Step 1: extract the chroma band from the envelope ---
+            // Band-pass at 4.43 MHz isolates burst + chroma. Burst
+            // correlation and demod both use THIS signal, so filter phase
+            // is common-mode and cancels out of the colour decode.
+            float chromaBand = applyChromaBandFilter(magnitude);
 
-            m_chromaUAccum += applyChromaFilterU(chromaU);
-            m_chromaVAccum += applyChromaFilterV(chromaV);
+            // --- Step 2: colour burst PLL ---
+            // Correlate the back-porch burst against the free-running LUT.
+            // extractBurstPhase() derives the U-axis reference and the
+            // per-line PAL V-switch BEFORE active video starts, so the rest
+            // of the line is demodulated with a phase-locked reference.
+            if (m_sampleOffset >= m_burstStartSample && m_sampleOffset < m_burstEndSample) {
+#ifdef PAL_TEST_DEBUG
+                { static long tl=0;
+                  if (m_sampleRate==16000000 && m_lineIndex>=200 && m_lineIndex<=201 && tl<80) { tl++;
+                    std::printf("[raw] line=%d off=%d band=%+.5f lutC=%+.3f lutS=%+.3f scPhase=%.4f\n",
+                        m_lineIndex, m_sampleOffset, chromaBand, carrierCos, carrierSin, m_scPhase); } }
+#endif
+                accumulateBurst(chromaBand, carrierCos, carrierSin);
+            } else if (m_sampleOffset >= m_burstEndSample && m_burstSampleCount > 0) {
+                extractBurstPhase();
+            }
+
+            // --- Step 3: phase-locked product demod ---
+            //   mixU = cos(phi - alphaU)  (projection onto U axis)
+            //   mixV = sin(phi - alphaU)  (projection onto V axis = U + 90 deg)
+            // where alphaU comes from the burst mean axis (burst = U + 180 +/- 45).
+            float mixU = carrierCos * m_chromaCosRef + carrierSin * m_chromaSinRef;
+            float mixV = (carrierSin * m_chromaCosRef - carrierCos * m_chromaSinRef)
+                         * PAL_V_AXIS_SIGN;
+
+            float vSign = m_vPhaseAlternate ? -1.0f : 1.0f;
+            float uProd = chromaBand * mixU;
+            float vProd = chromaBand * mixV * vSign;
+
+            // --- Step 4: post-demod LPF removes the 2*fsc product term ---
+            m_chromaLPUState += m_chromaLPCoeff * (uProd - m_chromaLPUState);
+            m_chromaLPVState += m_chromaLPCoeff * (vProd - m_chromaLPVState);
+
+            m_chromaUAccum += m_chromaLPUState;
+            m_chromaVAccum += m_chromaLPVState;
         }
 
         // === Chroma subcarrier notch at FULL rate (before decimation) ===
@@ -848,12 +910,36 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         float u = 0.0f, v = 0.0f;
         if (m_colorMode && !m_colorCarrierSin.empty()) {
             float invDecim = 1.0f / static_cast<float>(m_decimFactor);
-            // Scale chroma: normalize by AGC range (since we use raw magnitude),
-            // then apply a gain factor. The chroma BPF output is small relative
-            // to the full magnitude range, so we need significant gain.
-            float chromaScale = (m_ampDelta > 0.001f) ? (invDecim * 8.0f / m_ampDelta) : invDecim;
+            // Chroma AGC: normalize by the measured burst amplitude so
+            // saturation stays constant regardless of RF signal level.
+            // (Nominal burst correlation amplitude ~0.075 * video range,
+            // so 0.6 / burstAmp matches the old 8 / ampDelta scaling.)
+            // Demod math: chromaBand carries C*cos(phi-a); product + LPF
+            // yields ~C/2, and the burst correlation yields the burst
+            // amplitude scaled by the same chain (including the BPF
+            // ramp-up erosion, since the ~2.25 us burst is about as long
+            // as the FIR). The 0.052 nominal was calibrated end-to-end
+            // against a synthetic PAL-B generator so that decoded U/V
+            // amplitudes match the transmitted ones at chromaGain = 1.
+            float chromaScale;
+            if (!m_chromaMute && m_burstAmpSmoothed > 1e-4f) {
+                chromaScale = invDecim * 0.052f / m_burstAmpSmoothed;
+                // Clamp so a weak/noisy burst can't blow up the gain
+                float maxScale = (m_ampDelta > 0.001f) ? (invDecim * 10.0f / m_ampDelta)
+                                                       : invDecim * 10.0f;
+                if (chromaScale > maxScale) chromaScale = maxScale;
+            } else {
+                chromaScale = (m_ampDelta > 0.001f) ? (invDecim * 2.0f / m_ampDelta) : invDecim;
+            }
+            if (m_chromaMute) chromaScale = 0.0f;  // no burst -> B/W transmission
             u = m_chromaUAccum * chromaScale;
             v = m_chromaVAccum * chromaScale;
+#ifdef PAL_TEST_DEBUG
+            { static double sU=0,sV=0; static long na=0;
+              if (m_sampleOffset > 400 && m_sampleOffset < 900) { sU+=u; sV+=v; na++;
+                if (na%200000==0){ std::printf("[chroma] scale=%.2f mute=%d meanU=%+.4f meanV=%+.4f\n",
+                    chromaScale,(int)m_chromaMute,sU/na,sV/na); sU=sV=0; na=0; } } }
+#endif
             m_chromaUAccum = 0.0f;
             m_chromaVAccum = 0.0f;
         }
@@ -923,21 +1009,48 @@ void PALDecoder::processSample(float sample)
                     else if (hSyncShift < -m_samplesPerLine / 2)
                         hSyncShift += m_samplesPerLine;
 
-                    if (std::fabs(hSyncShift) > m_numberSamplesPerHTop) {
-                        // Large error: flywheel far off or ambiguous detection
+                    if (std::fabs(hSyncShift) > m_numberSamplesPerHTop && m_syncLocked) {
+                        // Large error WHILE LOCKED: probably a content glitch
+                        // or vsync artifact - reject it, but count. Sustained
+                        // errors mean the lock is stale: drop it so the
+                        // unlocked path below can re-acquire at full strength.
                         m_hSyncErrorCount++;
                         m_syncErrorAccum += static_cast<double>(std::fabs(hSyncShift));
+                        if (m_hSyncErrorCount > 20) {
+                            m_syncLocked = false;
+                            m_syncLockCount = 0;
+                        }
                     } else {
                         // Good sync: apply correction.
-                        // Use strong correction (0.7) for fast lock.
-                        m_hSyncShift = hSyncShift * 0.7f;
+                        // Unlocked: strong gain (0.7) for fast acquisition.
+                        // Locked: softer gain + slew limit so noise or video
+                        // content can't yank the flywheel and tear the image.
+                        // Unlocked + far off: jump the whole distance at
+                        // once (acquisition). Otherwise converge smoothly.
+                        bool farOff = std::fabs(hSyncShift) > m_numberSamplesPerHTop;
+                        float gain = m_syncLocked ? 0.4f : (farOff ? 1.0f : 0.7f);
+                        float corr = hSyncShift * gain;
+                        if (m_syncLocked) {
+                            if (corr >  2.0f) corr =  2.0f;
+                            if (corr < -2.0f) corr = -2.0f;
+                        }
+                        m_hSyncShift = corr;
                         m_hSyncErrorCount = 0;
                         m_syncErrorAccum += static_cast<double>(std::fabs(hSyncShift));
+                        if (m_syncLockCount < 1000) m_syncLockCount++;
+                        if (m_syncLockCount >= 25) m_syncLocked = true;
                     }
 
                     m_syncDetected++;
                     m_syncFoundInWindow++;
                     m_sampleOffsetDetected = 0;
+#ifdef PAL_TEST_DEBUG
+                    { static long sd=0; if (m_sampleRate==16000000) ++sd;
+                      if (m_sampleRate==16000000 && sd>=3000 && sd<3012)
+                        std::printf("[sync] entryOff=%d shift=%.2f width=%d locked=%d lvl=%.3f spl=%d\n",
+                            m_syncPulseEntryOffset, hSyncShift, m_syncPulseCounter, (int)m_syncLocked,
+                            m_syncLevel, m_samplesPerLine); }
+#endif
                 }
                 m_syncPulseActive = false;
                 m_syncPulseCounter = 0;
@@ -1006,12 +1119,24 @@ void PALDecoder::processEndOfLine()
     m_lineBuffer.clear();
     m_lineBufferU.clear();
     m_lineBufferV.clear();
+
+    // Track lines where the burst window never produced an extraction
+    // (vsync lines, flywheel jumps, B/W transmissions). After several such
+    // lines, mute chroma so noise doesn't render as rainbow confetti.
+    if (m_colorMode && !m_burstSeenThisLine) {
+        m_prevBurstValid = false;
+        if (m_burstMissCount < 1000) m_burstMissCount++;
+        if (m_burstMissCount > 8) m_chromaMute = true;
+    }
+    m_burstSeenThisLine = false;
+
+    // Blind toggle acts as a PREDICTION of the next line's V switch;
+    // extractBurstPhase() overrides it with the measured value (from the
+    // burst residual) before active video starts on each colour line.
     m_vPhaseAlternate = !m_vPhaseAlternate;
-    // NOTE: Do NOT reset m_colorCarrierIndex here!
-    // PAL subcarrier = 283.75 * fline, so there are 283.75 cycles per line.
-    // Resetting to 0 each line causes a 0.75-cycle phase jump, making burst
-    // phase measurement random. Let the LUT free-run; the burst PLL measures
-    // and corrects the phase offset each line.
+    // NOTE: Do NOT reset the subcarrier NCO phase here!
+    // PAL subcarrier = 283.7516 * fline, so the phase must free-run across
+    // lines; the burst PLL measures and corrects the offset each line.
 
     // Reset burst PLL per-line state
     m_burstCorrI = 0.0f;
