@@ -602,7 +602,7 @@ struct ContentView: View {
                 }
                 .toggleStyle(.button).font(.caption)
                 if colorMode {
-                    floatSliderRow("Chroma", value: $chromaGain, range: 0...2.0) { decoder.setChromaGain(chromaGain); saveTVSettings() }
+                    floatSliderRow("Chroma", value: $chromaGain, range: 0...5.0) { decoder.setChromaGain(chromaGain); saveTVSettings() }
                 }
             }
         }
