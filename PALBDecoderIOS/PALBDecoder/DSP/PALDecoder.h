@@ -105,8 +105,10 @@ private:
     std::vector<float> m_lumaFilterTaps;
     FIRDelay<float, 48> m_lumaFir;
 
-    std::vector<float> m_chromaFilterTaps;
-    FIRDelay<float, MAX_FIR> m_chromaFirU, m_chromaFirV;
+    std::vector<float> m_chromaFilterTaps;      // 4.43 MHz band-pass (pre-demod)
+    FIRDelay<float, MAX_FIR> m_chromaFirBand;
+    float m_chromaLPUState = 0, m_chromaLPVState = 0;   // post-demod one-pole LPFs
+    float m_chromaLPCoeff = 0.3f;
 
     float m_dcX1 = 0, m_dcY1 = 0;
     int m_resampleCounter = 0;
@@ -127,14 +129,55 @@ private:
     double m_syncErrorAccum; float m_lastSyncQuality;
 
     bool m_vPhaseAlternate;
-    std::vector<float> m_colorCarrierSin, m_colorCarrierCos;
-    int m_colorCarrierIndex;
+    // Subcarrier NCO: exact 32-bit phase accumulator indexing the shared
+    // one-cycle sin/cos LUT (m_ncoSin/m_ncoCos). The old scheme used a
+    // ~100-cycle table whose length truncation caused a phase JUMP at every
+    // wrap - several times per line - and was reset at every line start,
+    // which made coherent chroma demodulation impossible.
+    uint32_t m_scAccum = 0, m_scStep = 0;
     std::vector<float> m_prevLineU, m_prevLineV;
+
+    // Sync path one-pole LPF (~1 MHz) before the threshold comparator
+    float m_syncLPState = 0.5f, m_syncLPCoeff = 0.3f;
+
+    // Sync pulse width validation (real H-sync ~4.7 us; reject content dips
+    // and vsync equalizing pulses)
+    int m_syncPulseCounter = 0;
+    int m_syncPulseMinWidth = 0, m_syncPulseMaxWidth = 0;
+    float m_syncPulseEntryFrac = 0;
+    int m_syncPulseEntryOffset = 0;
+    float m_syncPulseEntryOffsetFrac = 0;
+    bool m_syncPulseActive = false;
+
+    // Sync flywheel lock state
+    int m_syncLockCount = 0;
+    bool m_syncLocked = false;
+
+    // ========== Colour Burst PLL ==========
+    int m_burstStartSample = 0, m_burstEndSample = 0;   // back porch window
+    float m_burstCorrI = 0, m_burstCorrQ = 0;           // correlation accums
+    float m_burstDCAccum = 0, m_burstCosAccum = 0, m_burstSinAccum = 0;
+    int m_burstSampleCount = 0;
+    float m_burstAmplitude = 0;
+    bool m_burstValid = false;
+    float m_chromaRefPhase = 0;                          // U-axis reference
+    float m_chromaCosRef = 1.0f, m_chromaSinRef = 0.0f;
+    bool m_burstMeanInit = false;                        // swinging-burst mean axis
+    float m_burstMeanPhase = 0;
+    float m_prevBurstAngle = 0;
+    bool m_prevBurstValid = false;
+    bool m_burstSeenThisLine = false;
+    int m_burstMissCount = 0;
+    bool m_chromaMute = true;                            // no burst -> B/W
+    float m_burstAmpSmoothed = 0.04f;                    // burst-amplitude AGC
 
     void updateNCO();
     void applyStandard();
     void initFilters();
     void rebuildColorLUT();
+    void initBurstPLL();
+    void accumulateBurst(float sample, float cosVal, float sinVal);
+    void extractBurstPhase();
     std::vector<float> designLowPassFIR(float cutoff, float sr, int n);
     std::vector<float> designBandPassFIR(float cf, float bw, float sr, int n);
 
