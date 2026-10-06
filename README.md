@@ -1,4 +1,4 @@
-# HackTvRxTx - SDR Transceiver & Analog TV Decoder
+# HackTvRxTx - SDR Transceiver & Analog Color TV Decoder
 
 A Qt 6.x based SDR (Software Defined Radio) application for HackRF One and RTL-SDR devices. Includes wideband FM stereo receiver with real-time FFT spectrum analyzer, waterfall display, FM stereo transmitter (mic & file), analog TV PAL B/G transmitter, and a standalone PAL-B/G TV decoder with real-time FM audio demodulation.
 
