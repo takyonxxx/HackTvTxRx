@@ -10,6 +10,8 @@
 #include <QCheckBox>
 #include <QFile>
 #include <QDateTime>
+#include <QKeyEvent>
+#include <QMouseEvent>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -93,6 +95,9 @@ MainWindow::~MainWindow()
     // Save all settings for next session
     saveSettings();
 
+    delete m_fullscreenLabel;  // parentless top-level window
+    m_fullscreenLabel = nullptr;
+
     qDebug() << "MainWindow destructor started";
     m_shuttingDown = true;
 
@@ -148,6 +153,9 @@ void MainWindow::setupUI()
     QImage placeholder(720, 576, QImage::Format_Grayscale8);
     placeholder.fill(Qt::black);
     m_videoLabel->setPixmap(QPixmap::fromImage(placeholder));
+
+    m_videoLabel->installEventFilter(this);
+    m_videoLabel->setToolTip("Double-click: fullscreen");
 
     videoLayout->addWidget(m_videoLabel);
     videoGroup->setFixedWidth(736);
@@ -1039,14 +1047,55 @@ void MainWindow::onFrameReady(const QImage& frame)
     m_frameCount++;
     m_currentFrame = frameCopy;
 
-    if (m_videoLabel) {
-        QPixmap pixmap = QPixmap::fromImage(frameCopy);
-        QSize labelSize(m_videoLabel->width(), m_videoLabel->height());
-        QSize scaledSize = frameCopy.size().scaled(labelSize, Qt::KeepAspectRatio);
-        pixmap = pixmap.scaled(scaledSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    if (m_fullscreenLabel && m_fullscreenLabel->isVisible())
+        showFrameOn(m_fullscreenLabel, frameCopy);
+    else
+        showFrameOn(m_videoLabel, frameCopy);
+}
 
-        m_videoLabel->setPixmap(pixmap);
+void MainWindow::showFrameOn(QLabel* label, const QImage& frame)
+{
+    if (!label) return;
+    QSize scaledSize = frame.size().scaled(label->size(), Qt::KeepAspectRatio);
+    label->setPixmap(QPixmap::fromImage(frame).scaled(scaledSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+}
+
+void MainWindow::toggleVideoFullscreen()
+{
+    if (!m_fullscreenLabel) {
+        m_fullscreenLabel = new QLabel(nullptr, Qt::Window | Qt::FramelessWindowHint);
+        m_fullscreenLabel->setStyleSheet("QLabel { background-color: black; border: none; }");
+        m_fullscreenLabel->setAlignment(Qt::AlignCenter);
+        m_fullscreenLabel->setAttribute(Qt::WA_DeleteOnClose, false);
+        m_fullscreenLabel->setFocusPolicy(Qt::StrongFocus);
+        m_fullscreenLabel->installEventFilter(this);
     }
+    if (m_fullscreenLabel->isVisible()) {
+        m_fullscreenLabel->hide();
+        QMutexLocker locker(&m_frameMutex);
+        if (!m_currentFrame.isNull()) showFrameOn(m_videoLabel, m_currentFrame);
+    } else {
+        m_fullscreenLabel->setScreen(screen());
+        m_fullscreenLabel->showFullScreen();
+        QMutexLocker locker(&m_frameMutex);
+        if (!m_currentFrame.isNull()) showFrameOn(m_fullscreenLabel, m_currentFrame);
+    }
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_videoLabel || watched == m_fullscreenLabel) {
+        if (event->type() == QEvent::MouseButtonDblClick) {
+            toggleVideoFullscreen();
+            return true;
+        }
+        if (watched == m_fullscreenLabel && event->type() == QEvent::KeyPress &&
+            static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+            toggleVideoFullscreen();
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::updateStatus()

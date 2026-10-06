@@ -45,6 +45,9 @@ public:
     void handleReceivedData(const int8_t* data, size_t len);
     void processDemod(const std::vector<std::complex<float>>& samples);
 
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private slots:
     void onFrameReady(const QImage& frame);
     void onVideoGainChanged(int value);
@@ -80,6 +83,9 @@ private:
 
     // UI Components
     QLabel* m_videoLabel;
+    QLabel* m_fullscreenLabel = nullptr;  // frameless fullscreen video-only window
+    void toggleVideoFullscreen();
+    void showFrameOn(QLabel* label, const QImage& frame);
     QLabel* m_statusLabel;
     QLabel* m_fpsLabel;
     QSlider* m_videoGainSlider;
