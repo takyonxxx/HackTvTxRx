@@ -26,6 +26,12 @@ void palDecoder_setVideoInvert(PALDecoderRef ref, int invert);
 void palDecoder_setColorMode(PALDecoderRef ref, int color);
 void palDecoder_setChromaGain(PALDecoderRef ref, float gain);
 void palDecoder_setSyncThreshold(PALDecoderRef ref, float threshold);
+void palDecoder_setAutoSyncThreshold(PALDecoderRef ref, int on);
+void palDecoder_setTemporalDenoise(PALDecoderRef ref, int on);
+void palDecoder_setAfcEnabled(PALDecoderRef ref, int on);
+void palDecoder_setSyncDemod(PALDecoderRef ref, int on);
+void palDecoder_setVsbCompensation(PALDecoderRef ref, int on);
+float palDecoder_getAfcTrimHz(PALDecoderRef ref);
 
 // Audio Demodulator
 typedef void* AudioDemodRef;

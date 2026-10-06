@@ -5,6 +5,7 @@
 #include <complex>
 #include <cstdint>
 #include <cmath>
+#include <cstdlib>
 #include <mutex>
 #include <functional>
 #include <cstring>
@@ -12,13 +13,19 @@
 
 template<typename T, int MAX_TAPS>
 struct FIRDelay {
-    T buf[MAX_TAPS] = {};
+    // Double-length circular buffer: buf[pos + i] is the i-th most recent
+    // sample, so apply() is a contiguous MAC loop (no modulo per tap).
+    T buf[2 * MAX_TAPS] = {};
     int pos = 0, len = 0;
     void reset() { memset(buf, 0, sizeof(buf)); pos = 0; }
     void setLen(int n) { len = n; reset(); }
-    inline void push(const T& val) { pos = (pos == 0) ? len - 1 : pos - 1; buf[pos] = val; }
+    inline void push(const T& val) {
+        pos = (pos == 0) ? len - 1 : pos - 1;
+        buf[pos] = val; buf[pos + len] = val;
+    }
     inline T apply(const float* taps) const {
-        T out{}; for (int i = 0; i < len; i++) out += buf[(pos + i) % len] * taps[i]; return out;
+        const T* b = buf + pos;
+        T out{}; for (int i = 0; i < len; i++) out += b[i] * taps[i]; return out;
     }
 };
 
@@ -46,6 +53,17 @@ public:
     void setSyncThreshold(float threshold) { m_syncLevel = threshold; }
     void setColorMode(bool color) { m_colorMode = color; }
     void setChromaGain(float gain) { m_chromaGain = gain; }
+    // Auto sync slicer: threshold follows (sync tip + back porch) / 2 while locked
+    void setAutoSyncThreshold(bool on) { m_autoSync = on; }
+    // Motion-adaptive frame-to-frame noise reduction
+    void setTemporalDenoise(bool on) { m_temporalDenoise = on; }
+    // AFC: trims the NCO so the video carrier sits at DC
+    void setAfcEnabled(bool on) { m_afcEnabled = on; if (!on) { m_afcTrimHz = 0; applyNcoStep(); } }
+    float getAfcTrimHz() const { return m_afcTrimHz; }
+    // Synchronous (carrier-phase) detection instead of envelope detection
+    void setSyncDemod(bool on) { m_syncDemod = on; }
+    // Vestigial-sideband compensation (off by default)
+    void setVsbCompensation(bool on) { m_vsbComp = on; }
 
     float getVideoGain() const { return m_videoGain; }
     float getVideoOffset() const { return m_videoOffset; }
@@ -149,6 +167,31 @@ private:
     float m_syncPulseEntryOffsetFrac = 0;
     bool m_syncPulseActive = false;
 
+    // ========== Auto sync slicer ==========
+    bool m_autoSync = false;
+    int m_tipStart = 0, m_tipEnd = 0, m_porchStart = 0, m_porchEnd = 0;
+    double m_tipSum = 0, m_porchSum = 0;
+    int m_tipCount = 0, m_porchCount = 0;
+
+    // ========== Temporal denoise ==========
+    bool m_temporalDenoise = true;
+    std::vector<uint8_t> m_denoiseBuf;
+
+    // ========== Carrier tracker (AFC + synchronous detection) ==========
+    float m_carrI = 0, m_carrQ = 0, m_carrPrevI = 0, m_carrPrevQ = 0;
+    float m_carrLPCoeff = 0.1f;
+    double m_afcRe = 0, m_afcIm = 0, m_afcSigPow = 0, m_afcTotPow = 0;
+    int m_afcCount = 0, m_afcWindow = 625000;
+    bool m_afcEnabled = true;
+    float m_afcTrimHz = 0;
+    bool m_syncDemod = true;
+    bool m_vsbComp = false;
+    float m_vsbLPState = 0, m_vsbLPCoeff = 0.2f;
+
+    // ========== Vertical flywheel ==========
+    int m_linesSinceVSync = 0, m_vSyncRejects = 0;
+    bool m_vSyncValid = false;
+
     // Sync flywheel lock state
     int m_syncLockCount = 0;
     bool m_syncLocked = false;
@@ -172,6 +215,7 @@ private:
     float m_burstAmpSmoothed = 0.04f;                    // burst-amplitude AGC
 
     void updateNCO();
+    void applyNcoStep();    // m_ncoStep from carrier offset + AFC trim
     void applyStandard();
     void initFilters();
     void rebuildColorLUT();

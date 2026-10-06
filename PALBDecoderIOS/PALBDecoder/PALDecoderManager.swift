@@ -5,6 +5,7 @@ final class PALDecoderManager: ObservableObject {
     @Published var currentFrame: CGImage?
     @Published var fps: Double = 0
     @Published var syncQuality: Float = 0
+    @Published var afcKHz: Float = 0
     @Published var isConnected: Bool = false
     @Published var sampleRate: Int = 12500000
     @Published var bufferStatus: String = ""
@@ -289,7 +290,8 @@ final class PALDecoderManager: ObservableObject {
     private func startFPSTimer() {
         fpsTimer = DispatchSource.makeTimerSource(queue: .main)
         fpsTimer?.schedule(deadline: .now()+1, repeating: 1)
-        fpsTimer?.setEventHandler { [weak self] in guard let self = self else { return }; self.fps = Double(self.frameCount); self.frameCount = 0 }
+        fpsTimer?.setEventHandler { [weak self] in guard let self = self else { return }; self.fps = Double(self.frameCount); self.frameCount = 0
+            if let d = self.palDecoder { self.afcKHz = palDecoder_getAfcTrimHz(d) / 1000 } }
         fpsTimer?.resume()
     }
 
@@ -309,6 +311,11 @@ final class PALDecoderManager: ObservableObject {
     func setColorMode(_ c: Bool){if let d=palDecoder{palDecoder_setColorMode(d,c ?1:0)}}
     func setChromaGain(_ g: Float){if let d=palDecoder{palDecoder_setChromaGain(d,g)}}
     func setSyncThreshold(_ t: Float){if let d=palDecoder{palDecoder_setSyncThreshold(d,t)}}
+    func setAutoSyncThreshold(_ on: Bool){if let d=palDecoder{palDecoder_setAutoSyncThreshold(d,on ?1:0)}}
+    func setTemporalDenoise(_ on: Bool){if let d=palDecoder{palDecoder_setTemporalDenoise(d,on ?1:0)}}
+    func setAfcEnabled(_ on: Bool){if let d=palDecoder{palDecoder_setAfcEnabled(d,on ?1:0)}}
+    func setSyncDemod(_ on: Bool){if let d=palDecoder{palDecoder_setSyncDemod(d,on ?1:0)}}
+    func setVsbCompensation(_ on: Bool){if let d=palDecoder{palDecoder_setVsbCompensation(d,on ?1:0)}}
     func setAudioGain(_ g: Float){if let a=audioDemod{audioDemod_setAudioGain(a,g)}}
     func setAudioEnabled(_ e: Bool){if let a=audioDemod{audioDemod_setAudioEnabled(a,e ?1:0)}}
     func setVolume(_ v: Float){audioEngine.volume=v}

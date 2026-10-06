@@ -78,6 +78,30 @@ void palDecoder_setSyncThreshold(PALDecoderRef ref, float threshold) {
     static_cast<PALDecoderWrapper*>(ref)->decoder.setSyncThreshold(threshold);
 }
 
+void palDecoder_setAutoSyncThreshold(PALDecoderRef ref, int on) {
+    static_cast<PALDecoderWrapper*>(ref)->decoder.setAutoSyncThreshold(on != 0);
+}
+
+void palDecoder_setTemporalDenoise(PALDecoderRef ref, int on) {
+    static_cast<PALDecoderWrapper*>(ref)->decoder.setTemporalDenoise(on != 0);
+}
+
+void palDecoder_setAfcEnabled(PALDecoderRef ref, int on) {
+    static_cast<PALDecoderWrapper*>(ref)->decoder.setAfcEnabled(on != 0);
+}
+
+void palDecoder_setSyncDemod(PALDecoderRef ref, int on) {
+    static_cast<PALDecoderWrapper*>(ref)->decoder.setSyncDemod(on != 0);
+}
+
+void palDecoder_setVsbCompensation(PALDecoderRef ref, int on) {
+    static_cast<PALDecoderWrapper*>(ref)->decoder.setVsbCompensation(on != 0);
+}
+
+float palDecoder_getAfcTrimHz(PALDecoderRef ref) {
+    return static_cast<PALDecoderWrapper*>(ref)->decoder.getAfcTrimHz();
+}
+
 // ============================================================
 // Audio Demodulator Bridge
 // ============================================================

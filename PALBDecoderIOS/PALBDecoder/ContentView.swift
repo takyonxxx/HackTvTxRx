@@ -19,6 +19,12 @@ struct ContentView: View {
     @AppStorage("tvColorMode") private var tvColorMode = false
     @AppStorage("tvChromaGain") private var tvChromaGain: Double = 0.75
     @AppStorage("tvSyncThreshold") private var tvSyncThreshold: Double = 0.0
+    @AppStorage("tvAutoSync") private var tvAutoSync = false
+    @AppStorage("tvAfc") private var tvAfc = true
+    @AppStorage("tvSyncDemod") private var tvSyncDemod = true
+    @AppStorage("tvVsb") private var tvVsb = false
+    @AppStorage("tvDenoise") private var tvDenoise = true
+    @AppStorage("tvWide169") private var tvWide169 = true
 
     // Radio last settings
     @AppStorage("radioFreqMHz") private var radioFreqMHz: Double = 100.0
@@ -50,6 +56,10 @@ struct ContentView: View {
     @State private var selectedBandIndex: Int = 0
     @State private var didInitialize = false
     @State private var showChannelList = false
+    @State private var showFullScreen = false
+
+    // Display aspect: 16:9 (anamorphic stretch) or the classic 720x576 grid
+    private var videoAspect: CGFloat { tvWide169 ? 16.0 / 9.0 : 720.0 / 576.0 }
 
     private var connected: Bool { decoder.isConnected }
 
@@ -146,6 +156,11 @@ struct ContentView: View {
             .sheet(isPresented: $showChannelList) {
                 channelListSheet
             }
+            #if os(iOS)
+            .fullScreenCover(isPresented: $showFullScreen) { fullScreenVideoView }
+            #else
+            .sheet(isPresented: $showFullScreen) { fullScreenVideoView }
+            #endif
         }
     }
 
@@ -182,6 +197,11 @@ struct ContentView: View {
         decoder.sampleRate = radioMode ? 2000000 : selectedSampleRate
         decoder.frequency = UInt64(frequencyMHz * 1_000_000)
         decoder.setAudioDemodMode(audioDemodMode)
+        decoder.setAutoSyncThreshold(tvAutoSync)
+        decoder.setAfcEnabled(tvAfc)
+        decoder.setSyncDemod(tvSyncDemod)
+        decoder.setVsbCompensation(tvVsb)
+        decoder.setTemporalDenoise(tvDenoise)
     }
 
     // MARK: - Save current mode settings
@@ -238,13 +258,13 @@ struct ContentView: View {
             if let frame = decoder.currentFrame {
                 Image(decorative: frame, scale: 1.0)
                     .resizable()
-                    .aspectRatio(720.0 / 576.0, contentMode: .fit)
+                    .aspectRatio(videoAspect, contentMode: .fit)
                     .clipped()
                     .cornerRadius(8)
             } else {
                 Rectangle()
                     .fill(Color(.darkGray).opacity(0.3))
-                    .aspectRatio(720.0 / 576.0, contentMode: .fit)
+                    .aspectRatio(videoAspect, contentMode: .fit)
                     .overlay(
                         VStack(spacing: 12) {
                             Image("SDRLogo")
@@ -259,6 +279,26 @@ struct ContentView: View {
                     .cornerRadius(8)
             }
         }
+        // Double tap: video only, full screen. Double tap again to return.
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { if decoder.currentFrame != nil { showFullScreen = true } }
+    }
+
+    private var fullScreenVideoView: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let frame = decoder.currentFrame {
+                Image(decorative: frame, scale: 1.0)
+                    .resizable()
+                    .aspectRatio(videoAspect, contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { showFullScreen = false }
+        #if os(iOS)
+        .statusBarHidden(true)
+        #endif
     }
 
     // MARK: - Connection
@@ -346,6 +386,10 @@ struct ContentView: View {
                         .foregroundColor(decoder.syncQuality >= 95 ? .green :
                                          decoder.syncQuality >= 85 ? .yellow :
                                          decoder.syncQuality >= 70 ? .orange : .red)
+                    if tvAfc {
+                        Label(String(format: "AFC %.1f kHz", decoder.afcKHz), systemImage: "scope")
+                            .font(.caption)
+                    }
                 }
                 Label(String(format: "%.1f MB/s", decoder.tcpClient.dataRate), systemImage: "arrow.down.circle")
                     .font(.caption)
@@ -594,6 +638,8 @@ struct ContentView: View {
                 floatSliderRow("Gain", value: $videoGain, range: 0.1...5.0) { decoder.setVideoGain(videoGain); saveTVSettings() }
                 floatSliderRow("Offset", value: $videoOffset, range: -1.0...1.0) { decoder.setVideoOffset(videoOffset); saveTVSettings() }
                 floatSliderRow("Sync Thr", value: $syncThreshold, range: 0...0.5) { decoder.setSyncThreshold(syncThreshold); saveTVSettings() }
+                    .disabled(tvAutoSync)
+                    .opacity(tvAutoSync ? 0.4 : 1)
                 HStack {
                     Toggle("Invert", isOn: $invertVideo)
                         .onChange(of: invertVideo) { _, v in decoder.setVideoInvert(v); saveTVSettings() }
@@ -604,6 +650,26 @@ struct ContentView: View {
                 if colorMode {
                     floatSliderRow("Chroma", value: $chromaGain, range: 0...5.0) { decoder.setChromaGain(chromaGain); saveTVSettings() }
                 }
+                HStack {
+                    Toggle("Auto Thr", isOn: $tvAutoSync)
+                        .onChange(of: tvAutoSync) { _, v in
+                            decoder.setAutoSyncThreshold(v)
+                            if !v { decoder.setSyncThreshold(syncThreshold) }   // restore manual level
+                        }
+                    Toggle("AFC", isOn: $tvAfc)
+                        .onChange(of: tvAfc) { _, v in decoder.setAfcEnabled(v) }
+                    Toggle("Sync Demod", isOn: $tvSyncDemod)
+                        .onChange(of: tvSyncDemod) { _, v in decoder.setSyncDemod(v) }
+                }
+                .toggleStyle(.button).font(.caption)
+                HStack {
+                    Toggle("VSB", isOn: $tvVsb)
+                        .onChange(of: tvVsb) { _, v in decoder.setVsbCompensation(v) }
+                    Toggle("Denoise", isOn: $tvDenoise)
+                        .onChange(of: tvDenoise) { _, v in decoder.setTemporalDenoise(v) }
+                    Toggle("16:9", isOn: $tvWide169)
+                }
+                .toggleStyle(.button).font(.caption)
             }
         }
     }
