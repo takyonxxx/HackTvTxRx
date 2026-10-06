@@ -85,6 +85,10 @@ private:
     QLabel* m_videoLabel;
     QLabel* m_fullscreenLabel = nullptr;  // frameless fullscreen video-only window
     void toggleVideoFullscreen();
+    void setWideDisplay(bool wide);
+    bool m_wideDisplay = false;
+    QGroupBox* m_videoGroup = nullptr;
+    QCheckBox* m_wideCheckBox = nullptr;
     void showFrameOn(QLabel* label, const QImage& frame);
     QLabel* m_statusLabel;
     QLabel* m_fpsLabel;

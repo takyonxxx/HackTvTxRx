@@ -110,7 +110,7 @@ private:
     void   runAfc();
 
     // VSB compensation one-pole (post detection)
-    bool  m_vsbComp = true;
+    bool  m_vsbComp = false;   // off by default: measured better sync/picture without it
     float m_vsbLPState = 0.0f;
     float m_vsbLPCoeff = 0.2f;
     float m_videoCarrierOffsetHz;
@@ -145,6 +145,11 @@ private:
     // ========== VSync ==========
     int m_lineIndex;
     int m_fieldIndex;
+    // Vertical flywheel: a V-sync detection is only trusted if it arrives a
+    // whole number of fields (312.5 lines) after the previous accepted one.
+    int  m_linesSinceVSync = 0;
+    int  m_vSyncRejects = 0;
+    bool m_vSyncValid = false;
     int m_fieldDetectStartPos;
     int m_fieldDetectEndPos;
     int m_vSyncDetectStartPos;

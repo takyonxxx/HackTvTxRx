@@ -199,6 +199,9 @@ void PALDecoder::setSampleRate(int sampleRate)
     m_hSyncErrorCount = 0;
     m_lineIndex = 0;
     m_fieldIndex = 0;
+    m_vSyncValid = false;
+    m_vSyncRejects = 0;
+    m_linesSinceVSync = 0;
     m_scPhase = 0.0;
     m_syncPulseCounter = 0;
     m_syncPulseActive = false;
@@ -1221,14 +1224,37 @@ void PALDecoder::processEndOfLine()
     if (m_lineIndex == VSYNC_LINES + 3 && m_fieldIndex == 0)
         buildFrame();
 
+    m_linesSinceVSync++;
+
     if (m_vSyncDetectSampleCount > m_vSyncDetectThreshold &&
         (m_lineIndex < 3 || m_lineIndex > VSYNC_LINES + 1) && m_vSyncEnabled)
     {
-        if (m_fieldDetectSampleCount > m_fieldDetectThreshold1)
-            m_fieldIndex = 0;
-        else if (m_fieldDetectSampleCount < m_fieldDetectThreshold2)
-            m_fieldIndex = 1;
-        m_lineIndex = 2;
+        // Gate: accept only if the spacing since the last accepted V-sync is
+        // ~k * 312.5 lines (k = 1..4, tolerance 5), or it is the tail of the
+        // same V-sync (< 8 lines). Isolated noise detections are ignored; after
+        // 3 consecutive rejections the lock is considered stale and we re-acquire.
+        bool accept = true;
+        bool duplicate = false;
+        if (m_vSyncValid) {
+            const int d = m_linesSinceVSync;
+            duplicate = d < 8;
+            bool nearMultiple = duplicate;
+            for (int k = 1; k <= 4 && !nearMultiple; k++)
+                nearMultiple = std::abs(d - static_cast<int>(312.5f * k + 0.5f)) <= 5;
+            if (!nearMultiple && m_vSyncRejects < 3) {
+                accept = false;
+                m_vSyncRejects++;
+            }
+        }
+        if (accept) {
+            m_vSyncRejects = 0;
+            if (!duplicate) { m_linesSinceVSync = 0; m_vSyncValid = true; }
+            if (m_fieldDetectSampleCount > m_fieldDetectThreshold1)
+                m_fieldIndex = 0;
+            else if (m_fieldDetectSampleCount < m_fieldDetectThreshold2)
+                m_fieldIndex = 1;
+            m_lineIndex = 2;
+        }
     }
 
     m_fieldDetectSampleCount = 0;
@@ -1315,8 +1341,12 @@ void PALDecoder::renderLine()
                     U = (U + m_prevLineU[x]) * 0.5f;
                     V = (V + m_prevLineV[x]) * 0.5f;
                 }
-                U *= m_chromaGain;
-                V *= m_chromaGain;
+                // Chroma shares the luma amplitude scaling: Video Gain is
+                // normalised to its default (1.5) so changing it keeps
+                // saturation in proportion instead of washing colours out.
+                const float chromaK = m_chromaGain * (m_videoGain / 1.5f);
+                U *= chromaK;
+                V *= chromaK;
             }
 
             yuv2rgb(Y, U, V, r, g, b);

@@ -141,6 +141,7 @@ void MainWindow::setupUI()
 
     // Video display - 720x576 PAL standard
     QGroupBox* videoGroup = new QGroupBox("PAL Video Display (720x576)", this);
+    m_videoGroup = videoGroup;
         QVBoxLayout* videoLayout = new QVBoxLayout(videoGroup);
 
     m_videoLabel = new QLabel(this);
@@ -252,6 +253,12 @@ void MainWindow::setupUI()
             });
 
     videoControlLayout->addLayout(chromaGainLayout);
+
+    m_wideCheckBox = new QCheckBox("16:9 Display", this);
+    m_wideCheckBox->setToolTip("Stretch the picture to 16:9 (anamorphic broadcasts)");
+    connect(m_wideCheckBox, &QCheckBox::toggled, this, &MainWindow::setWideDisplay);
+    m_wideCheckBox->setChecked(true);   // 16:9 by default (applies via the toggled signal)
+    videoControlLayout->addWidget(m_wideCheckBox);
 
     bottomControlsLayout->addWidget(videoControlGroup);
 
@@ -594,7 +601,7 @@ void MainWindow::setupUI()
     syncControlLayout->addWidget(m_syncDemodCheckBox);
 
     m_vsbCheckBox = new QCheckBox("VSB compensation", this);
-    m_vsbCheckBox->setChecked(true);
+    m_vsbCheckBox->setChecked(false);
     connect(m_vsbCheckBox, &QCheckBox::toggled, this, [this](bool on) {
         if (m_palDecoder) m_palDecoder->setVsbCompensation(on);
     });
@@ -1094,8 +1101,29 @@ void MainWindow::onFrameReady(const QImage& frame)
 void MainWindow::showFrameOn(QLabel* label, const QImage& frame)
 {
     if (!label) return;
-    QSize scaledSize = frame.size().scaled(label->size(), Qt::KeepAspectRatio);
-    label->setPixmap(QPixmap::fromImage(frame).scaled(scaledSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    // Display aspect: 16:9 (anamorphic stretch) or the frame's own 5:4 pixel grid
+    const QSize aspect = m_wideDisplay ? QSize(16, 9) : frame.size();
+    const QSize scaledSize = aspect.scaled(label->size(), Qt::KeepAspectRatio);
+    label->setPixmap(QPixmap::fromImage(frame).scaled(scaledSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+}
+
+void MainWindow::setWideDisplay(bool wide)
+{
+    m_wideDisplay = wide;
+    if (m_videoLabel && m_videoGroup) {
+        const QSize sz = wide ? QSize(1024, 576) : QSize(720, 576);
+        m_videoLabel->setFixedSize(sz);
+        m_videoGroup->setFixedWidth(sz.width() + 16);
+        m_videoGroup->setTitle(wide ? "PAL Video Display (16:9)" : "PAL Video Display (720x576)");
+        if (!isMaximized() && !isFullScreen()) {
+            layout()->activate();
+            adjustSize();
+        }
+    }
+    QMutexLocker locker(&m_frameMutex);
+    if (!m_currentFrame.isNull())
+        showFrameOn((m_fullscreenLabel && m_fullscreenLabel->isVisible()) ? m_fullscreenLabel : m_videoLabel,
+                    m_currentFrame);
 }
 
 void MainWindow::toggleVideoFullscreen()
@@ -1417,6 +1445,7 @@ void MainWindow::saveSettings()
     settings.setValue("autoSync", m_autoSyncCheckBox->isChecked());
     settings.setValue("denoise", m_denoiseCheckBox->isChecked());
     settings.setValue("afc", m_afcCheckBox->isChecked());
+    settings.setValue("wideDisplay", m_wideCheckBox->isChecked());
     settings.setValue("syncDemod", m_syncDemodCheckBox->isChecked());
     settings.setValue("vsbComp", m_vsbCheckBox->isChecked());
 
@@ -1477,8 +1506,9 @@ void MainWindow::loadSettings()
     m_autoSyncCheckBox->setChecked(settings.value("autoSync", false).toBool());
     m_denoiseCheckBox->setChecked(settings.value("denoise", true).toBool());
     m_afcCheckBox->setChecked(settings.value("afc", true).toBool());
+    m_wideCheckBox->setChecked(settings.value("wideDisplay", true).toBool());
     m_syncDemodCheckBox->setChecked(settings.value("syncDemod", true).toBool());
-    m_vsbCheckBox->setChecked(settings.value("vsbComp", true).toBool());
+    m_vsbCheckBox->setChecked(settings.value("vsbComp", false).toBool());
 
     // Audio enabled
     m_audioEnabledCheckBox->setChecked(settings.value("audioEnabled", true).toBool());
