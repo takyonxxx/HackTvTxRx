@@ -569,6 +569,44 @@ void MainWindow::setupUI()
     syncHelpLabel->setStyleSheet("QLabel { color: #666; font-size: 8pt; }");
     syncControlLayout->addWidget(syncHelpLabel);
 
+    m_autoSyncCheckBox = new QCheckBox("Auto threshold", this);
+    m_autoSyncCheckBox->setToolTip("Slice halfway between sync tip and black level while locked");
+    connect(m_autoSyncCheckBox, &QCheckBox::toggled, this, [this](bool on) {
+        m_syncThresholdSlider->setEnabled(!on);
+        m_syncThresholdSpinBox->setEnabled(!on);
+        if (m_palDecoder) m_palDecoder->setAutoSyncThreshold(on);
+        if (!on) onSyncThresholdChanged(m_syncThresholdSlider->value());  // restore manual level
+    });
+    syncControlLayout->addWidget(m_autoSyncCheckBox);
+
+    m_afcCheckBox = new QCheckBox("AFC (carrier tracking)", this);
+    m_afcCheckBox->setChecked(true);
+    connect(m_afcCheckBox, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_palDecoder) m_palDecoder->setAfcEnabled(on);
+    });
+    syncControlLayout->addWidget(m_afcCheckBox);
+
+    m_syncDemodCheckBox = new QCheckBox("Synchronous demodulation", this);
+    m_syncDemodCheckBox->setChecked(true);
+    connect(m_syncDemodCheckBox, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_palDecoder) m_palDecoder->setSyncDemod(on);
+    });
+    syncControlLayout->addWidget(m_syncDemodCheckBox);
+
+    m_vsbCheckBox = new QCheckBox("VSB compensation", this);
+    m_vsbCheckBox->setChecked(true);
+    connect(m_vsbCheckBox, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_palDecoder) m_palDecoder->setVsbCompensation(on);
+    });
+    syncControlLayout->addWidget(m_vsbCheckBox);
+
+    m_denoiseCheckBox = new QCheckBox("Noise reduction (temporal)", this);
+    m_denoiseCheckBox->setChecked(true);
+    connect(m_denoiseCheckBox, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_palDecoder) m_palDecoder->setTemporalDenoise(on);
+    });
+    syncControlLayout->addWidget(m_denoiseCheckBox);
+
     rightColumn->addWidget(syncControlGroup);
     rightColumn->addStretch();
 
@@ -1120,7 +1158,8 @@ void MainWindow::updateStatus()
         status += QString(" | V.Gain: %1 | V.Offset: %2")
         .arg(m_palDecoder->getVideoGain(), 0, 'f', 1)
             .arg(m_palDecoder->getVideoOffset(), 0, 'f', 2);
-
+        if (m_afcCheckBox && m_afcCheckBox->isChecked())
+            status += QString(" | AFC: %1 kHz").arg(m_palDecoder->getAfcTrimHz() / 1000.0f, 0, 'f', 1);
     }
 
     m_statusLabel->setText(status);
@@ -1375,6 +1414,11 @@ void MainWindow::saveSettings()
 
     // Sync
     settings.setValue("syncThreshold", m_syncThresholdSlider->value());
+    settings.setValue("autoSync", m_autoSyncCheckBox->isChecked());
+    settings.setValue("denoise", m_denoiseCheckBox->isChecked());
+    settings.setValue("afc", m_afcCheckBox->isChecked());
+    settings.setValue("syncDemod", m_syncDemodCheckBox->isChecked());
+    settings.setValue("vsbComp", m_vsbCheckBox->isChecked());
 
     // Audio
     settings.setValue("audioEnabled", m_audioEnabledCheckBox->isChecked());
@@ -1430,6 +1474,11 @@ void MainWindow::loadSettings()
 
     // Sync threshold
     m_syncThresholdSlider->setValue(settings.value("syncThreshold", 0).toInt());
+    m_autoSyncCheckBox->setChecked(settings.value("autoSync", false).toBool());
+    m_denoiseCheckBox->setChecked(settings.value("denoise", true).toBool());
+    m_afcCheckBox->setChecked(settings.value("afc", true).toBool());
+    m_syncDemodCheckBox->setChecked(settings.value("syncDemod", true).toBool());
+    m_vsbCheckBox->setChecked(settings.value("vsbComp", true).toBool());
 
     // Audio enabled
     m_audioEnabledCheckBox->setChecked(settings.value("audioEnabled", true).toBool());

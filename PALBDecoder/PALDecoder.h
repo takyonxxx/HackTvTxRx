@@ -30,6 +30,18 @@ public:
     void setSyncThreshold(float threshold) { m_syncLevel = threshold; }
     void setColorMode(bool color) { m_colorMode = color; }
     void setChromaGain(float gain) { m_chromaGain = gain; }
+    // Auto sync slicer: threshold follows (sync tip + back porch) / 2 while locked
+    void setAutoSyncThreshold(bool on) { m_autoSync = on; }
+    // Frame-to-frame noise reduction (motion adaptive)
+    void setTemporalDenoise(bool on) { m_temporalDenoise = on; }
+    bool getAutoSyncThreshold() const { return m_autoSync; }
+    // Automatic frequency control: trims the NCO so the video carrier sits at DC
+    void setAfcEnabled(bool on) { m_afcEnabled = on; if (!on) { m_afcTrimHz = 0.0f; applyNcoIncrement(); } }
+    float getAfcTrimHz() const { return m_afcTrimHz; }
+    // Synchronous (carrier-phase) detection instead of plain envelope detection
+    void setSyncDemod(bool on) { m_syncDemod = on; }
+    // Vestigial-sideband compensation (halves the doubled low-frequency region)
+    void setVsbCompensation(bool on) { m_vsbComp = on; }
 
     float getVideoGain() const { return m_videoGain; }
     float getVideoOffset() const { return m_videoOffset; }
@@ -76,6 +88,31 @@ private:
     // ========== NCO ==========
     double m_ncoPhase;
     double m_ncoPhaseIncrement;
+    std::complex<double> m_ncoOsc{1.0, 0.0};   // rotating oscillator (no trig per sample)
+    std::complex<double> m_ncoStep{1.0, 0.0};
+    int m_ncoRenormCount = 0;
+    void applyNcoIncrement();   // rebuilds m_ncoStep from carrier offset + AFC trim
+
+    // ========== Carrier tracker (AFC + synchronous detection) ==========
+    // A ~200 kHz complex one-pole around DC isolates the video carrier
+    // (audio carrier / video sidebands are rejected), giving a clean phase
+    // reference and a frequency-error estimate.
+    std::complex<float> m_carrLP{0.0f, 0.0f};
+    std::complex<float> m_carrPrev{0.0f, 0.0f};
+    float m_carrLPCoeff = 0.1f;
+    std::complex<double> m_afcAcc{0.0, 0.0};
+    double m_afcSigPow = 0.0, m_afcTotPow = 0.0;
+    int    m_afcCount = 0;
+    int    m_afcWindow = 625000;
+    bool   m_afcEnabled = true;
+    float  m_afcTrimHz = 0.0f;
+    bool   m_syncDemod = true;
+    void   runAfc();
+
+    // VSB compensation one-pole (post detection)
+    bool  m_vsbComp = true;
+    float m_vsbLPState = 0.0f;
+    float m_vsbLPCoeff = 0.2f;
     float m_videoCarrierOffsetHz;
     uint64_t m_tuneFrequency;
     void updateNCO();
@@ -119,12 +156,17 @@ private:
     int m_fieldDetectThreshold2;
 
     // ========== Filters ==========
+    // FIR delay lines are double-length circular buffers: buf[pos+i] is the
+    // i-th most recent sample (i=0 newest), so the MAC loop is contiguous.
     std::vector<float> m_videoFilterTaps;
-    std::deque<std::complex<float>> m_videoFilterDelay;
+    std::vector<std::complex<float>> m_videoFilterBuf;
+    int m_videoFilterPos = 0;
     std::vector<float> m_lumaFilterTaps;
-    std::deque<float> m_lumaFilterDelay;
+    std::vector<float> m_lumaFilterBuf;
+    int m_lumaFilterPos = 0;
     std::vector<float> m_chromaFilterTaps;      // 4.43 MHz band-pass (pre-demod)
-    std::deque<float> m_chromaBandDelay;        // BPF delay line
+    std::vector<float> m_chromaBandBuf;
+    int m_chromaBandPos = 0;
     float m_chromaLPUState;                     // post-demod one-pole LPF (U)
     float m_chromaLPVState;                     // post-demod one-pole LPF (V)
     float m_chromaLPCoeff;
@@ -209,11 +251,19 @@ private:
     static constexpr int SC_LUT_SIZE = 4096;
     std::vector<float> m_prevLineU;
     std::vector<float> m_prevLineV;
+    std::vector<float> m_curLineU;   // reused per-line scratch (swapped with prev)
+    std::vector<float> m_curLineV;
 
-    // ========== 1H Comb Filter (line delay for luma/chroma separation) ==========
-    std::vector<float> m_prevLineSamples;      // previous line's normalized samples at full rate
-    std::vector<float> m_currentLineSamples;   // current line's normalized samples at full rate
-    int m_fullRateSampleIndex;                 // sample index within current line (full rate)
+    // ========== Auto sync slicer ==========
+    bool  m_autoSync = false;
+    int   m_tipStart = 0, m_tipEnd = 0;         // sync tip window (samples from line start)
+    int   m_porchStart = 0, m_porchEnd = 0;     // back porch (black level) window
+    double m_tipSum = 0.0, m_porchSum = 0.0;
+    int   m_tipCount = 0, m_porchCount = 0;
+
+    // ========== Temporal denoise ==========
+    bool m_temporalDenoise = true;
+    std::vector<uint8_t> m_denoiseBuf;
 
     // ========== Colour Burst PLL ==========
     // Back porch burst window (samples at full rate)

@@ -147,6 +147,11 @@ private:
     QSlider* m_syncThresholdSlider;
     QDoubleSpinBox* m_syncThresholdSpinBox;
     QLabel* m_syncRateLabel;
+    QCheckBox* m_autoSyncCheckBox = nullptr;
+    QCheckBox* m_denoiseCheckBox = nullptr;
+    QCheckBox* m_afcCheckBox = nullptr;
+    QCheckBox* m_syncDemodCheckBox = nullptr;
+    QCheckBox* m_vsbCheckBox = nullptr;
 
     FrameBuffer* palFrameBuffer;
     QAtomicInt palDemodulationInProgress{0};

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -239,13 +240,24 @@ void PALDecoder::setSampleRate(int sampleRate)
     m_chromaNotch2X1 = m_chromaNotch2X2 = m_chromaNotch2Y1 = m_chromaNotch2Y2 = 0.0f;
 
     // Clear filter delays
-    m_videoFilterDelay.clear();
-    m_lumaFilterDelay.clear();
-    m_chromaBandDelay.clear();
+    m_videoFilterBuf.assign(m_videoFilterTaps.size() * 2, std::complex<float>(0.0f, 0.0f));
+    m_lumaFilterBuf.assign(m_lumaFilterTaps.size() * 2, 0.0f);
+    m_chromaBandBuf.assign(m_chromaFilterTaps.size() * 2, 0.0f);
+    m_videoFilterPos = m_lumaFilterPos = m_chromaBandPos = 0;
+    m_prevLineU.clear();
+    m_prevLineV.clear();
     m_chromaLPUState = 0.0f;
     m_chromaLPVState = 0.0f;
     // Post-demod chroma LPF: ~800 kHz (removes the 2*fsc product term)
     m_chromaLPCoeff = 1.0f - std::exp(-2.0f * static_cast<float>(M_PI) * 8.0e5f / rateF);
+
+    // Carrier tracker (200 kHz) and VSB-compensation shelf (~450 kHz corner)
+    m_carrLPCoeff = 1.0f - std::exp(-2.0f * static_cast<float>(M_PI) * 2.0e5f / rateF);
+    m_carrLP = m_carrPrev = std::complex<float>(0.0f, 0.0f);
+    m_vsbLPCoeff = 1.0f - std::exp(-2.0f * static_cast<float>(M_PI) * 4.5e5f / rateF);
+    m_vsbLPState = 0.0f;
+    m_afcWindow = std::max(1, m_sampleRate / 20);   // 50 ms
+    updateNCO();   // NCO step depends on the sample rate (also resets AFC)
 
 }
 
@@ -269,6 +281,15 @@ void PALDecoder::applyStandard()
     // comparator input, the measured width stays close to the true 4.7 us.
     m_syncPulseMinWidth = static_cast<int>(3.0f / 64.0f * exactSPL);
     m_syncPulseMaxWidth = static_cast<int>(6.5f / 64.0f * exactSPL);
+
+    // Auto-slicer windows: sync tip (inside the 4.7 us pulse, away from edges)
+    // and back porch after the burst (black level).
+    m_tipStart    = static_cast<int>(1.5f / 64.0f * exactSPL);
+    m_tipEnd      = static_cast<int>(4.0f / 64.0f * exactSPL);
+    m_porchStart  = static_cast<int>(8.5f / 64.0f * exactSPL);
+    m_porchEnd    = static_cast<int>(10.5f / 64.0f * exactSPL);
+    m_tipSum = m_porchSum = 0.0;
+    m_tipCount = m_porchCount = 0;
 
     m_fieldDetectStartPos = static_cast<int>(FIELD_DETECT_START * exactSPL);
     m_fieldDetectEndPos   = static_cast<int>(FIELD_DETECT_END * exactSPL);
@@ -561,6 +582,7 @@ void PALDecoder::extractBurstPhase()
 
 void PALDecoder::setTuneFrequency(uint64_t freqHz)
 {
+    QMutexLocker locker(&m_processMutex);   // AFC state is touched by the DSP thread
     m_tuneFrequency = freqHz;
     updateNCO();
 }
@@ -584,9 +606,39 @@ void PALDecoder::updateNCO()
         videoCarrierMHz = tuneMHz;
     }
     m_videoCarrierOffsetHz = static_cast<float>((videoCarrierMHz - tuneMHz) * 1.0e6);
-    m_ncoPhaseIncrement = -2.0 * M_PI * static_cast<double>(m_videoCarrierOffsetHz)
-                          / static_cast<double>(m_sampleRate);
+    m_afcTrimHz = 0.0f;   // new tuning: restart AFC from the nominal carrier
     m_ncoPhase = 0.0;
+    applyNcoIncrement();
+    m_ncoOsc = std::complex<double>(1.0, 0.0);
+    m_ncoRenormCount = 0;
+    m_afcAcc = {0.0, 0.0};
+    m_afcSigPow = m_afcTotPow = 0.0;
+    m_afcCount = 0;
+}
+
+void PALDecoder::applyNcoIncrement()
+{
+    m_ncoPhaseIncrement = -2.0 * M_PI
+        * (static_cast<double>(m_videoCarrierOffsetHz) + static_cast<double>(m_afcTrimHz))
+        / static_cast<double>(m_sampleRate);
+    m_ncoStep = std::polar(1.0, m_ncoPhaseIncrement);
+}
+
+// Frequency error of the residual carrier (after the NCO shift), measured
+// from the phase advance of the narrowband carrier estimate. Only applied
+// when the carrier clearly dominates its 200 kHz neighbourhood.
+void PALDecoder::runAfc()
+{
+    const double carrierFraction = (m_afcTotPow > 1e-20) ? (m_afcSigPow / m_afcTotPow) : 0.0;
+    if (carrierFraction > 0.15 && std::abs(m_afcAcc) > 0.0) {
+        double errHz = std::arg(m_afcAcc) * static_cast<double>(m_sampleRate) / (2.0 * M_PI);
+        float trim = m_afcTrimHz + 0.3f * static_cast<float>(errHz);
+        m_afcTrimHz = std::clamp(trim, -150000.0f, 150000.0f);
+        applyNcoIncrement();
+    }
+    m_afcAcc = {0.0, 0.0};
+    m_afcSigPow = m_afcTotPow = 0.0;
+    m_afcCount = 0;
 }
 
 // ============================================================
@@ -646,31 +698,43 @@ std::vector<float> PALDecoder::designBandPassFIR(float centerFreq, float bandwid
 
 std::complex<float> PALDecoder::applyVideoFilter(const std::complex<float>& sample)
 {
-    m_videoFilterDelay.push_front(sample);
-    if (m_videoFilterDelay.size() > m_videoFilterTaps.size()) m_videoFilterDelay.pop_back();
-    std::complex<float> out(0.0f, 0.0f);
-    size_t n = std::min(m_videoFilterDelay.size(), m_videoFilterTaps.size());
-    for (size_t i = 0; i < n; i++) out += m_videoFilterDelay[i] * m_videoFilterTaps[i];
-    return out;
+    const int n = static_cast<int>(m_videoFilterTaps.size());
+    if (n == 0) return sample;
+    m_videoFilterPos = (m_videoFilterPos == 0) ? n - 1 : m_videoFilterPos - 1;
+    m_videoFilterBuf[m_videoFilterPos] = sample;
+    m_videoFilterBuf[m_videoFilterPos + n] = sample;
+    const std::complex<float>* b = &m_videoFilterBuf[m_videoFilterPos];
+    const float* t = m_videoFilterTaps.data();
+    float re = 0.0f, im = 0.0f;
+    for (int i = 0; i < n; i++) { re += b[i].real() * t[i]; im += b[i].imag() * t[i]; }
+    return std::complex<float>(re, im);
 }
 
 float PALDecoder::applyLumaFilter(float sample)
 {
-    m_lumaFilterDelay.push_front(sample);
-    if (m_lumaFilterDelay.size() > m_lumaFilterTaps.size()) m_lumaFilterDelay.pop_back();
+    const int n = static_cast<int>(m_lumaFilterTaps.size());
+    if (n == 0) return sample;
+    m_lumaFilterPos = (m_lumaFilterPos == 0) ? n - 1 : m_lumaFilterPos - 1;
+    m_lumaFilterBuf[m_lumaFilterPos] = sample;
+    m_lumaFilterBuf[m_lumaFilterPos + n] = sample;
+    const float* b = &m_lumaFilterBuf[m_lumaFilterPos];
+    const float* t = m_lumaFilterTaps.data();
     float out = 0.0f;
-    size_t n = std::min(m_lumaFilterDelay.size(), m_lumaFilterTaps.size());
-    for (size_t i = 0; i < n; i++) out += m_lumaFilterDelay[i] * m_lumaFilterTaps[i];
+    for (int i = 0; i < n; i++) out += b[i] * t[i];
     return out;
 }
 
 float PALDecoder::applyChromaBandFilter(float sample)
 {
-    m_chromaBandDelay.push_front(sample);
-    if (m_chromaBandDelay.size() > m_chromaFilterTaps.size()) m_chromaBandDelay.pop_back();
+    const int n = static_cast<int>(m_chromaFilterTaps.size());
+    if (n == 0) return 0.0f;
+    m_chromaBandPos = (m_chromaBandPos == 0) ? n - 1 : m_chromaBandPos - 1;
+    m_chromaBandBuf[m_chromaBandPos] = sample;
+    m_chromaBandBuf[m_chromaBandPos + n] = sample;
+    const float* b = &m_chromaBandBuf[m_chromaBandPos];
+    const float* t = m_chromaFilterTaps.data();
     float out = 0.0f;
-    size_t n = std::min(m_chromaBandDelay.size(), m_chromaFilterTaps.size());
-    for (size_t i = 0; i < n; i++) out += m_chromaBandDelay[i] * m_chromaFilterTaps[i];
+    for (int i = 0; i < n; i++) out += b[i] * t[i];
     return out;
 }
 
@@ -726,10 +790,11 @@ float PALDecoder::normalizeAndAGC(float sample)
 void PALDecoder::processSamples(const int8_t* data, size_t len)
 {
     if (!data || len == 0) return;
-    std::vector<std::complex<float>> samples;
-    samples.reserve(len / 2);
-    for (size_t i = 0; i < len; i += 2) {
-        samples.emplace_back(
+    // Reused per-thread conversion buffer (avoids a heap allocation per call)
+    thread_local std::vector<std::complex<float>> samples;
+    samples.resize(len / 2);
+    for (size_t i = 0; i + 1 < len; i += 2) {
+        samples[i / 2] = std::complex<float>(
             static_cast<float>(data[i]) / 128.0f,
             static_cast<float>(data[i + 1]) / 128.0f);
     }
@@ -775,11 +840,15 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         }
 
         // NCO frequency shift
-        float ncoI = static_cast<float>(std::cos(m_ncoPhase));
-        float ncoQ = static_cast<float>(std::sin(m_ncoPhase));
-        m_ncoPhase += m_ncoPhaseIncrement;
-        if (m_ncoPhase > M_PI) m_ncoPhase -= 2.0 * M_PI;
-        else if (m_ncoPhase < -M_PI) m_ncoPhase += 2.0 * M_PI;
+        // Rotating-phasor oscillator: one complex multiply per sample instead
+        // of cos+sin; renormalized periodically so amplitude cannot drift.
+        float ncoI = static_cast<float>(m_ncoOsc.real());
+        float ncoQ = static_cast<float>(m_ncoOsc.imag());
+        m_ncoOsc *= m_ncoStep;
+        if (++m_ncoRenormCount >= 4096) {
+            m_ncoRenormCount = 0;
+            m_ncoOsc /= std::abs(m_ncoOsc);
+        }
 
         std::complex<float> shifted(
             sample.real() * ncoI - sample.imag() * ncoQ,
@@ -792,10 +861,41 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
         float magnitude = std::sqrt(filtered.real() * filtered.real() +
                                     filtered.imag() * filtered.imag());
 
+        // Carrier tracker: narrowband estimate of the video carrier (DC after
+        // the NCO shift). Used for AFC and as phase reference for
+        // synchronous detection.
+        m_carrLP += m_carrLPCoeff * (filtered - m_carrLP);
+        const float carrNorm = std::norm(m_carrLP);
+        if (m_afcEnabled) {
+            std::complex<float> p = m_carrLP * std::conj(m_carrPrev);
+            m_afcAcc += std::complex<double>(p.real(), p.imag());
+            m_afcSigPow += carrNorm;
+            m_afcTotPow += std::norm(filtered);
+            if (++m_afcCount >= m_afcWindow) runAfc();
+        }
+        m_carrPrev = m_carrLP;
+
+        // Detection: projection on the carrier phase (rejects quadrature
+        // noise, no noise-squared bias on weak signals). Falls back to the
+        // envelope when no carrier estimate exists yet.
+        float detected = magnitude;
+        if (m_syncDemod && carrNorm > 1e-10f) {
+            detected = (filtered.real() * m_carrLP.real() + filtered.imag() * m_carrLP.imag())
+                       / std::sqrt(carrNorm);
+        }
+
+        // Vestigial sideband compensation: below ~0.75 MHz both sidebands
+        // are present (2x amplitude) while above only one is. Attenuate the
+        // low-frequency region by half so the response is flat (Nyquist slope).
+        if (m_vsbComp) {
+            m_vsbLPState += m_vsbLPCoeff * (detected - m_vsbLPState);
+            detected -= 0.5f * m_vsbLPState;
+        }
+
         // Audio carrier notch filter - remove 5.5 MHz beat
-        float notched = m_notchB0 * magnitude + m_notchB1 * m_notchX1 + m_notchB2 * m_notchX2
+        float notched = m_notchB0 * detected + m_notchB1 * m_notchX1 + m_notchB2 * m_notchX2
                        - m_notchA1 * m_notchY1 - m_notchA2 * m_notchY2;
-        m_notchX2 = m_notchX1; m_notchX1 = magnitude;
+        m_notchX2 = m_notchX1; m_notchX1 = detected;
         m_notchY2 = m_notchY1; m_notchY1 = notched;
 
         float dcBlocked = dcBlock(notched);
@@ -959,6 +1059,14 @@ void PALDecoder::processSamples(const std::vector<std::complex<float>>& samples)
 
 void PALDecoder::processSample(float sample)
 {
+    if (m_autoSync) {
+        if (m_sampleOffset >= m_tipStart && m_sampleOffset < m_tipEnd) {
+            m_tipSum += sample; m_tipCount++;
+        } else if (m_sampleOffset >= m_porchStart && m_sampleOffset < m_porchEnd) {
+            m_porchSum += sample; m_porchCount++;
+        }
+    }
+
     if (m_hSyncEnabled)
     {
         // === Sync Pulse Width Validation ===
@@ -1019,6 +1127,9 @@ void PALDecoder::processSample(float sample)
                         if (m_hSyncErrorCount > 20) {
                             m_syncLocked = false;
                             m_syncLockCount = 0;
+                            // Stale chroma lines must not be averaged into new ones
+                            m_prevLineU.clear();
+                            m_prevLineV.clear();
                         }
                     } else {
                         // Good sync: apply correction.
@@ -1077,6 +1188,20 @@ void PALDecoder::processSample(float sample)
         m_sampleOffset = static_cast<int>(sampleOffsetFloat);
         m_sampleOffsetFrac = sampleOffsetFloat - m_sampleOffset;
         m_hSyncShift = 0.0f;
+
+        // Auto slicer: only adapt while the flywheel is locked (windows are
+        // then aligned with the real sync/back porch). Slice halfway between
+        // sync tip and black level, smoothed so noise can't make it hunt.
+        if (m_autoSync && m_syncLocked && m_tipCount > 0 && m_porchCount > 0) {
+            float tip   = static_cast<float>(m_tipSum / m_tipCount);
+            float porch = static_cast<float>(m_porchSum / m_porchCount);
+            if (porch - tip > 0.05f) {
+                float target = tip + 0.5f * (porch - tip);
+                m_syncLevel += 0.05f * (target - m_syncLevel);
+            }
+        }
+        m_tipSum = m_porchSum = 0.0;
+        m_tipCount = m_porchCount = 0;
 
         m_lineIndex++;
         m_linesProcessed++;
@@ -1156,8 +1281,10 @@ void PALDecoder::renderLine()
     int activeSamples = static_cast<int>(m_lineBuffer.size());
     if (activeSamples < 10) return;
 
-    std::vector<float> currentLineU(VIDEO_WIDTH, 0.0f);
-    std::vector<float> currentLineV(VIDEO_WIDTH, 0.0f);
+    m_curLineU.assign(VIDEO_WIDTH, 0.0f);
+    m_curLineV.assign(VIDEO_WIDTH, 0.0f);
+    std::vector<float>& currentLineU = m_curLineU;
+    std::vector<float>& currentLineV = m_curLineV;
 
     for (int x = 0; x < VIDEO_WIDTH; x++) {
         float srcX = (x * activeSamples) / static_cast<float>(VIDEO_WIDTH);
@@ -1206,17 +1333,42 @@ void PALDecoder::renderLine()
             m_frameBuffer[offset + 3] = 255;
         }
     }
-    m_prevLineU = currentLineU;
-    m_prevLineV = currentLineV;
+    m_prevLineU.swap(m_curLineU);
+    m_prevLineV.swap(m_curLineV);
 }
 
 void PALDecoder::buildFrame()
 {
     m_frameCount++;
+    const uint8_t* src = m_frameBuffer.data();
+
+    if (m_temporalDenoise) {
+        // Motion-adaptive recursive filter: static areas (noise only) are
+        // averaged with the previous output (alpha 0.3), moving areas pass
+        // through unchanged (alpha -> 1), so no ghosting on motion.
+        if (m_denoiseBuf.size() != m_frameBuffer.size())
+            m_denoiseBuf = m_frameBuffer;
+        const size_t px = m_frameBuffer.size() / 4;
+        for (size_t i = 0; i < px; i++) {
+            uint8_t* p = &m_denoiseBuf[i * 4];
+            const uint8_t* c = &m_frameBuffer[i * 4];
+            int db = std::abs(int(c[0]) - int(p[0]));
+            int dg = std::abs(int(c[1]) - int(p[1]));
+            int dr = std::abs(int(c[2]) - int(p[2]));
+            float d = (db + 2 * dg + dr) * 0.25f;
+            float a = 0.3f + d * (0.7f / 40.0f);
+            if (a > 1.0f) a = 1.0f;
+            for (int k = 0; k < 3; k++)
+                p[k] = static_cast<uint8_t>(p[k] + (int(c[k]) - int(p[k])) * a);
+            p[3] = 255;
+        }
+        src = m_denoiseBuf.data();
+    }
+
     QImage frame(VIDEO_WIDTH, VIDEO_HEIGHT, QImage::Format_RGB32);
     for (int y = 0; y < VIDEO_HEIGHT; y++) {
         uint8_t* scanLine = frame.scanLine(y);
-        std::memcpy(scanLine, &m_frameBuffer[y * VIDEO_WIDTH * 4], VIDEO_WIDTH * 4);
+        std::memcpy(scanLine, &src[y * VIDEO_WIDTH * 4], VIDEO_WIDTH * 4);
     }
     emit frameReady(frame);
 }
