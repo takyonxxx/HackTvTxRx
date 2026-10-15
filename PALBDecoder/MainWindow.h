@@ -26,7 +26,7 @@
 #include "AudioDemodulator.h"
 #include "FrameBuffer.h"
 
-class HackTvLib;
+class HackRfDevice;
 
 class MainWindow : public QMainWindow
 {
@@ -73,6 +73,7 @@ private slots:
 private:
     void setupUI();
     void initHackRF();
+    void setupHackRfCallback();
     void applyFrequencyChange();
     void startPalVideoProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr);
     void startPalAudioProcessing(std::shared_ptr<std::vector<std::complex<float>>> framePtr);
@@ -123,7 +124,7 @@ private:
 
     // Core components
     std::shared_ptr<PALDecoder> m_palDecoder;
-    std::unique_ptr<HackTvLib> m_hackTvLib;
+    std::unique_ptr<HackRfDevice> m_hackRf;
 
     // Status tracking
     QTimer* m_statusTimer;

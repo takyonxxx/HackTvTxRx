@@ -1,5 +1,5 @@
 #include "MainWindow.h"
-#include "hacktvlib.h"  // Your HackRF library
+#include "hackrfdevice.h"  // HackRF driver (hackrf/ subfolder, built into the exe)
 #include <QDebug>
 #include <QFuture>
 #include <QtConcurrent/QtConcurrent>
@@ -102,9 +102,9 @@ MainWindow::~MainWindow()
     m_shuttingDown = true;
 
     // Stop HackRF FIRST
-    if (m_hackTvLib && m_hackRfRunning) {
+    if (m_hackRf && m_hackRfRunning) {
         qDebug() << "Stopping HackRF...";
-        m_hackTvLib->stop();
+        m_hackRf->stop();
         QThread::msleep(200); // Wait for callbacks to finish
     }
 
@@ -743,8 +743,8 @@ void MainWindow::onSampleRateChanged(int index)
     }
 
     // If HackRF is running, update hardware
-    if (m_hackTvLib) {
-        m_hackTvLib->setSampleRate(m_currentSampleRate);
+    if (m_hackRf) {
+        m_hackRf->setSampleRate(m_currentSampleRate);
     }
 }
 
@@ -770,7 +770,7 @@ void MainWindow::onFrequencySliderChanged(int value)
     }
 
     // HackRF calisiyorsa frekansi guncelle
-    if (m_hackRfRunning && m_hackTvLib) {
+    if (m_hackRfRunning && m_hackRf) {
         applyFrequencyChange();
     }
 }
@@ -797,7 +797,7 @@ void MainWindow::onFrequencySpinBoxChanged(double value)
     }
 
     // HackRF calisiyorsa frekansi guncelle
-    if (m_hackRfRunning && m_hackTvLib) {
+    if (m_hackRfRunning && m_hackRf) {
         applyFrequencyChange();
     }
 }
@@ -885,9 +885,10 @@ void MainWindow::updateChannelLabel(uint64_t frequency)
 
 void MainWindow::applyFrequencyChange()
 {
-    if (!m_hackTvLib) return;
-    m_hackTvLib->setFrequency(m_currentFrequency);
-    m_hackTvLib->setSampleRate(m_currentSampleRate);
+    if (m_hackRf) {
+        m_hackRf->setFrequency(m_currentFrequency);
+        m_hackRf->setSampleRate(m_currentSampleRate);
+    }
 
     // Update PAL decoder NCO
     if (m_palDecoder) {
@@ -940,8 +941,8 @@ void MainWindow::onLnaGainChanged(int value)
     m_lnaGainSpinBox->setValue(value);
     m_lnaGainSpinBox->blockSignals(false);
 
-    if (m_hackTvLib && m_hackRfRunning) {
-        m_hackTvLib->setLnaGain(static_cast<unsigned int>(value));
+    if (m_hackRf && m_hackRfRunning) {
+        m_hackRf->setLnaGain(static_cast<unsigned int>(value));
         qDebug() << "LNA Gain set to:" << value;
     }
 }
@@ -952,8 +953,8 @@ void MainWindow::onVgaGainChanged(int value)
     m_vgaGainSpinBox->setValue(value);
     m_vgaGainSpinBox->blockSignals(false);
 
-    if (m_hackTvLib && m_hackRfRunning) {
-        m_hackTvLib->setVgaGain(static_cast<unsigned int>(value));
+    if (m_hackRf && m_hackRfRunning) {
+        m_hackRf->setVgaGain(static_cast<unsigned int>(value));
         qDebug() << "VGA Gain set to:" << value;
     }
 }
@@ -964,8 +965,8 @@ void MainWindow::onRxAmpGainChanged(int value)
     m_rxAmpGainSpinBox->setValue(value);
     m_rxAmpGainSpinBox->blockSignals(false);
 
-    if (m_hackTvLib && m_hackRfRunning) {
-        m_hackTvLib->setRxAmpGain(static_cast<unsigned int>(value));
+    if (m_hackRf && m_hackRfRunning) {
+        m_hackRf->setRxAmpGain(static_cast<unsigned int>(value));
         qDebug() << "RX Amp Gain set to:" << value;
     }
 }
@@ -976,8 +977,9 @@ void MainWindow::toggleHackRF()
         // ========== STOP HackRF ==========
         qDebug() << "=== STOPPING HackRF ===";
 
-        if (m_hackTvLib) {
-            m_hackTvLib->stop();
+        if (m_hackRf) {
+            m_hackRf->stop();
+            m_hackRf.reset();
         }
 
         m_hackRfRunning = false;
@@ -992,54 +994,28 @@ void MainWindow::toggleHackRF()
         // ========== START HackRF ==========
         qDebug() << "=== STARTING HackRF ===";
 
-        // ===== VALIDATION CHECKS =====
-
-        // 1. Check if library exists
-        if (!m_hackTvLib) {
-            qCritical() << "m_hackTvLib is NULL!";
-            QMessageBox::critical(this, "Error",
-                                  "HackTvLib not initialized!\n\n"
-                                  "This is a critical error. Please restart the application.");
-            return;
-        }
-
         // Use currently selected sample rate (from combobox / loaded settings)
         m_currentSampleRate = m_sampleRateComboBox->currentData().toInt();
 
-        // Configure arguments
-        QStringList args;
-        args << "--rx-tx-mode" << "rx";
-        args << "-a";
-        args << "--filter";
-        args << "-f" << QString::number(m_currentFrequency);
-        args << "-s" << QString::number(m_currentSampleRate);  // Always 16 MHz
-
-        std::vector<std::string> stdArgs;
-        stdArgs.reserve(args.size());
-        for (const QString& arg : args) {
-            stdArgs.push_back(arg.toStdString());
-        }
-
-        qDebug() << "Setting arguments...";
-        m_hackTvLib->setArguments(stdArgs);
-
-        // ===== START DEVICE =====
-
-        qDebug() << "Calling start()...";
+        qDebug() << "Creating HackRF device...";
         qDebug() << "  Frequency:" << (m_currentFrequency / 1000000) << "MHz";
         qDebug() << "  Sample rate:" << m_currentSampleRate << "Hz";
 
         bool startSuccess = false;
         try {
-            startSuccess = m_hackTvLib->start();
+            m_hackRf = std::make_unique<HackRfDevice>();
+            setupHackRfCallback();
+            startSuccess = (m_hackRf->start(rf_mode::RX) == 0);
         } catch (const std::exception& e) {
-            qCritical() << "❌ Exception calling start():" << e.what();
+            qCritical() << "❌ Exception starting HackRF:" << e.what();
+            m_hackRf.reset();
             QMessageBox::critical(this, "Error",
                                   QString("Failed to start HackRF!\n\nException: %1")
                                       .arg(e.what()));
             return;
         } catch (...) {
-            qCritical() << "❌ Unknown exception calling start()";
+            qCritical() << "❌ Unknown exception starting HackRF";
+            m_hackRf.reset();
             QMessageBox::critical(this, "Error",
                                   "Failed to start HackRF!\n\nUnknown exception occurred.");
             return;
@@ -1049,10 +1025,15 @@ void MainWindow::toggleHackRF()
             // SUCCESS!
             m_hackRfRunning = true;
 
+            // Set RF parameters AFTER starting
+            m_hackRf->setSampleRate(static_cast<uint32_t>(m_currentSampleRate));
+            m_hackRf->setFrequency(m_currentFrequency);
+            m_hackRf->setAmpEnable(true);
+
             // Set gains
-            m_hackTvLib->setLnaGain(40);
-            m_hackTvLib->setVgaGain(20);
-            m_hackTvLib->setRxAmpGain(14);
+            m_hackRf->setLnaGain(40);
+            m_hackRf->setVgaGain(20);
+            m_hackRf->setRxAmpGain(14);
 
             // Set PAL decoder tune frequency for correct NCO offset
             // and audio carrier frequency
@@ -1068,6 +1049,7 @@ void MainWindow::toggleHackRF()
         } else {
             // FAILED TO START
             qCritical() << "❌ start() returned false";
+            m_hackRf.reset();
 
             QMessageBox::critical(this, "Error",
                                   "Failed to start HackRF!\n\n"
@@ -1199,43 +1181,16 @@ void MainWindow::updateStatus()
 
 void MainWindow::initHackRF()
 {
-    m_hackTvLib = std::make_unique<HackTvLib>(this);
-
+    // The HackRfDevice is created on Start and destroyed on Stop
+    // (see toggleHackRF); nothing to open here.
     palDemodulationInProgress.storeRelease(0);
+    m_hackRfRunning = false;
+}
 
-    QStringList args;
-    args << "--rx-tx-mode" << "rx";
-    args << "-a";
-    args << "--filter";
-    args << "-f" << QString::number(m_currentFrequency);
-    args << "-s" << QString::number(m_currentSampleRate);  // <<<< Dinamik sample rate
-
-    std::vector<std::string> stdArgs;
-    stdArgs.reserve(args.size());
-    for (const QString& arg : args) {
-        stdArgs.push_back(arg.toStdString());
-    }
-
-    m_hackTvLib->setArguments(stdArgs);
-    m_hackTvLib->setLnaGain(40);
-    m_hackTvLib->setVgaGain(20);
-    m_hackTvLib->setRxAmpGain(14);
-
-    // Setup log callback
-    m_hackTvLib->setLogCallback([this](const std::string& msg) {
-        if (!m_shuttingDown.load() && this && m_hackTvLib) {
-            // Copy message to avoid dangling reference
-            std::string msgCopy = msg;
-            QMetaObject::invokeMethod(this, [this, msgCopy]() {
-                    if (this && !m_shuttingDown.load()) {
-                        qDebug() << "[HackRF]" << QString::fromStdString(msgCopy);
-                    }
-                }, Qt::QueuedConnection);
-        }
-    });
-
-    m_hackTvLib->setReceivedDataCallback([this](const int8_t* data, size_t len) {
-        if (!m_shuttingDown.load() && this && m_hackTvLib && data && len == 262144) {
+void MainWindow::setupHackRfCallback()
+{
+    m_hackRf->setDataCallback([this](const int8_t* data, size_t len) {
+        if (!m_shuttingDown.load() && this && m_hackRf && data && len == 262144) {
             // Copy data to avoid dangling pointer
             QByteArray dataCopy(reinterpret_cast<const char*>(data), len);
             QMetaObject::invokeMethod(this, [this, dataCopy]() {
@@ -1245,13 +1200,12 @@ void MainWindow::initHackRF()
                 }, Qt::QueuedConnection);
         }
     });
-    m_hackRfRunning = false;
 }
 
 void MainWindow::handleReceivedData(const int8_t* data, size_t len)
 {
     // Validate pointers and state
-    if (m_shuttingDown.load() || !m_hackTvLib || !palFrameBuffer) {
+    if (m_shuttingDown.load() || !m_hackRf || !palFrameBuffer) {
         return;
     }
 
