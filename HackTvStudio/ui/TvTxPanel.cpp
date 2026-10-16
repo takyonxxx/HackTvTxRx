@@ -27,13 +27,16 @@ TvTxPanel::TvTxPanel(QWidget* parent)
 
 void TvTxPanel::buildUi()
 {
-    QHBoxLayout* root = new QHBoxLayout(this);
-    root->setSpacing(10);
-    root->setContentsMargins(8, 8, 8, 8);
+    //   [ source preview            ] [ TX monitor spectrum (docked by StudioWindow) ]
+    //   [ TV standard / video source ] [ options                                      ]
+    QGridLayout* grid = new QGridLayout(this);
+    grid->setSpacing(8);
+    grid->setContentsMargins(8, 8, 8, 8);
 
-    // ---- Preview (left)
+    // ---- Preview (top left)
     QGroupBox* prevGroup = new QGroupBox("Source preview", this);
     QVBoxLayout* pl = new QVBoxLayout(prevGroup);
+    pl->setContentsMargins(6, 6, 6, 6);
     m_preview = new VideoView(prevGroup);
     m_preview->setWideAspect(false);
     pl->addWidget(m_preview);
@@ -41,14 +44,20 @@ void TvTxPanel::buildUi()
     m_statusLabel->setStyleSheet("QLabel { color: #708090; font-size: 8pt; }");
     m_statusLabel->setWordWrap(true);
     pl->addWidget(m_statusLabel);
-    root->addWidget(prevGroup, 2);
+    grid->addWidget(prevGroup, 0, 0);
 
-    // ---- Right column
-    QWidget* right = new QWidget(this);
-    right->setFixedWidth(430);
-    QVBoxLayout* rl = new QVBoxLayout(right);
+    // ---- Spectrum slot (top right, touching the preview)
+    QGroupBox* specGroup = new QGroupBox("TX monitor", this);
+    m_specSlot = new QVBoxLayout(specGroup);
+    m_specSlot->setContentsMargins(6, 6, 6, 6);
+    grid->addWidget(specGroup, 0, 1);
+
+    // ---- Bottom left: standard + source
+    QWidget* left = new QWidget(this);
+    QVBoxLayout* rl = new QVBoxLayout(left);
     rl->setContentsMargins(0, 0, 0, 0);
     rl->setSpacing(8);
+    QWidget* right = left;   // parent for the groups below
 
     // Standard
     QGroupBox* stdGroup = new QGroupBox("TV standard", right);
@@ -85,9 +94,11 @@ void TvTxPanel::buildUi()
     m_loopCheck->setChecked(true);
     vl->addWidget(m_loopCheck);
     rl->addWidget(srcGroup);
+    rl->addStretch();
+    grid->addWidget(left, 1, 0);
 
-    // Options
-    QGroupBox* optGroup = new QGroupBox("Options", right);
+    // ---- Bottom right: options (three checkbox columns, two form columns)
+    QGroupBox* optGroup = new QGroupBox("Options", this);
     QGridLayout* gl = new QGridLayout(optGroup);
     gl->setHorizontalSpacing(12);
     gl->setVerticalSpacing(4);
@@ -100,13 +111,11 @@ void TvTxPanel::buildUi()
     m_vitsCheck   = new QCheckBox("VITS test lines", optGroup);
     m_vitcCheck   = new QCheckBox("VITC timecode", optGroup);
     m_invertCheck = new QCheckBox("Invert video", optGroup);
-    gl->addWidget(m_filterCheck, 0, 0); gl->addWidget(m_colourCheck, 0, 1);
-    gl->addWidget(m_audioCheck,  1, 0); gl->addWidget(m_a2Check,     1, 1);
-    gl->addWidget(m_nicamCheck,  2, 0); gl->addWidget(m_acpCheck,    2, 1);
-    gl->addWidget(m_vitsCheck,   3, 0); gl->addWidget(m_vitcCheck,   3, 1);
-    gl->addWidget(m_invertCheck, 4, 0);
+    gl->addWidget(m_filterCheck, 0, 0); gl->addWidget(m_colourCheck, 0, 1); gl->addWidget(m_audioCheck,  0, 2, 1, 2);
+    gl->addWidget(m_nicamCheck,  1, 0); gl->addWidget(m_a2Check,     1, 1); gl->addWidget(m_acpCheck,    1, 2, 1, 2);
+    gl->addWidget(m_vitsCheck,   2, 0); gl->addWidget(m_vitcCheck,   2, 1); gl->addWidget(m_invertCheck, 2, 2, 1, 2);
 
-    gl->addWidget(new QLabel("WSS:", optGroup), 5, 0);
+    gl->addWidget(new QLabel("WSS:", optGroup), 3, 0);
     m_wssCombo = new QComboBox(optGroup);
     m_wssCombo->addItem("Off", "");
     m_wssCombo->addItem("4:3", "4:3");
@@ -118,36 +127,42 @@ void TvTxPanel::buildUi()
     m_wssCombo->addItem("16:9+ letterbox", "16:9+-letterbox");
     m_wssCombo->addItem("14:9 window", "14:9-window");
     m_wssCombo->addItem("Auto (from source aspect)", "auto");
-    gl->addWidget(m_wssCombo, 5, 1);
+    gl->addWidget(m_wssCombo, 3, 1);
 
-    gl->addWidget(new QLabel("Scrambling:", optGroup), 6, 0);
+    gl->addWidget(new QLabel("Scrambling:", optGroup), 3, 2, Qt::AlignRight);
     m_scrambleCombo = new QComboBox(optGroup);
     m_scrambleCombo->addItem("None", "");
     m_scrambleCombo->addItem("Videocrypt I (free access)", "vc1");
     m_scrambleCombo->addItem("Videocrypt II (free access)", "vc2");
     m_scrambleCombo->addItem("Videocrypt S", "vcs");
     m_scrambleCombo->addItem("Nagravision Syster", "syster");
-    gl->addWidget(m_scrambleCombo, 6, 1);
+    gl->addWidget(m_scrambleCombo, 3, 3);
 
-    gl->addWidget(new QLabel("Teletext:", optGroup), 7, 0);
+    gl->addWidget(new QLabel("Teletext:", optGroup), 4, 0);
     m_teletextEdit = new QLineEdit(optGroup);
     m_teletextEdit->setPlaceholderText("folder of .tti pages (optional)");
-    gl->addWidget(m_teletextEdit, 7, 1);
+    gl->addWidget(m_teletextEdit, 4, 1);
 
-    gl->addWidget(new QLabel("Level:", optGroup), 8, 0);
+    gl->addWidget(new QLabel("Level:", optGroup), 4, 2, Qt::AlignRight);
     m_levelSpin = new QDoubleSpinBox(optGroup);
     m_levelSpin->setRange(0.1, 1.0);
     m_levelSpin->setSingleStep(0.05);
     m_levelSpin->setValue(1.0);
-    gl->addWidget(m_levelSpin, 8, 1);
-    rl->addWidget(optGroup);
+    gl->addWidget(m_levelSpin, 4, 3);
 
-    QLabel* legal = new QLabel("<i>Transmitting on TV frequencies needs a licence. Test into a dummy load.</i>", right);
+    QLabel* legal = new QLabel("<i>Transmitting on TV frequencies needs a licence. Test into a dummy load.</i>", optGroup);
     legal->setWordWrap(true);
     legal->setStyleSheet("QLabel { color: #ff8800; font-size: 8pt; }");
-    rl->addWidget(legal);
-    rl->addStretch();
-    root->addWidget(right);
+    gl->addWidget(legal, 5, 0, 1, 4);
+    gl->setRowStretch(6, 1);
+    gl->setColumnStretch(1, 1);
+    gl->setColumnStretch(3, 1);
+    grid->addWidget(optGroup, 1, 1);
+
+    grid->setRowStretch(0, 1);          // preview and spectrum take the height
+    grid->setRowStretch(1, 0);
+    grid->setColumnStretch(0, 3);
+    grid->setColumnStretch(1, 2);
 }
 
 void TvTxPanel::browseFile()

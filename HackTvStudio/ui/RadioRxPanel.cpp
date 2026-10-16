@@ -414,8 +414,27 @@ void RadioRxPanel::applyMode(RadioRxSink::Mode m, bool applyPreset)
         if (m == RadioRxSink::Mode::NFM) bw = m_bwNfm;
         if (m == RadioRxSink::Mode::AM)  bw = m_bwAm;
         setBandwidthHz(bw, true);
-        m_deemphCombo->setCurrentIndex(m == RadioRxSink::Mode::AM ? 0 : 1);   // AM: off, FM: 50 us
-        m_modIndexSpin->setValue(m == RadioRxSink::Mode::AM ? 1.0 : 1.5);
+        switch (m) {
+        case RadioRxSink::Mode::WFM:
+            m_deemphCombo->setCurrentIndex(1);   // 50 us
+            m_modIndexSpin->setValue(1.5);
+            m_gainSlider->setValue(30);          // 3.0
+            m_fmnrCheck->setChecked(false);
+            break;
+        case RadioRxSink::Mode::NFM:
+            // Tuned on air against a 2 m handheld: flat audio, low index, NR on
+            m_deemphCombo->setCurrentIndex(0);   // off
+            m_modIndexSpin->setValue(0.4);
+            m_gainSlider->setValue(20);          // 2.0
+            m_fmnrCheck->setChecked(true);
+            break;
+        case RadioRxSink::Mode::AM:
+            m_deemphCombo->setCurrentIndex(0);
+            m_modIndexSpin->setValue(1.0);
+            m_gainSlider->setValue(30);
+            m_fmnrCheck->setChecked(false);
+            break;
+        }
     }
 }
 
@@ -426,10 +445,8 @@ void RadioRxPanel::applyModeDefaults(RadioRxSink::Mode m)
     case RadioRxSink::Mode::NFM: m_bwNfm = 12500;  break;
     case RadioRxSink::Mode::AM:  m_bwAm  = 10500;  break;
     }
-    m_gainSlider->setValue(30);          // 3.0
-    m_fmnrCheck->setChecked(false);
     m_forceMonoCheck->setChecked(false);
-    applyMode(m, true);
+    applyMode(m, true);                  // gain, de-emphasis, mod index, NR come from the preset
 }
 
 void RadioRxPanel::setBandwidthHz(int hz, bool pushFilterBox)
@@ -528,10 +545,8 @@ void RadioRxPanel::saveSettings(QSettings& s)
     s.setValue("bwAm", m_bwAm);
     s.setValue("followBand", m_followBandCheck->isChecked());
     s.setValue("squelch", m_squelchSlider->value());
-    s.setValue("gain", m_gainSlider->value());
     s.setValue("volume", m_volumeSlider->value());
-    // de-emphasis / mod index are mode presets (re-applied on every mode change), not persisted
-    s.setValue("fmnr", m_fmnrCheck->isChecked());
+    // gain / de-emphasis / mod index / NR are mode presets (re-applied on every mode change), not persisted
     s.setValue("forceMono", m_forceMonoCheck->isChecked());
     s.endGroup();
 }
@@ -544,9 +559,7 @@ void RadioRxPanel::loadSettings(QSettings& s)
     m_bwAm  = s.value("bwAm", 10500).toInt();
     m_followBandCheck->setChecked(s.value("followBand", true).toBool());
     m_squelchSlider->setValue(s.value("squelch", -150).toInt());
-    m_gainSlider->setValue(s.value("gain", 30).toInt());
     m_volumeSlider->setValue(s.value("volume", 50).toInt());
-    m_fmnrCheck->setChecked(s.value("fmnr", false).toBool());
     m_forceMonoCheck->setChecked(s.value("forceMono", false).toBool());
     const int mode = s.value("mode", 0).toInt();
     s.endGroup();

@@ -8,6 +8,7 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QGroupBox>
+#include <QVBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -30,6 +31,7 @@ public:
     bool       isTransmit() const override { return true; }
     ITxSource* txSource() override;
     uint32_t   preferredSampleRate() const override { return 16000000; }
+    QLayout*   spectrumSlot() override { return m_specSlot; }
 
     void onDeviceStarted() override;
     void onDeviceStopped() override;
@@ -68,6 +70,7 @@ private:
     QDoubleSpinBox* m_levelSpin = nullptr;
 
     VideoView* m_preview = nullptr;
+    QVBoxLayout* m_specSlot = nullptr;
     QLabel* m_statusLabel = nullptr;
     QTimer* m_statusTimer = nullptr;
     bool m_running = false;
