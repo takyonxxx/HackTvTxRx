@@ -1,12 +1,21 @@
 #include "QtAvSource.h"
 
 #include <QAudioBuffer>
+#include <QAudioDevice>
+#include <QAudioSource>
+#include <QCamera>
+#include <QCameraDevice>
+#include <QCameraFormat>
 #include <QDateTime>
 #include <QDebug>
+#include <QIODevice>
+#include <QMediaDevices>
 #include <QPainter>
 #include <QUrl>
 #include <QVideoFrame>
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 
 QtAvSource::QtAvSource(QObject* parent)
     : QObject(parent)
@@ -38,14 +47,14 @@ QtAvSource::~QtAvSource()
     close();
 }
 
-bool QtAvSource::open(av_t* av, const QString& file, bool loop)
+/* Shared part of open()/openCamera(): frame store, ring and hacktv callbacks. */
+bool QtAvSource::prepare(av_t* av)
 {
     close();
     if (!av || av->width <= 0 || av->height <= 0) return false;
 
     m_width = av->width;
     m_height = av->height;
-    m_loop = loop;
     m_ended.store(false);
     m_error.clear();
     m_audioRing.clear();
@@ -61,8 +70,17 @@ bool QtAvSource::open(av_t* av, const QString& file, bool loop)
     av->read_audio = &QtAvSource::cbReadAudio;
     av->eof = &QtAvSource::cbEof;
     av->close = &QtAvSource::cbClose;
+    return true;
+}
+
+bool QtAvSource::open(av_t* av, const QString& file, bool loop)
+{
+    if (!prepare(av)) return false;
+    m_loop = loop;
+    m_isCamera = false;
 
     // No speaker output on purpose (audio goes to the encoder only)
+    m_player.setVideoSink(&m_sink);
     m_player.setLoops(loop ? QMediaPlayer::Infinite : 1);
     m_player.setSource(QUrl::fromLocalFile(file));
     m_player.play();
@@ -70,12 +88,162 @@ bool QtAvSource::open(av_t* av, const QString& file, bool loop)
     return true;
 }
 
+bool QtAvSource::openCamera(av_t* av, const QByteArray& cameraId, const QByteArray& audioId)
+{
+    if (!prepare(av)) return false;
+    m_loop = true;          // a camera never ends
+    m_isCamera = true;
+
+    QCameraDevice dev;
+    for (const QCameraDevice& d : QMediaDevices::videoInputs())
+        if (d.id() == cameraId) { dev = d; break; }
+    if (dev.isNull()) {
+        m_error = cameraId.isEmpty() ? "No camera selected" : "Camera not found (unplugged?)";
+        return false;
+    }
+
+    m_camera = new QCamera(dev, this);
+
+    // Pick the capture format closest to the TV picture: at least the active
+    // height when possible, the fewest pixels beyond that, 25 fps or better.
+    QCameraFormat best;
+    long long bestScore = -1;
+    for (const QCameraFormat& f : dev.videoFormats()) {
+        const QSize r = f.resolution();
+        if (r.isEmpty() || f.maxFrameRate() < 24.0f) continue;
+        long long score = static_cast<long long>(r.width()) * r.height();
+        if (r.height() < m_height) score += 100000000LL;             // too small: last resort
+        if (f.pixelFormat() == QVideoFrameFormat::Format_Jpeg) score += 1;   // prefer raw at equal size
+        if (bestScore < 0 || score < bestScore) { bestScore = score; best = f; }
+    }
+    if (!best.isNull()) m_camera->setCameraFormat(best);
+
+    connect(m_camera, &QCamera::errorOccurred, this, [this](QCamera::Error, const QString& msg) {
+        m_error = msg;
+        emit playbackError(msg);
+    });
+
+    m_player.setVideoSink(nullptr);          // the sink now belongs to the capture session
+    m_capture.setCamera(m_camera);
+    m_capture.setVideoSink(&m_sink);
+    m_camera->start();
+
+    if (!audioId.isEmpty() && !startMicrophone(audioId))
+        qWarning() << "QtAvSource: camera microphone unavailable, transmitting silence";
+
+    m_open = true;
+    return true;
+}
+
 void QtAvSource::close()
 {
     if (!m_open) return;
-    m_player.stop();
-    m_player.setSource(QUrl());
+    if (m_isCamera) {
+        stopMicrophone();
+        if (m_camera) {
+            m_camera->stop();
+            m_capture.setCamera(nullptr);
+            m_capture.setVideoSink(nullptr);
+            delete m_camera;
+            m_camera = nullptr;
+        }
+        m_player.setVideoSink(&m_sink);
+    } else {
+        m_player.stop();
+        m_player.setSource(QUrl());
+    }
     m_open = false;
+}
+
+// ---- Camera microphone -------------------------------------------------------
+
+bool QtAvSource::startMicrophone(const QByteArray& audioId)
+{
+    QAudioDevice dev;
+    for (const QAudioDevice& d : QMediaDevices::audioInputs())
+        if (d.id() == audioId) { dev = d; break; }
+    if (dev.isNull()) return false;
+
+    // Ask for what hacktv wants; otherwise take the device's own format and convert here
+    m_micFormat = m_audioFormat;
+    if (!dev.isFormatSupported(m_micFormat)) {
+        m_micFormat = dev.preferredFormat();
+        if (!m_micFormat.isValid()) return false;
+    }
+
+    m_mic = new QAudioSource(dev, m_micFormat, this);
+    m_mic->setBufferSize(m_micFormat.bytesForDuration(200000));   // 200 ms
+    m_micPos = 0.0;
+    m_micPrevL = m_micPrevR = 0.0f;
+    m_micIo = m_mic->start();
+    if (!m_micIo) { delete m_mic; m_mic = nullptr; return false; }
+    connect(m_micIo, &QIODevice::readyRead, this, &QtAvSource::onMicReadyRead);
+    return true;
+}
+
+void QtAvSource::stopMicrophone()
+{
+    if (m_mic) {
+        m_mic->stop();
+        delete m_mic;
+        m_mic = nullptr;
+    }
+    m_micIo = nullptr;
+}
+
+/* GUI thread: decode whatever the microphone delivers into stereo float,
+ * resample linearly to 32 kHz and push int16 stereo into the ring. */
+void QtAvSource::onMicReadyRead()
+{
+    if (!m_micIo || !m_open) return;
+    const QByteArray raw = m_micIo->readAll();
+    const int ch = m_micFormat.channelCount();
+    const int bps = m_micFormat.bytesPerSample();
+    if (ch <= 0 || bps <= 0) return;
+    const int frames = raw.size() / (ch * bps);
+    if (frames <= 0) return;
+
+    m_micFrames.resize(static_cast<size_t>(frames) * 2);
+    const char* p = raw.constData();
+    auto sample = [&](int frame, int c) -> float {
+        const char* s = p + (static_cast<size_t>(frame) * ch + c) * bps;
+        switch (m_micFormat.sampleFormat()) {
+        case QAudioFormat::UInt8: return (static_cast<float>(*reinterpret_cast<const uint8_t*>(s)) - 128.0f) / 128.0f;
+        case QAudioFormat::Int16: return static_cast<float>(*reinterpret_cast<const int16_t*>(s)) / 32768.0f;
+        case QAudioFormat::Int32: return static_cast<float>(*reinterpret_cast<const int32_t*>(s)) / 2147483648.0f;
+        case QAudioFormat::Float: return *reinterpret_cast<const float*>(s);
+        default: return 0.0f;
+        }
+    };
+    for (int i = 0; i < frames; ++i) {
+        const float l = sample(i, 0);
+        const float r = ch > 1 ? sample(i, 1) : l;
+        m_micFrames[2 * i]     = l;
+        m_micFrames[2 * i + 1] = r;
+    }
+
+    const double step = static_cast<double>(m_micFormat.sampleRate()) / 32000.0;   // input frames per output frame
+    m_micOut.clear();
+    double pos = m_micPos;
+    while (pos < frames) {
+        const int idx = static_cast<int>(pos);
+        const float frac = static_cast<float>(pos - idx);
+        const float aL = idx == 0 ? m_micPrevL : m_micFrames[2 * (idx - 1)];
+        const float aR = idx == 0 ? m_micPrevR : m_micFrames[2 * (idx - 1) + 1];
+        const float bL = m_micFrames[2 * idx];
+        const float bR = m_micFrames[2 * idx + 1];
+        const float l = std::clamp(aL + (bL - aL) * frac, -1.0f, 1.0f);
+        const float r = std::clamp(aR + (bR - aR) * frac, -1.0f, 1.0f);
+        m_micOut.push_back(static_cast<int16_t>(std::lrint(l * 32767.0f)));
+        m_micOut.push_back(static_cast<int16_t>(std::lrint(r * 32767.0f)));
+        pos += step;
+    }
+    m_micPos = pos - frames;
+    m_micPrevL = m_micFrames[2 * (frames - 1)];
+    m_micPrevR = m_micFrames[2 * (frames - 1) + 1];
+
+    if (!m_micOut.empty())
+        m_audioRing.write(m_micOut.data(), m_micOut.size());   // dropped if the ring is full
 }
 
 // ---- GUI thread ------------------------------------------------------------
@@ -157,7 +325,7 @@ int QtAvSource::cbEof(void* ctx)
 
 int QtAvSource::cbClose(void* ctx)
 {
-    // The player is stopped by the owner (GUI thread); nothing to free here.
+    // The player / camera is stopped by the owner (GUI thread); nothing to free here.
     (void)ctx;
     return AV_OK;
 }

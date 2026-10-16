@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QImage>
 #include <QMediaPlayer>
+#include <QMediaCaptureSession>
 #include <QVideoSink>
 #include <QAudioBufferOutput>
 #include <QAudioFormat>
@@ -18,15 +19,22 @@ extern "C" {
 #include "hacktv/av.h"
 }
 
+class QCamera;
+class QAudioSource;
+class QIODevice;
+
 /*
- * Video file source for the hacktv encoder, built on Qt Multimedia instead
- * of FFmpeg (Qt's own FFmpeg backend decodes mp4/mkv/avi/...).
+ * Live A/V source for the hacktv encoder, built on Qt Multimedia instead of
+ * FFmpeg. Two inputs share the same frame store and audio ring:
  *
- *   GUI thread:  QMediaPlayer -> QVideoSink  -> latest frame (RGB32, encoder size)
- *                             -> QAudioBufferOutput (32 kHz stereo int16) -> ring
+ *   video file:  QMediaPlayer        -> QVideoSink         -> latest frame (RGB32, encoder size)
+ *                                    -> QAudioBufferOutput -> ring (32 kHz stereo int16)
+ *   USB camera:  QCamera / QMediaCaptureSession -> QVideoSink -> latest frame
+ *                QAudioSource (the camera's microphone, converted here) -> ring
+ *
  *   TX thread:   hacktv calls read_video()/read_audio() through av_t
  *
- * The player runs in real time; the encoder takes the newest frame for every
+ * The input runs in real time; the encoder takes the newest frame for every
  * TV frame it builds (frames are duplicated or skipped as the rates differ)
  * and pulls audio from the ring, so the two stay in step with the HackRF clock.
  */
@@ -39,6 +47,12 @@ public:
 
     /* Installs the callbacks into `av` and starts playing `file`. GUI thread. */
     bool open(av_t* av, const QString& file, bool loop);
+
+    /* Installs the callbacks into `av` and starts the camera `cameraId`
+     * (QCameraDevice::id()); `audioId` is a QAudioDevice::id() or empty for
+     * silence. GUI thread. */
+    bool openCamera(av_t* av, const QByteArray& cameraId, const QByteArray& audioId);
+
     void close();
 
     bool isOpen() const { return m_open; }
@@ -55,17 +69,33 @@ private:
     static int     cbEof(void* ctx);
     static int     cbClose(void* ctx);
 
+    bool prepare(av_t* av);
     void onVideoFrame(const QVideoFrame& frame);
     void onAudioBuffer(const QAudioBuffer& buffer);
+    void onMicReadyRead();
+    bool startMicrophone(const QByteArray& audioId);
+    void stopMicrophone();
 
     QMediaPlayer m_player;
     QVideoSink m_sink;
     QAudioBufferOutput* m_audioOut = nullptr;   // format is fixed at construction
-    QAudioFormat m_audioFormat;
+    QAudioFormat m_audioFormat;                 // 32 kHz stereo int16 (what hacktv wants)
+
+    // Camera path
+    QMediaCaptureSession m_capture;
+    QCamera* m_camera = nullptr;
+    QAudioSource* m_mic = nullptr;
+    QIODevice* m_micIo = nullptr;
+    QAudioFormat m_micFormat;                   // whatever the microphone delivers
+    double m_micPos = 0.0;                      // fractional resampler position
+    float m_micPrevL = 0.0f, m_micPrevR = 0.0f;
+    std::vector<float> m_micFrames;             // decoded stereo float frames of one read
+    std::vector<int16_t> m_micOut;
 
     int m_width = 0, m_height = 0;
     bool m_loop = false;
     bool m_open = false;
+    bool m_isCamera = false;
     QString m_error;
 
     std::mutex m_frameMutex;
