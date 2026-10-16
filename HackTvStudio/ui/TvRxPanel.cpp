@@ -1,8 +1,13 @@
 #include "TvRxPanel.h"
 #include "VideoView.h"
 #include "TvRecorder.h"
+#include <algorithm>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
+#include <QFileInfo>
+#include <QProcess>
+#include <QUrl>
 #include <QPushButton>
 #include <QStandardPaths>
 #include "core/BandPlan.h"
@@ -100,10 +105,11 @@ TvRxPanel::TvRxPanel(QWidget* parent)
         m_recButton->setText(on ? "STOP RECORDING" : "RECORD MP4");
         m_recButton->setStyleSheet(on ? "QPushButton { background: #a03030; color: white; }" : QString());
         if (!on && !m_recorder->filePath().isEmpty())
-            m_recLabel->setText("Saved: " + QDir::toNativeSeparators(m_recorder->filePath()));
+            setRecText("Saved: " + QFileInfo(m_recorder->filePath()).fileName(),
+                       QDir::toNativeSeparators(m_recorder->filePath()));
     });
     connect(m_recorder, &TvRecorder::errorOccurred, this, [this](const QString& msg) {
-        m_recLabel->setText("Recording error: " + msg);
+        setRecText("Recording error: " + msg, msg);
     });
 
     connect(m_pipe->decoder(), &PALDecoder::frameReady,
@@ -385,12 +391,48 @@ QWidget* TvRxPanel::buildRecordGroup()
     m_recButton->setEnabled(false);
     connect(m_recButton, &QPushButton::clicked, this, &TvRxPanel::toggleRecording);
     l->addWidget(m_recButton);
-    m_recLabel = new QLabel("Start the receiver to record", g);
-    m_recLabel->setWordWrap(true);
+    m_recFolderButton = new QPushButton("OPEN FOLDER", g);
+    m_recFolderButton->setToolTip("Show the recordings in Explorer (selects the last file)");
+    connect(m_recFolderButton, &QPushButton::clicked, this, &TvRxPanel::openRecordFolder);
+    l->addWidget(m_recFolderButton);
+    m_recLabel = new QLabel(g);
     m_recLabel->setStyleSheet("QLabel { color: #708090; font-size: 8pt; }");
+    // Never let a long file name widen the column: the label wraps inside whatever width is left
+    m_recLabel->setWordWrap(true);
+    m_recLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_recLabel->setMinimumWidth(1);
     l->addWidget(m_recLabel);
+    setRecText("Start the receiver to record");
     l->addStretch();
     return g;
+}
+
+QString TvRxPanel::recordDir() const
+{
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+    if (dir.isEmpty()) dir = QDir::homePath();
+    return dir;
+}
+
+/* Short text in the label (file name only, wrapped), the full path in the tooltip. */
+void TvRxPanel::setRecText(const QString& text, const QString& tip)
+{
+    m_recLabel->setToolTip(tip.isEmpty() ? text : tip);
+    m_recLabel->setText(text);
+}
+
+void TvRxPanel::openRecordFolder()
+{
+    const QString last = m_recorder->filePath();
+#ifdef Q_OS_WIN
+    if (!last.isEmpty() && QFileInfo::exists(last)) {
+        QProcess::startDetached("explorer.exe", { "/select,", QDir::toNativeSeparators(last) });
+        return;
+    }
+#endif
+    const QString dir = recordDir();
+    QDir().mkpath(dir);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
 }
 
 void TvRxPanel::toggleRecording()
@@ -399,15 +441,14 @@ void TvRxPanel::toggleRecording()
         m_recorder->stop();
         return;
     }
-    QString dir = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
-    if (dir.isEmpty()) dir = QDir::homePath();
+    const QString dir = recordDir();
     QDir().mkpath(dir);
     const QString name = QString("HackTvStudio_%1MHz_%2.mp4")
                              .arg(m_frequency / 1e6, 0, 'f', 3)
                              .arg(QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss"));
     const QSize size = m_wideCheck->isChecked() ? QSize(1024, 576) : QSize(720, 576);
     if (m_recorder->start(QDir(dir).filePath(name), size, 25, 48000))
-        m_recLabel->setText("Recording " + name + "  (" + m_recorder->codecInfo() + ")");
+        setRecText("Recording " + name + "  (" + m_recorder->codecInfo() + ")", QDir::toNativeSeparators(QDir(dir).filePath(name)));
 }
 
 // ---------------------------------------------------------------------------
@@ -446,7 +487,7 @@ void TvRxPanel::onDeviceStarted()
 {
     m_running = true;
     m_recButton->setEnabled(true);
-    m_recLabel->setText("Ready");
+    setRecText("Ready");
     m_frameCount = 0;
     m_fpsTimer.restart();
     onFrequencyChanged(m_frequency);
@@ -517,9 +558,10 @@ void TvRxPanel::updateStatus()
     if (m_recorder->isRecording()) {
         const qint64 ms = m_recorder->durationMs();
         s += QString(" | REC %1:%2").arg(ms / 60000).arg((ms / 1000) % 60, 2, 10, QChar('0'));
-        m_recLabel->setText(QString("Recording  %1:%2  (%3)")
-                                .arg(ms / 60000).arg((ms / 1000) % 60, 2, 10, QChar('0'))
-                                .arg(m_recorder->codecInfo()));
+        setRecText(QString("Recording  %1:%2  (%3)")
+                       .arg(ms / 60000).arg((ms / 1000) % 60, 2, 10, QChar('0'))
+                       .arg(m_recorder->codecInfo()),
+                   QDir::toNativeSeparators(m_recorder->filePath()));
     }
     emit statusText(s);
 }

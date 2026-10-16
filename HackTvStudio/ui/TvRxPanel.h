@@ -109,6 +109,7 @@ private slots:
     void updateStatus();
     void toggleFullscreen();
     void toggleRecording();
+    void openRecordFolder();
 
 private:
     void buildUi();
@@ -120,7 +121,10 @@ private:
     TvRxPipeline* m_pipe;
     TvRecorder* m_recorder = nullptr;
     QPushButton* m_recButton = nullptr;
+    QPushButton* m_recFolderButton = nullptr;
     QLabel* m_recLabel = nullptr;
+    QString recordDir() const;
+    void setRecText(const QString& text, const QString& tip = QString());
 
     VideoView* m_video = nullptr;
     VideoView* m_fullscreen = nullptr;
