@@ -54,6 +54,8 @@ public:
     void setSource(Source s, const QString& file, bool loop) { m_source = s; m_file = file; m_loop = loop; }
     /* Camera source: QCameraDevice::id() and the QAudioDevice::id() of its microphone (empty = silence). */
     void setCamera(const QByteArray& cameraId, const QByteArray& audioId) { m_cameraId = cameraId; m_audioId = audioId; }
+    /* 0 = time pips every minute, 1 = silent, 2 = continuous 1 kHz tone */
+    void setTestSound(int s) { m_testSound = s; }
 
     QtAvSource* videoSource() { return m_qt; }
     QString lastError() const { return m_error; }
@@ -79,6 +81,7 @@ private:
     QString m_file;
     bool m_loop = true;
     QByteArray m_cameraId, m_audioId;
+    int m_testSound = 0;
     QString m_error;
 
     vid_t m_vid{};

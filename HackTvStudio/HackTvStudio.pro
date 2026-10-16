@@ -148,6 +148,7 @@ SOURCES += \
     core/TxEngine.cpp \
     dsp/RadioModulator.cpp \
     tv/QtAvSource.cpp \
+    tv/TestCard.cpp \
     tv/TvTxEncoder.cpp \
     tv/TeletextPages.cpp \
     ui/RadioTxPanel.cpp \
@@ -194,6 +195,7 @@ HEADERS += \
     core/TxEngine.h \
     dsp/RadioModulator.h \
     tv/QtAvSource.h \
+    tv/TestCard.h \
     tv/TvTxEncoder.h \
     tv/TeletextPages.h \
     ui/RadioTxPanel.h \

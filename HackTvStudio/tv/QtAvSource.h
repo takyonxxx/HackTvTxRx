@@ -8,6 +8,7 @@
 #include <QVideoSink>
 #include <QAudioBufferOutput>
 #include <QAudioFormat>
+#include <QTimer>
 #include <atomic>
 #include <mutex>
 #include <vector>
@@ -53,14 +54,32 @@ public:
      * silence. GUI thread. */
     bool openCamera(av_t* av, const QByteArray& cameraId, const QByteArray& audioId);
 
+    /* Installs the callbacks into `av` and shows a still picture (the test
+     * card) with a 1 kHz stereo tone. GUI thread. */
+    bool openStill(av_t* av, const QImage& picture);
+
+    /* Sound sent with the test card. */
+    enum class TestSound { Pips, Silent, Tone };
+
+    /* Test card with a live 24 h clock (re-drawn every second). GUI thread. */
+    bool openTestCard(av_t* av, const QString& label, TestSound sound);
+
     void close();
 
     bool isOpen() const { return m_open; }
+    bool isFile() const { return m_open && !m_isCamera && !m_isStill; }
+
+    /* File playback position (ms); seek() jumps the running transmission. GUI thread. */
+    qint64 position() const { return m_player.position(); }
+    qint64 duration() const { return m_player.duration(); }
+    void   seek(qint64 ms);
     bool ended() const { return m_ended.load(); }
     QString errorString() const { return m_error; }
 
 signals:
     void previewFrame(const QImage& frame);     // for the panel's preview (throttled)
+    void positionChanged(qint64 ms);            // file playback only
+    void durationChanged(qint64 ms);
     void playbackError(const QString& message);
 
 private:
@@ -96,6 +115,15 @@ private:
     bool m_loop = false;
     bool m_open = false;
     bool m_isCamera = false;
+    bool m_isStill = false;
+    QTimer m_clockTimer;
+    QString m_cardLabel;
+    int m_cardSecond = -1;
+    void setStillImage(const QImage& picture);
+    double m_tonePhase = 0.0;
+    TestSound m_testSound = TestSound::Pips;
+    qint64 m_audioStartMs = 0;       // wall clock (ms since midnight) at the first audio sample
+    qint64 m_audioSamples = 0;       // audio frames produced so far (test card)
     QString m_error;
 
     std::mutex m_frameMutex;

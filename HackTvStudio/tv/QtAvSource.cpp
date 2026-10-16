@@ -7,6 +7,8 @@
 #include <QCameraDevice>
 #include <QCameraFormat>
 #include <QDateTime>
+#include <QTime>
+#include "TestCard.h"
 #include <QDebug>
 #include <QIODevice>
 #include <QMediaDevices>
@@ -40,6 +42,22 @@ QtAvSource::QtAvSource(QObject* parent)
         m_error = msg;
         emit playbackError(msg);
     });
+    connect(&m_player, &QMediaPlayer::positionChanged, this, [this](qint64 ms) { if (isFile()) emit positionChanged(ms); });
+    m_clockTimer.setInterval(100);
+    connect(&m_clockTimer, &QTimer::timeout, this, [this] {
+        const QTime now = QTime::currentTime();
+        if (now.second() == m_cardSecond) return;
+        m_cardSecond = now.second();
+        setStillImage(TestCard::render(m_width, m_height, m_cardLabel, now.toString("HH:mm:ss")));
+    });
+    connect(&m_player, &QMediaPlayer::durationChanged, this, [this](qint64 ms) { if (isFile()) emit durationChanged(ms); });
+}
+
+void QtAvSource::seek(qint64 ms)
+{
+    if (!isFile()) return;
+    m_audioRing.clear();            // drop sound that belongs to the old position
+    m_player.setPosition(std::max<qint64>(0, ms));
 }
 
 QtAvSource::~QtAvSource()
@@ -73,11 +91,50 @@ bool QtAvSource::prepare(av_t* av)
     return true;
 }
 
+bool QtAvSource::openStill(av_t* av, const QImage& picture)
+{
+    if (!prepare(av)) return false;
+    m_loop = true;
+    m_isCamera = false;
+    m_isStill = true;
+    m_tonePhase = 0.0;
+
+    setStillImage(picture);
+    m_open = true;
+    return true;
+}
+
+void QtAvSource::setStillImage(const QImage& picture)
+{
+    QImage img = picture.convertToFormat(QImage::Format_RGB32);
+    if (img.size() != QSize(m_width, m_height))
+        img = img.scaled(m_width, m_height, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    {
+        std::lock_guard<std::mutex> lk(m_frameMutex);
+        m_latest = img;
+    }
+    emit previewFrame(img);
+}
+
+bool QtAvSource::openTestCard(av_t* av, const QString& label, TestSound sound)
+{
+    const QTime now = QTime::currentTime();
+    m_cardLabel = label;
+    m_cardSecond = now.second();
+    m_testSound = sound;
+    m_audioStartMs = now.msecsSinceStartOfDay();
+    m_audioSamples = 0;
+    if (!openStill(av, TestCard::render(av->width, av->height, label, now.toString("HH:mm:ss")))) return false;
+    m_clockTimer.start();
+    return true;
+}
+
 bool QtAvSource::open(av_t* av, const QString& file, bool loop)
 {
     if (!prepare(av)) return false;
     m_loop = loop;
     m_isCamera = false;
+    m_isStill = false;
 
     // No speaker output on purpose (audio goes to the encoder only)
     m_player.setVideoSink(&m_sink);
@@ -93,6 +150,7 @@ bool QtAvSource::openCamera(av_t* av, const QByteArray& cameraId, const QByteArr
     if (!prepare(av)) return false;
     m_loop = true;          // a camera never ends
     m_isCamera = true;
+    m_isStill = false;
 
     QCameraDevice dev;
     for (const QCameraDevice& d : QMediaDevices::videoInputs())
@@ -138,7 +196,9 @@ bool QtAvSource::openCamera(av_t* av, const QByteArray& cameraId, const QByteArr
 void QtAvSource::close()
 {
     if (!m_open) return;
-    if (m_isCamera) {
+    if (m_isStill) {
+        m_clockTimer.stop();
+    } else if (m_isCamera) {
         stopMicrophone();
         if (m_camera) {
             m_camera->stop();
@@ -308,6 +368,38 @@ int16_t* QtAvSource::cbReadAudio(void* ctx, size_t* samples)
     QtAvSource* s = static_cast<QtAvSource*>(ctx);
     constexpr size_t MAX_FRAMES = 1024;
     s->m_audioChunk.resize(MAX_FRAMES * 2);
+    if (s->m_isStill) {
+        constexpr double TWO_PI = 2.0 * 3.14159265358979;
+        if (s->m_testSound == TestSound::Silent) {
+            std::fill(s->m_audioChunk.begin(), s->m_audioChunk.end(), int16_t(0));
+            s->m_audioSamples += MAX_FRAMES;
+            *samples = MAX_FRAMES;
+            return s->m_audioChunk.data();
+        }
+        const double step = TWO_PI * 1000.0 / 32000.0;
+        double ph = s->m_tonePhase;
+        for (size_t i = 0; i < MAX_FRAMES; ++i) {
+            double amp = 0.5;                                   // continuous tone: -6 dBFS
+            if (s->m_testSound == TestSound::Pips) {
+                // Time signal: short pips at :55..:59, a longer one on the minute, -18 dBFS,
+                // 5 ms fades so they do not click. Derived from the wall clock.
+                const qint64 ms = s->m_audioStartMs + (s->m_audioSamples + static_cast<qint64>(i)) * 1000 / 32000;
+                const int sec = static_cast<int>((ms / 1000) % 60);
+                const int msInSec = static_cast<int>(ms % 1000);
+                const int pipLen = sec == 0 ? 500 : (sec >= 55 ? 100 : 0);
+                if (pipLen == 0 || msInSec >= pipLen) amp = 0.0;
+                else amp = 0.125 * std::min(1.0, std::min(msInSec, pipLen - msInSec) / 5.0);
+            }
+            const int16_t v = static_cast<int16_t>(std::sin(ph) * amp * 32000.0);
+            s->m_audioChunk[2 * i] = s->m_audioChunk[2 * i + 1] = v;
+            ph += step;
+            if (ph > TWO_PI) ph -= TWO_PI;
+        }
+        s->m_tonePhase = ph;
+        s->m_audioSamples += MAX_FRAMES;
+        *samples = MAX_FRAMES;
+        return s->m_audioChunk.data();
+    }
     const size_t got = s->m_audioRing.read(s->m_audioChunk.data(), MAX_FRAMES * 2) / 2;
     if (got == 0) {
         *samples = 0;

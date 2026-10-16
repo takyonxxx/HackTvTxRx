@@ -14,6 +14,7 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QTimer>
+#include <QSlider>
 #include <QMediaDevices>
 
 class VideoView;
@@ -58,6 +59,7 @@ private:
 
     QComboBox* m_modeCombo = nullptr;
     QRadioButton* m_testRadio = nullptr;
+    QComboBox* m_testSoundCombo = nullptr;
     QRadioButton* m_fileRadio = nullptr;
     QRadioButton* m_cameraRadio = nullptr;
     QComboBox* m_cameraCombo = nullptr;
@@ -88,6 +90,10 @@ private:
     VideoView* m_preview = nullptr;
     QVBoxLayout* m_specSlot = nullptr;
     QLabel* m_statusLabel = nullptr;
+    QSlider* m_seekSlider = nullptr;
+    QLabel* m_timeLabel = nullptr;
+    qint64 m_durationMs = 0;
+    void updateSeekUi(qint64 posMs);
     QTimer* m_statusTimer = nullptr;
     bool m_running = false;
 };

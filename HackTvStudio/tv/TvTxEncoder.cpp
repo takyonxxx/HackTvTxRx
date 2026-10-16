@@ -1,5 +1,6 @@
 #include "TvTxEncoder.h"
 #include "QtAvSource.h"
+#include "TestCard.h"
 
 #include <QDebug>
 #include <cstring>
@@ -108,7 +109,9 @@ bool TvTxEncoder::buildConfig(vid_config_t& conf)
 bool TvTxEncoder::openSource()
 {
     if (m_source == Source::TestPattern) {
-        if (av_test_open(&m_vid.av) != AV_OK) { m_error = "Test pattern source failed"; return false; }
+        // PM5544-style card drawn for the active picture size, with a 1 kHz tone
+        if (!m_qt->openTestCard(&m_vid.av, "HackTvStudio", static_cast<QtAvSource::TestSound>(m_testSound)))
+            { m_error = "Test card source failed"; return false; }
     } else if (m_source == Source::Camera) {
         if (!m_qt->openCamera(&m_vid.av, m_cameraId, m_audioId)) {
             m_error = m_qt->errorString().isEmpty() ? "Cannot open camera" : m_qt->errorString();
@@ -202,7 +205,7 @@ void TvTxEncoder::txStop()
 {
     if (m_sourceOpen) {
         av_close(&m_vid.av);
-        if (m_source != Source::TestPattern) m_qt->close();
+        m_qt->close();
         m_sourceOpen = false;
     }
     if (m_inited) {

@@ -6,11 +6,12 @@
 #include <cstdint>
 
 /*
- * Writes a small teletext magazine (MRG .tti files) describing the current
- * transmission: index (100), transmission parameters (101), source (102),
- * options (103). hacktv loads the folder at START, so the pages are rewritten
- * every time the transmitter starts; the clock in the page header row is
- * generated live by hacktv.
+ * Writes one teletext page (MRG .tti file, page 100) describing the current
+ * transmission: frequency, standard, picture format, sound, source and the
+ * start time. hacktv loads the folder at START, so the page is rewritten every
+ * time the transmitter starts; the clock in the page header row is generated
+ * live by hacktv. (Teletext page numbers are 100-899: the first digit is the
+ * magazine, so there is no page 1.)
  */
 struct TeletextInfo {
     uint64_t frequencyHz = 0;
@@ -34,7 +35,7 @@ namespace TeletextPages {
 /* Folder the pages are written to (created on demand). */
 QString defaultDir();
 
-/* Writes P100..P103 into `dir`; returns false (with `error`) when a file cannot be written. */
+/* Writes P100.tti into `dir`; returns false (with `error`) when the file cannot be written. */
 bool write(const QString& dir, const TeletextInfo& info, QString* error = nullptr);
 
 }

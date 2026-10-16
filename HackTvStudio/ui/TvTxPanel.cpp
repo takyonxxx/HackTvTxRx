@@ -31,6 +31,20 @@ TvTxPanel::TvTxPanel(QWidget* parent)
 
     connect(m_enc->videoSource(), &QtAvSource::previewFrame, this,
             [this](const QImage& img) { m_preview->setFrame(img); });
+    connect(m_enc->videoSource(), &QtAvSource::durationChanged, this, [this](qint64 ms) {
+        m_durationMs = ms;
+        m_seekSlider->setRange(0, static_cast<int>(ms / 100));     // 0.1 s steps
+        m_seekSlider->setPageStep(static_cast<int>(std::max<qint64>(1, ms / 100 / 20)));
+        m_seekSlider->setEnabled(ms > 0 && m_running);
+        updateSeekUi(m_enc->videoSource()->position());
+    });
+    connect(m_enc->videoSource(), &QtAvSource::positionChanged, this, [this](qint64 ms) {
+        if (m_seekSlider->isSliderDown()) return;                  // the user is dragging
+        m_seekSlider->blockSignals(true);
+        m_seekSlider->setValue(static_cast<int>(ms / 100));
+        m_seekSlider->blockSignals(false);
+        updateSeekUi(ms);
+    });
     connect(m_enc, &TvTxEncoder::sourceError, this,
             [this](const QString& msg) { m_statusLabel->setText("Source error: " + msg); });
 
@@ -54,6 +68,33 @@ void TvTxPanel::buildUi()
     m_preview = new VideoView(prevGroup);
     m_preview->setWideAspect(false);
     pl->addWidget(m_preview);
+    // Playback position for the video file source (slider seeks the running transmission)
+    QHBoxLayout* seekRow = new QHBoxLayout();
+    seekRow->setContentsMargins(0, 0, 0, 0);
+    seekRow->setSpacing(8);
+    m_seekSlider = new QSlider(Qt::Horizontal, prevGroup);
+    m_seekSlider->setRange(0, 0);
+    m_seekSlider->setEnabled(false);
+    m_seekSlider->setToolTip("Drag to jump within the video file (file source, while transmitting)");
+    m_timeLabel = new QLabel("--:-- / --:--", prevGroup);
+    m_timeLabel->setStyleSheet("QLabel { color: #00ffcc; font-family: Consolas, monospace; }");
+    m_timeLabel->setMinimumWidth(110);
+    m_timeLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    seekRow->addWidget(m_seekSlider, 1);
+    seekRow->addWidget(m_timeLabel);
+    pl->addLayout(seekRow);
+    connect(m_seekSlider, &QSlider::sliderMoved, this, [this](int v) { updateSeekUi(static_cast<qint64>(v) * 100); });
+    connect(m_seekSlider, &QSlider::sliderReleased, this, [this] {
+        m_enc->videoSource()->seek(static_cast<qint64>(m_seekSlider->value()) * 100);
+    });
+    connect(m_seekSlider, &QSlider::actionTriggered, this, [this](int action) {
+        // Page / single step clicks on the groove seek as well
+        if (action == QAbstractSlider::SliderPageStepAdd || action == QAbstractSlider::SliderPageStepSub ||
+            action == QAbstractSlider::SliderSingleStepAdd || action == QAbstractSlider::SliderSingleStepSub)
+            QMetaObject::invokeMethod(this, [this] { m_enc->videoSource()->seek(static_cast<qint64>(m_seekSlider->value()) * 100); },
+                                      Qt::QueuedConnection);
+    });
+
     m_statusLabel = new QLabel("Press START to transmit", prevGroup);
     m_statusLabel->setStyleSheet("QLabel { color: #708090; font-size: 8pt; }");
     m_statusLabel->setWordWrap(true);
@@ -92,11 +133,22 @@ void TvTxPanel::buildUi()
     QGroupBox* srcGroup = new QGroupBox("Video source", right);
     QVBoxLayout* vl = new QVBoxLayout(srcGroup);
     vl->setSpacing(4);
-    m_testRadio = new QRadioButton("Test pattern (colour bars + tone)", srcGroup);
+    m_testRadio = new QRadioButton("Test card (PM5544 style)", srcGroup);
     m_fileRadio = new QRadioButton("Video file", srcGroup);
     m_cameraRadio = new QRadioButton("USB camera (live)", srcGroup);
     m_testRadio->setChecked(true);
-    vl->addWidget(m_testRadio);
+    QHBoxLayout* tr0 = new QHBoxLayout();
+    tr0->setContentsMargins(0, 0, 0, 0);
+    tr0->setSpacing(8);
+    m_testSoundCombo = new QComboBox(srcGroup);
+    m_testSoundCombo->addItem("Sound: time pips each minute", 0);
+    m_testSoundCombo->addItem("Sound: silent", 1);
+    m_testSoundCombo->addItem("Sound: 1 kHz tone", 2);
+    m_testSoundCombo->setToolTip("What the sound carrier carries with the test card.\n"
+                                 "Time pips: five short pips at :55-:59 and a long one on the minute (quiet, -18 dBFS).");
+    tr0->addWidget(m_testRadio, 1);
+    tr0->addWidget(m_testSoundCombo);
+    vl->addLayout(tr0);
 
     vl->addWidget(m_fileRadio);
     QHBoxLayout* fr = new QHBoxLayout();
@@ -180,7 +232,7 @@ void TvTxPanel::buildUi()
     m_teletextEdit = new QLineEdit(optGroup);
     m_teletextEdit->setPlaceholderText("folder of .tti pages (optional)");
     m_ttxButton = new QPushButton("Info pages", optGroup);
-    m_ttxButton->setToolTip("Generate teletext pages 100-103 (frequency, picture format, source, options, start time)\n"
+    m_ttxButton->setToolTip("Generate teletext page 100 (frequency, picture format, source, start time)\n"
                             "and transmit them. They are refreshed every time you press START.");
     connect(m_ttxButton, &QPushButton::clicked, this, [this] { writeInfoPages(true); });
     QHBoxLayout* tr = new QHBoxLayout();
@@ -222,6 +274,18 @@ void TvTxPanel::browseFile()
     m_fileRadio->setChecked(true);
 }
 
+/* "mm:ss / mm:ss" (hours when the file is that long). */
+void TvTxPanel::updateSeekUi(qint64 posMs)
+{
+    auto fmt = [](qint64 ms) {
+        const qint64 s = ms / 1000;
+        return s >= 3600 ? QString("%1:%2:%3").arg(s / 3600).arg((s / 60) % 60, 2, 10, QChar('0')).arg(s % 60, 2, 10, QChar('0'))
+                         : QString("%1:%2").arg(s / 60, 2, 10, QChar('0')).arg(s % 60, 2, 10, QChar('0'));
+    };
+    if (m_durationMs <= 0) { m_timeLabel->setText("--:-- / --:--"); return; }
+    m_timeLabel->setText(fmt(posMs) + " / " + fmt(m_durationMs));
+}
+
 void TvTxPanel::updateSourceWidgets()
 {
     const bool file = m_fileRadio->isChecked();
@@ -231,6 +295,7 @@ void TvTxPanel::updateSourceWidgets()
     m_loopCheck->setEnabled(file);
     m_cameraCombo->setEnabled(cam);
     m_camAudioCombo->setEnabled(cam);
+    m_testSoundCombo->setEnabled(m_testRadio->isChecked());
 }
 
 /* Repopulate the camera / microphone lists, keeping the current choices by id. */
@@ -365,9 +430,9 @@ void TvTxPanel::writeInfoPages(bool announce)
         info.sourceName = QFileInfo(m_fileEdit->text()).fileName();
         info.sourceSound = "file audio track";
     } else {
-        info.sourceKind = "Test pattern";
-        info.sourceName = "colour bars";
-        info.sourceSound = "1 kHz tone";
+        info.sourceKind = "Test card";
+        info.sourceName = "PM5544 style";
+        info.sourceSound = m_testSoundCombo->currentText().section(':', 1).trimmed();
     }
 
     const QList<QPair<QCheckBox*, QString>> flags = {
@@ -376,7 +441,7 @@ void TvTxPanel::writeInfoPages(bool announce)
         { m_vitsCheck, "VITS test lines" }, { m_vitcCheck, "VITC timecode" }, { m_invertCheck, "Invert video" } };
     for (const auto& f : flags) if (f.first->isChecked()) info.options << f.second;
     if (m_scrambleCombo->currentIndex() > 0) info.options << "Scrambling: " + m_scrambleCombo->currentText();
-    info.options << "Teletext pages 100-103";
+    info.options << "Teletext page 100";
 
     const QString dir = TeletextPages::defaultDir();
     QString err;
@@ -386,7 +451,7 @@ void TvTxPanel::writeInfoPages(bool announce)
     }
     m_teletextEdit->setText(QDir::toNativeSeparators(dir));
     if (announce) {
-        m_statusLabel->setText("Teletext pages 100-103 written to " + QDir::toNativeSeparators(dir));
+        m_statusLabel->setText("Teletext page 100 written to " + QDir::toNativeSeparators(dir));
         m_statusHoldUntil = QDateTime::currentMSecsSinceEpoch() + 5000;   // keep the message visible for a while
     }
 }
@@ -401,26 +466,23 @@ ITxSource* TvTxPanel::txSource()
     if (m_cameraRadio->isChecked()) src = TvTxEncoder::Source::Camera;
     m_enc->setSource(src, m_fileEdit->text(), m_loopCheck->isChecked());
     m_enc->setCamera(m_cameraCombo->currentData().toByteArray(), cameraAudioId());
+    m_enc->setTestSound(m_testSoundCombo->currentData().toInt());
     return m_enc;
 }
 
 void TvTxPanel::onDeviceStarted()
 {
     m_running = true;
-    if (m_testRadio->isChecked()) {
-        QImage bars(702, 576, QImage::Format_RGB32);
-        const QColor cols[8] = { Qt::white, Qt::yellow, Qt::cyan, Qt::green, Qt::magenta, Qt::red, Qt::blue, Qt::black };
-        for (int x = 0; x < bars.width(); ++x) {
-            const QColor c = cols[x * 8 / bars.width()];
-            for (int y = 0; y < bars.height(); ++y) bars.setPixel(x, y, c.rgb());
-        }
-        m_preview->setFrame(bars);
-    }
+    m_seekSlider->setEnabled(m_fileRadio->isChecked() && m_durationMs > 0);
 }
 
 void TvTxPanel::onDeviceStopped()
 {
     m_running = false;
+    m_seekSlider->setEnabled(false);
+    m_seekSlider->setRange(0, 0);
+    m_durationMs = 0;
+    updateSeekUi(0);
 }
 
 void TvTxPanel::updateStatus()
@@ -438,7 +500,7 @@ void TvTxPanel::updateStatus()
         return;
     }
     const vid_t* v = m_enc->vid();
-    QString srcName = "test pattern";
+    QString srcName = "test card";
     if (m_fileRadio->isChecked())   srcName = QFileInfo(m_fileEdit->text()).fileName();
     if (m_cameraRadio->isChecked()) srcName = m_cameraCombo->currentText();
     QString s = QString("TV TX | %1 | %2").arg(m_modeCombo->currentData().toString().toUpper(), srcName);
@@ -456,6 +518,7 @@ void TvTxPanel::saveSettings(QSettings& s)
     s.setValue("camAudio", m_camAudioCombo->currentData().toByteArray());
     s.setValue("file", m_fileEdit->text());
     s.setValue("loop", m_loopCheck->isChecked());
+    s.setValue("testSound", m_testSoundCombo->currentData().toInt());
     s.setValue("filter", m_filterCheck->isChecked());
     s.setValue("colour", m_colourCheck->isChecked());
     s.setValue("audio", m_audioCheck->isChecked());
@@ -489,6 +552,7 @@ void TvTxPanel::loadSettings(QSettings& s)
     updateSourceWidgets();
     m_fileEdit->setText(s.value("file").toString());
     m_loopCheck->setChecked(s.value("loop", true).toBool());
+    { const int ti = m_testSoundCombo->findData(s.value("testSound", 0).toInt()); if (ti >= 0) m_testSoundCombo->setCurrentIndex(ti); }
     m_filterCheck->setChecked(s.value("filter", true).toBool());
     m_colourCheck->setChecked(s.value("colour", true).toBool());
     m_audioCheck->setChecked(s.value("audio", true).toBool());
