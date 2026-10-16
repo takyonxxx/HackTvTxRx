@@ -441,7 +441,8 @@ static char *_mk_header(char *s, uint16_t page, time_t timestamp)
 	/* TODO: Make this customisable */
 	
 	tm = localtime(&timestamp);
-	snprintf(temp, 33, "hacktv   %03X %%a %%d %%b\x03" "%%H:%%M/%%S", page);
+	/* HackTvStudio: "HackTv 100 " + yellow "16.10.2026 10:48:35" (31 of 32 cells) */
+	snprintf(temp, 33, "HackTv %03X \x03%%d.%%m.%%Y %%H:%%M:%%S", page);
 	strftime(s, 33, temp, tm);
 	
 	return(s);

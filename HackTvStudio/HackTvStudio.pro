@@ -149,6 +149,7 @@ SOURCES += \
     dsp/RadioModulator.cpp \
     tv/QtAvSource.cpp \
     tv/TvTxEncoder.cpp \
+    tv/TeletextPages.cpp \
     ui/RadioTxPanel.cpp \
     ui/TvTxPanel.cpp \
     hacktv/acp.c \
@@ -194,6 +195,7 @@ HEADERS += \
     dsp/RadioModulator.h \
     tv/QtAvSource.h \
     tv/TvTxEncoder.h \
+    tv/TeletextPages.h \
     ui/RadioTxPanel.h \
     ui/TvTxPanel.h \
     hacktv/acp.h \

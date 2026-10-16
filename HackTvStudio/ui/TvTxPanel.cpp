@@ -1,6 +1,8 @@
 #include "TvTxPanel.h"
 #include "VideoView.h"
 #include "tv/QtAvSource.h"
+#include "tv/TeletextPages.h"
+#include "core/BandPlan.h"
 
 #include <QAudioDevice>
 #include <QCameraDevice>
@@ -10,6 +12,9 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QStandardPaths>
+#include <QDateTime>
+#include <QDir>
+#include <cmath>
 #include <QVBoxLayout>
 
 TvTxPanel::TvTxPanel(QWidget* parent)
@@ -174,7 +179,16 @@ void TvTxPanel::buildUi()
     gl->addWidget(new QLabel("Teletext:", optGroup), 4, 0);
     m_teletextEdit = new QLineEdit(optGroup);
     m_teletextEdit->setPlaceholderText("folder of .tti pages (optional)");
-    gl->addWidget(m_teletextEdit, 4, 1);
+    m_ttxButton = new QPushButton("Info pages", optGroup);
+    m_ttxButton->setToolTip("Generate teletext pages 100-103 (frequency, picture format, source, options, start time)\n"
+                            "and transmit them. They are refreshed every time you press START.");
+    connect(m_ttxButton, &QPushButton::clicked, this, [this] { writeInfoPages(true); });
+    QHBoxLayout* tr = new QHBoxLayout();
+    tr->setContentsMargins(0, 0, 0, 0);
+    tr->setSpacing(6);
+    tr->addWidget(m_teletextEdit, 1);
+    tr->addWidget(m_ttxButton);
+    gl->addLayout(tr, 4, 1);
 
     gl->addWidget(new QLabel("Level:", optGroup), 4, 2, Qt::AlignRight);
     m_levelSpin = new QDoubleSpinBox(optGroup);
@@ -297,9 +311,90 @@ TvTxConfig TvTxPanel::collectConfig() const
     return c;
 }
 
+/* True when the teletext field points at our generated folder. */
+bool TvTxPanel::usesInfoPages() const
+{
+    const QString t = m_teletextEdit->text().trimmed();
+    return !t.isEmpty() && QDir::cleanPath(t) == TeletextPages::defaultDir();
+}
+
+/* Write pages 100-103 with the current settings and point the encoder at them. */
+void TvTxPanel::writeInfoPages(bool announce)
+{
+    TeletextInfo info;
+    info.frequencyHz = m_frequency;
+    const TvChannel ch = BandPlan::tvChannel(m_frequency);
+    if (ch.valid) info.channel = ch.name + "  " + BandPlan::lookup(m_frequency).name;
+    info.modeId = m_modeCombo->currentData().toString();
+    info.modeDescription = m_modeCombo->currentText().section(QStringLiteral("\u2014"), 1).trimmed();
+    info.sampleRate = m_sampleRate;
+
+    // Active picture as hacktv derives it: active line time x sample rate, lines from the standard
+    const QString desc = info.modeDescription;
+    const QRegularExpression linesRe("(\\d+) lines"), fpsRe("([\\d.]+) fps");
+    const auto lm = linesRe.match(desc), fm = fpsRe.match(desc);
+    const int lines = lm.hasMatch() ? lm.captured(1).toInt() : 625;
+    info.fps = fm.hasMatch() ? fm.captured(1) : (lines == 525 ? "29.97" : "25");
+    double active = 51.95e-6; int height = 576;
+    if (lines == 525)      { active = 52.80e-6; height = 480; }
+    else if (lines == 405) { active = 80.0e-6;  height = 376; }
+    else if (lines == 819) { active = 40.0e-6;  height = 737; }
+    info.width = static_cast<int>(std::ceil(m_sampleRate * active));
+    info.height = height;
+
+    QStringList snd;
+    if (m_audioCheck->isChecked()) {
+        QString a = desc.section("lines,", 1).section(',', 1).trimmed();   // "5.5 MHz FM audio"
+        a.remove(" audio");
+        snd << a;
+    }
+    if (m_nicamCheck->isChecked()) snd << "NICAM";
+    if (m_a2Check->isChecked())    snd << "A2";
+    info.sound = snd.isEmpty() ? "off" : snd.join(" + ");
+    info.wss = m_wssCombo->currentText();
+    info.level = m_levelSpin->value();
+
+    if (m_cameraRadio->isChecked()) {
+        info.sourceKind = "USB camera (live)";
+        info.sourceName = m_cameraCombo->currentText();
+        const QByteArray mic = cameraAudioId();
+        for (const QAudioDevice& d : QMediaDevices::audioInputs())
+            if (d.id() == mic) info.sourceSound = d.description();
+    } else if (m_fileRadio->isChecked()) {
+        info.sourceKind = QString("Video file%1").arg(m_loopCheck->isChecked() ? " (loop)" : "");
+        info.sourceName = QFileInfo(m_fileEdit->text()).fileName();
+        info.sourceSound = "file audio track";
+    } else {
+        info.sourceKind = "Test pattern";
+        info.sourceName = "colour bars";
+        info.sourceSound = "1 kHz tone";
+    }
+
+    const QList<QPair<QCheckBox*, QString>> flags = {
+        { m_filterCheck, "Output filter (VSB)" }, { m_colourCheck, "Colour" }, { m_audioCheck, "Audio" },
+        { m_nicamCheck, "NICAM" }, { m_a2Check, "A2 stereo" }, { m_acpCheck, "ACP (Macrovision)" },
+        { m_vitsCheck, "VITS test lines" }, { m_vitcCheck, "VITC timecode" }, { m_invertCheck, "Invert video" } };
+    for (const auto& f : flags) if (f.first->isChecked()) info.options << f.second;
+    if (m_scrambleCombo->currentIndex() > 0) info.options << "Scrambling: " + m_scrambleCombo->currentText();
+    info.options << "Teletext pages 100-103";
+
+    const QString dir = TeletextPages::defaultDir();
+    QString err;
+    if (!TeletextPages::write(dir, info, &err)) {
+        m_statusLabel->setText("Teletext pages: " + err);
+        return;
+    }
+    m_teletextEdit->setText(QDir::toNativeSeparators(dir));
+    if (announce) {
+        m_statusLabel->setText("Teletext pages 100-103 written to " + QDir::toNativeSeparators(dir));
+        m_statusHoldUntil = QDateTime::currentMSecsSinceEpoch() + 5000;   // keep the message visible for a while
+    }
+}
+
 ITxSource* TvTxPanel::txSource()
 {
     // Called right before the TX engine starts: hand over the current settings
+    if (usesInfoPages()) writeInfoPages(false);     // fresh frequency / source / start time
     m_enc->setConfig(collectConfig());
     TvTxEncoder::Source src = TvTxEncoder::Source::TestPattern;
     if (m_fileRadio->isChecked())   src = TvTxEncoder::Source::VideoFile;
@@ -332,6 +427,7 @@ void TvTxPanel::updateStatus()
 {
     if (!m_running) {
         emit statusText("TV TX idle");
+        if (QDateTime::currentMSecsSinceEpoch() < m_statusHoldUntil) return;
         if (m_enc->lastError().isEmpty())
             m_statusLabel->setText(m_fileRadio->isChecked() && m_fileEdit->text().isEmpty()
                                        ? "Choose a video file or use the test pattern"

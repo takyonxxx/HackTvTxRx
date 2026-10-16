@@ -34,6 +34,8 @@ public:
     uint32_t   preferredSampleRate() const override { return 16000000; }
     QLayout*   spectrumSlot() override { return m_specSlot; }
 
+    void onFrequencyChanged(uint64_t hz) override { m_frequency = hz; }
+    void onSampleRateChanged(uint32_t hz) override { m_sampleRate = hz; }
     void onDeviceStarted() override;
     void onDeviceStopped() override;
     void saveSettings(QSettings& s) override;
@@ -45,6 +47,8 @@ private slots:
 private:
     void buildUi();
     void browseFile();
+    void writeInfoPages(bool announce);
+    bool usesInfoPages() const;
     void refreshDevices();
     QByteArray cameraAudioId() const;
     void updateSourceWidgets();
@@ -75,6 +79,10 @@ private:
     QComboBox* m_wssCombo = nullptr;
     QComboBox* m_scrambleCombo = nullptr;
     QLineEdit* m_teletextEdit = nullptr;
+    QPushButton* m_ttxButton = nullptr;
+    uint64_t m_frequency = 0;
+    qint64 m_statusHoldUntil = 0;
+    uint32_t m_sampleRate = 16000000;
     QDoubleSpinBox* m_levelSpin = nullptr;
 
     VideoView* m_preview = nullptr;
