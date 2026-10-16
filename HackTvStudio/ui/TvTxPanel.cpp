@@ -2,7 +2,10 @@
 #include "VideoView.h"
 #include "tv/QtAvSource.h"
 
+#include <QAudioDevice>
+#include <QCameraDevice>
 #include <QFileDialog>
+#include <QRegularExpression>
 #include <QFileInfo>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -14,6 +17,12 @@ TvTxPanel::TvTxPanel(QWidget* parent)
     , m_enc(new TvTxEncoder(this))
 {
     buildUi();
+
+    // Cameras / microphones appear and disappear at runtime (USB)
+    m_devices = new QMediaDevices(this);
+    connect(m_devices, &QMediaDevices::videoInputsChanged, this, &TvTxPanel::refreshDevices);
+    connect(m_devices, &QMediaDevices::audioInputsChanged, this, &TvTxPanel::refreshDevices);
+    refreshDevices();
 
     connect(m_enc->videoSource(), &QtAvSource::previewFrame, this,
             [this](const QImage& img) { m_preview->setFrame(img); });
@@ -77,22 +86,46 @@ void TvTxPanel::buildUi()
     // Source
     QGroupBox* srcGroup = new QGroupBox("Video source", right);
     QVBoxLayout* vl = new QVBoxLayout(srcGroup);
+    vl->setSpacing(4);
     m_testRadio = new QRadioButton("Test pattern (colour bars + tone)", srcGroup);
     m_fileRadio = new QRadioButton("Video file", srcGroup);
+    m_cameraRadio = new QRadioButton("USB camera (live)", srcGroup);
     m_testRadio->setChecked(true);
     vl->addWidget(m_testRadio);
+
     vl->addWidget(m_fileRadio);
     QHBoxLayout* fr = new QHBoxLayout();
+    fr->setContentsMargins(24, 0, 0, 0);
     m_fileEdit = new QLineEdit(srcGroup);
     m_fileEdit->setPlaceholderText("mp4 / mkv / avi / mov ...");
     m_browseButton = new QPushButton("Browse", srcGroup);
     connect(m_browseButton, &QPushButton::clicked, this, &TvTxPanel::browseFile);
-    fr->addWidget(m_fileEdit, 1);
-    fr->addWidget(m_browseButton);
-    vl->addLayout(fr);
     m_loopCheck = new QCheckBox("Loop", srcGroup);
     m_loopCheck->setChecked(true);
-    vl->addWidget(m_loopCheck);
+    fr->addWidget(m_fileEdit, 1);
+    fr->addWidget(m_browseButton);
+    fr->addWidget(m_loopCheck);
+    vl->addLayout(fr);
+
+    vl->addWidget(m_cameraRadio);
+    QGridLayout* cg = new QGridLayout();
+    cg->setContentsMargins(24, 0, 0, 0);
+    cg->setHorizontalSpacing(8);
+    cg->setVerticalSpacing(4);
+    m_cameraCombo = new QComboBox(srcGroup);
+    m_cameraCombo->setToolTip("Video input (QCamera). The list follows USB plug/unplug.");
+    m_camAudioCombo = new QComboBox(srcGroup);
+    m_camAudioCombo->setToolTip("Sound to send with the picture: the camera's own microphone (auto), none, or any input device");
+    cg->addWidget(new QLabel("Camera:", srcGroup), 0, 0);
+    cg->addWidget(m_cameraCombo, 0, 1);
+    cg->addWidget(new QLabel("Sound:", srcGroup), 1, 0);
+    cg->addWidget(m_camAudioCombo, 1, 1);
+    cg->setColumnStretch(1, 1);
+    vl->addLayout(cg);
+
+    for (QRadioButton* r : { m_testRadio, m_fileRadio, m_cameraRadio })
+        connect(r, &QRadioButton::toggled, this, [this](bool on) { if (on) updateSourceWidgets(); });
+    updateSourceWidgets();
     rl->addWidget(srcGroup);
     rl->addStretch();
     grid->addWidget(left, 1, 0);
@@ -175,6 +208,75 @@ void TvTxPanel::browseFile()
     m_fileRadio->setChecked(true);
 }
 
+void TvTxPanel::updateSourceWidgets()
+{
+    const bool file = m_fileRadio->isChecked();
+    const bool cam  = m_cameraRadio->isChecked();
+    m_fileEdit->setEnabled(file);
+    m_browseButton->setEnabled(file);
+    m_loopCheck->setEnabled(file);
+    m_cameraCombo->setEnabled(cam);
+    m_camAudioCombo->setEnabled(cam);
+}
+
+/* Repopulate the camera / microphone lists, keeping the current choices by id. */
+void TvTxPanel::refreshDevices()
+{
+    const QByteArray camSel = m_cameraCombo->currentData().toByteArray();
+    const QByteArray micSel = m_camAudioCombo->currentData().toByteArray();
+
+    m_cameraCombo->blockSignals(true);
+    m_cameraCombo->clear();
+    for (const QCameraDevice& d : QMediaDevices::videoInputs())
+        m_cameraCombo->addItem(d.description(), d.id());
+    if (m_cameraCombo->count() == 0) m_cameraCombo->addItem("No camera found", QByteArray());
+    int ci = m_cameraCombo->findData(camSel);
+    if (ci < 0) ci = 0;
+    m_cameraCombo->setCurrentIndex(ci);
+    m_cameraCombo->blockSignals(false);
+
+    m_camAudioCombo->blockSignals(true);
+    m_camAudioCombo->clear();
+    m_camAudioCombo->addItem("Auto (camera microphone)", QByteArray("auto"));
+    m_camAudioCombo->addItem("None (silent)", QByteArray("none"));
+    for (const QAudioDevice& d : QMediaDevices::audioInputs())
+        m_camAudioCombo->addItem(d.description(), d.id());
+    int ai = m_camAudioCombo->findData(micSel);
+    if (ai < 0) ai = 0;
+    m_camAudioCombo->setCurrentIndex(ai);
+    m_camAudioCombo->blockSignals(false);
+
+    m_cameraRadio->setEnabled(!m_cameraCombo->currentData().toByteArray().isEmpty());
+    if (!m_cameraRadio->isEnabled() && m_cameraRadio->isChecked()) m_testRadio->setChecked(true);
+}
+
+/* The microphone to pair with the selected camera (empty = silence). */
+QByteArray TvTxPanel::cameraAudioId() const
+{
+    const QByteArray sel = m_camAudioCombo->currentData().toByteArray();
+    if (sel == "none") return QByteArray();
+    if (sel != "auto") return sel;
+
+    // Auto: the input whose name shares a distinctive word with the camera
+    // ("USB Camera" <-> "Microphone (H264 USB Camera)"), else the one that
+    // contains "camera"/"webcam", else silence (never the PC's own mic by accident).
+    const QString cam = m_cameraCombo->currentText().toLower();
+    static const QStringList ignore = { "usb", "microphone", "mikrofon", "device", "audio", "digital", "pnp", "the" };
+    QStringList tokens;
+    for (const QString& t : cam.split(QRegularExpression("[^a-z0-9]+"), Qt::SkipEmptyParts))
+        if (t.size() >= 4 && !ignore.contains(t)) tokens << t;
+
+    QByteArray byWord, byKind;
+    for (const QAudioDevice& d : QMediaDevices::audioInputs()) {
+        const QString name = d.description().toLower();
+        for (const QString& t : tokens)
+            if (name.contains(t) && byWord.isEmpty()) byWord = d.id();
+        if (byKind.isEmpty() && (name.contains("camera") || name.contains("webcam") || name.contains("kamera")))
+            byKind = d.id();
+    }
+    return !byWord.isEmpty() ? byWord : byKind;
+}
+
 TvTxConfig TvTxPanel::collectConfig() const
 {
     TvTxConfig c;
@@ -199,8 +301,11 @@ ITxSource* TvTxPanel::txSource()
 {
     // Called right before the TX engine starts: hand over the current settings
     m_enc->setConfig(collectConfig());
-    m_enc->setSource(m_fileRadio->isChecked() ? TvTxEncoder::Source::VideoFile : TvTxEncoder::Source::TestPattern,
-                     m_fileEdit->text(), m_loopCheck->isChecked());
+    TvTxEncoder::Source src = TvTxEncoder::Source::TestPattern;
+    if (m_fileRadio->isChecked())   src = TvTxEncoder::Source::VideoFile;
+    if (m_cameraRadio->isChecked()) src = TvTxEncoder::Source::Camera;
+    m_enc->setSource(src, m_fileEdit->text(), m_loopCheck->isChecked());
+    m_enc->setCamera(m_cameraCombo->currentData().toByteArray(), cameraAudioId());
     return m_enc;
 }
 
@@ -229,14 +334,18 @@ void TvTxPanel::updateStatus()
         emit statusText("TV TX idle");
         if (m_enc->lastError().isEmpty())
             m_statusLabel->setText(m_fileRadio->isChecked() && m_fileEdit->text().isEmpty()
-                                       ? "Choose a video file or use the test pattern" : "Press START to transmit");
+                                       ? "Choose a video file or use the test pattern"
+                                       : m_cameraRadio->isChecked() && !m_cameraRadio->isEnabled()
+                                             ? "No camera connected" : "Press START to transmit");
         else
             m_statusLabel->setText("Last error: " + m_enc->lastError());
         return;
     }
     const vid_t* v = m_enc->vid();
-    QString s = QString("TV TX | %1 | %2").arg(m_modeCombo->currentData().toString().toUpper(),
-                                                m_fileRadio->isChecked() ? QFileInfo(m_fileEdit->text()).fileName() : "test pattern");
+    QString srcName = "test pattern";
+    if (m_fileRadio->isChecked())   srcName = QFileInfo(m_fileEdit->text()).fileName();
+    if (m_cameraRadio->isChecked()) srcName = m_cameraCombo->currentText();
+    QString s = QString("TV TX | %1 | %2").arg(m_modeCombo->currentData().toString().toUpper(), srcName);
     if (v) s += QString(" | %1x%2 @ %3 MS/s").arg(v->av.width).arg(v->av.height).arg(v->sample_rate / 1e6, 0, 'f', 1);
     emit statusText(s);
     m_statusLabel->setText("Transmitting");
@@ -246,7 +355,9 @@ void TvTxPanel::saveSettings(QSettings& s)
 {
     s.beginGroup("tvTx");
     s.setValue("mode", m_modeCombo->currentData().toString());
-    s.setValue("source", m_fileRadio->isChecked() ? 1 : 0);
+    s.setValue("source", m_cameraRadio->isChecked() ? 2 : m_fileRadio->isChecked() ? 1 : 0);
+    s.setValue("camera", m_cameraCombo->currentData().toByteArray());
+    s.setValue("camAudio", m_camAudioCombo->currentData().toByteArray());
     s.setValue("file", m_fileEdit->text());
     s.setValue("loop", m_loopCheck->isChecked());
     s.setValue("filter", m_filterCheck->isChecked());
@@ -270,7 +381,16 @@ void TvTxPanel::loadSettings(QSettings& s)
     s.beginGroup("tvTx");
     const int mi = m_modeCombo->findData(s.value("mode", "b").toString());
     if (mi >= 0) m_modeCombo->setCurrentIndex(mi);
-    (s.value("source", 0).toInt() == 1 ? m_fileRadio : m_testRadio)->setChecked(true);
+    {
+        const int ci = m_cameraCombo->findData(s.value("camera").toByteArray());
+        if (ci >= 0) m_cameraCombo->setCurrentIndex(ci);
+        const int ai = m_camAudioCombo->findData(s.value("camAudio", QByteArray("auto")).toByteArray());
+        if (ai >= 0) m_camAudioCombo->setCurrentIndex(ai);
+    }
+    const int src = s.value("source", 0).toInt();
+    QRadioButton* r = src == 2 && m_cameraRadio->isEnabled() ? m_cameraRadio : src == 1 ? m_fileRadio : m_testRadio;
+    r->setChecked(true);
+    updateSourceWidgets();
     m_fileEdit->setText(s.value("file").toString());
     m_loopCheck->setChecked(s.value("loop", true).toBool());
     m_filterCheck->setChecked(s.value("filter", true).toBool());

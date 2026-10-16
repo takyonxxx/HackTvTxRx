@@ -109,6 +109,11 @@ bool TvTxEncoder::openSource()
 {
     if (m_source == Source::TestPattern) {
         if (av_test_open(&m_vid.av) != AV_OK) { m_error = "Test pattern source failed"; return false; }
+    } else if (m_source == Source::Camera) {
+        if (!m_qt->openCamera(&m_vid.av, m_cameraId, m_audioId)) {
+            m_error = m_qt->errorString().isEmpty() ? "Cannot open camera" : m_qt->errorString();
+            return false;
+        }
     } else {
         if (m_file.isEmpty()) { m_error = "No video file selected"; return false; }
         if (!m_qt->open(&m_vid.av, m_file, m_loop)) { m_error = "Cannot open video file"; return false; }
@@ -197,7 +202,7 @@ void TvTxEncoder::txStop()
 {
     if (m_sourceOpen) {
         av_close(&m_vid.av);
-        if (m_source == Source::VideoFile) m_qt->close();
+        if (m_source != Source::TestPattern) m_qt->close();
         m_sourceOpen = false;
     }
     if (m_inited) {

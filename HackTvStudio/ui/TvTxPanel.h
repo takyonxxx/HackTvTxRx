@@ -14,6 +14,7 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QTimer>
+#include <QMediaDevices>
 
 class VideoView;
 
@@ -44,6 +45,9 @@ private slots:
 private:
     void buildUi();
     void browseFile();
+    void refreshDevices();
+    QByteArray cameraAudioId() const;
+    void updateSourceWidgets();
     TvTxConfig collectConfig() const;
 
     TvTxEncoder* m_enc;
@@ -51,6 +55,10 @@ private:
     QComboBox* m_modeCombo = nullptr;
     QRadioButton* m_testRadio = nullptr;
     QRadioButton* m_fileRadio = nullptr;
+    QRadioButton* m_cameraRadio = nullptr;
+    QComboBox* m_cameraCombo = nullptr;
+    QComboBox* m_camAudioCombo = nullptr;
+    QMediaDevices* m_devices = nullptr;
     QLineEdit* m_fileEdit = nullptr;
     QPushButton* m_browseButton = nullptr;
     QCheckBox* m_loopCheck = nullptr;
