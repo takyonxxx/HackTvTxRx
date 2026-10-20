@@ -95,6 +95,7 @@ private:
 
     std::unique_ptr<HackRfDevice> m_device;
     State m_state = State::Idle;
+    bool  m_opening = false;   // start in progress (Android USB permission wait pumps events)
 
     uint64_t m_frequency  = 100000000ULL;
     uint32_t m_sampleRate = 16000000;

@@ -39,6 +39,8 @@ bool DeviceController::startRx(uint32_t sampleRate, uint64_t frequencyHz, const 
         emit errorOccurred("Device is already running");
         return false;
     }
+    if (m_opening) return false;          // START pressed again while opening
+    struct OpeningGuard { bool& f; OpeningGuard(bool& b) : f(b) { f = true; } ~OpeningGuard() { f = false; } } openingGuard(m_opening);
 
     m_sampleRate = sampleRate;
     m_frequency  = frequencyHz;
@@ -55,7 +57,11 @@ bool DeviceController::startRx(uint32_t sampleRate, uint64_t frequencyHz, const 
 
     if (!m_device->isReady()) {
         m_device.reset();
+        #ifdef __ANDROID__
+        emit errorOccurred("HackRF bulunamadi. HackRF'i USB-OTG kablosuyla takin ve izin istegini onaylayin.");
+#else
         emit errorOccurred("No HackRF device found. Check the USB connection and driver (WinUSB / libusbK).");
+#endif
         return false;
     }
 
@@ -89,6 +95,8 @@ bool DeviceController::startTx(uint32_t sampleRate, uint64_t frequencyHz, const 
         emit errorOccurred("Device is already running");
         return false;
     }
+    if (m_opening) return false;          // START pressed again while opening
+    struct OpeningGuard { bool& f; OpeningGuard(bool& b) : f(b) { f = true; } ~OpeningGuard() { f = false; } } openingGuard(m_opening);
 
     m_sampleRate = sampleRate;
     m_frequency  = frequencyHz;
@@ -102,7 +110,11 @@ bool DeviceController::startTx(uint32_t sampleRate, uint64_t frequencyHz, const 
     }
     if (!m_device->isReady()) {
         m_device.reset();
+        #ifdef __ANDROID__
+        emit errorOccurred("HackRF bulunamadi. HackRF'i USB-OTG kablosuyla takin ve izin istegini onaylayin.");
+#else
         emit errorOccurred("No HackRF device found. Check the USB connection and driver (WinUSB / libusbK).");
+#endif
         return false;
     }
 

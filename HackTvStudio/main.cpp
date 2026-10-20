@@ -1,5 +1,6 @@
 #include "ui/StudioWindow.h"
 #include <QApplication>
+#include <QFont>
 #include <QIcon>
 #include <QtWidgets/QStyleFactory>
 #include <QDebug>
@@ -21,6 +22,17 @@ int main(int argc, char *argv[])
     qDebug() << "Qt Version:" << qVersion();
 
     app.setStyle(QStyleFactory::create("Fusion"));
+
+#ifdef Q_OS_ANDROID
+    // Head-unit screens are short; shrink the global font so the dense SDR
+    // panels fit and leave more room for the spectrum / waterfall.
+    {
+        QFont f = app.font();
+        qreal ps = f.pointSizeF() > 0 ? f.pointSizeF() : 10.0;
+        f.setPointSizeF(ps * 0.85);
+        app.setFont(f);
+    }
+#endif
 
     // Setup palette with cyber blue-green accents for SDR tech look
     QPalette darkPalette;
@@ -119,6 +131,18 @@ int main(int argc, char *argv[])
         "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }"
     );
 
+#ifdef Q_OS_ANDROID
+    // Readable sizes on the head-unit screen: tab labels, group titles and the
+    // value boxes shrank with the scaled app font; pin them to explicit sizes.
+    app.setStyleSheet(app.styleSheet() +
+        "QTabBar::tab { font-size: 14px; font-weight: bold; padding: 7px 18px; min-width: 90px; }"
+        "QGroupBox { font-size: 13px; }"
+        "QGroupBox::title { font-size: 13px; font-weight: bold; }"
+        "QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit { font-size: 13px; min-height: 26px; }"
+        "QComboBox QAbstractItemView { font-size: 14px; }"
+        "QPushButton { font-size: 12px; }"
+        "QStatusBar, QStatusBar QLabel { font-size: 12px; }");
+#endif
     StudioWindow window;
     window.show();
 

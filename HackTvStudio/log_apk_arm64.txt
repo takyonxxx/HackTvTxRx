@@ -1,0 +1,69 @@
+﻿C:/Qt/Tools/mingw1310_64/bin/mingw32-make -f Makefile INSTALL_ROOT=C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build install
+mingw32-make[1]: Entering directory 'C:/Users/turka/Desktop/HackTvTxRx/HackTvStudio/android-build-arm64'
+C:\Qt\6.11.1\mingw_64\bin\qmake6.exe -install qinstall -exe libHackTvStudio_arm64-v8a.so C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\libs\arm64-v8a\libHackTvStudio_arm64-v8a.so
+mingw32-make[1]: Leaving directory 'C:/Users/turka/Desktop/HackTvTxRx/HackTvStudio/android-build-arm64'
+C:\Qt\6.11.1\mingw_64\bin\androiddeployqt.exe --input C:/Users/turka/Desktop/HackTvTxRx/HackTvStudio/android-build-arm64/android-HackTvStudio-deployment-settings.json --output C:/Users/turka/Desktop/HackTvTxRx/HackTvStudio/android-build-arm64/android-build --apk C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\HackTvStudio.apk
+Generating Android Package
+  Input file: C:/Users/turka/Desktop/HackTvTxRx/HackTvStudio/android-build-arm64/android-HackTvStudio-deployment-settings.json
+  Output directory: C:/Users/turka/Desktop/HackTvTxRx/HackTvStudio/android-build-arm64/android-build/
+  Application binary: HackTvStudio
+  Android build platform: android-36
+  Install to device: No
+Skipping createRCC
+Starting a Gradle Daemon, 1 incompatible and 8 stopped Daemons could not be reused, use --status for details
+> Task :preBuild UP-TO-DATE
+> Task :preDebugBuild UP-TO-DATE
+> Task :mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :generateDebugResources
+> Task :packageDebugResources
+> Task :processDebugNavigationResources
+> Task :generateDebugAssets UP-TO-DATE
+> Task :javaPreCompileDebug
+> Task :mergeDebugAssets
+> Task :compressDebugAssets
+> Task :parseDebugLocalResources
+> Task :checkDebugAarMetadata
+> Task :generateDebugRFile
+> Task :compileDebugNavigationResources
+> Task :compileDebugKotlin NO-SOURCE
+> Task :compileDebugJavaWithJavac
+> Task :mapDebugSourceSetPaths
+> Task :desugarDebugFileDependencies
+> Task :createDebugCompatibleScreenManifests
+> Task :extractDeepLinksDebug
+> Task :mergeDebugResources
+
+> Task :processDebugMainManifest
+package="com.hacktvstudio" found in source AndroidManifest.xml: C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\AndroidManifest.xml.
+Setting the namespace via the package attribute in the source AndroidManifest.xml is no longer supported, and the value is ignored.
+Recommendation: remove package="com.hacktvstudio" from the source AndroidManifest.xml: C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\AndroidManifest.xml.
+
+> Task :processDebugManifest
+> Task :processDebugJavaRes NO-SOURCE
+> Task :checkDebugDuplicateClasses
+> Task :mergeDebugJniLibFolders
+> Task :mergeLibDexDebug
+> Task :mergeDebugJavaResource
+> Task :validateSigningDebug
+> Task :writeDebugAppMetadata
+> Task :writeDebugSigningConfigVersions
+> Task :processDebugManifestForPackage
+> Task :mergeDebugNativeLibs
+
+> Task :stripDebugDebugSymbols
+Unable to strip the following libraries, packaging them as they are: libHackTvStudio_arm64-v8a.so, libQt6Concurrent_arm64-v8a.so, libQt6Core_arm64-v8a.so, libQt6FFmpegStub-crypto_arm64-v8a.so, libQt6FFmpegStub-ssl_arm64-v8a.so, libQt6Gui_arm64-v8a.so, libQt6Multimedia_arm64-v8a.so, libQt6Network_arm64-v8a.so, libQt6OpenGLWidgets_arm64-v8a.so, libQt6OpenGL_arm64-v8a.so, libQt6Svg_arm64-v8a.so, libQt6Widgets_arm64-v8a.so, libavcodec.so, libavformat.so, libavutil.so, libc++_shared.so, libplugins_iconengines_qsvgicon_arm64-v8a.so, libplugins_imageformats_qgif_arm64-v8a.so, libplugins_imageformats_qico_arm64-v8a.so, libplugins_imageformats_qjpeg_arm64-v8a.so, libplugins_imageformats_qsvg_arm64-v8a.so, libplugins_multimedia_androidmediaplugin_arm64-v8a.so, libplugins_multimedia_ffmpegmediaplugin_arm64-v8a.so, libplugins_networkinformation_qandroidnetworkinformation_arm64-v8a.so, libplugins_platforms_qminimal_arm64-v8a.so, libplugins_platforms_qoffscreen_arm64-v8a.so, libplugins_platforms_qtforandroid_arm64-v8a.so, libplugins_styles_qandroidstyle_arm64-v8a.so, libplugins_tls_qcertonlybackend_arm64-v8a.so, libplugins_tls_qopensslbackend_arm64-v8a.so, libswresample.so, libswscale.so. Run with --info option to learn more.
+
+> Task :processDebugResources
+> Task :dexBuilderDebug
+> Task :mergeDebugGlobalSynthetics
+> Task :mergeProjectDexDebug
+> Task :mergeExtDexDebug
+> Task :packageDebug
+> Task :createDebugApkListingFileRedirect
+> Task :assembleDebug
+
+BUILD SUCCESSFUL in 20s
+35 actionable tasks: 35 executed
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.3.1/userguide/configuration_cache_enabling.html
+Android package built successfully in 23.059 ms.
+  -- File: C:/Users/turka/Desktop/HackTvTxRx/HackTvStudio/android-build-arm64/android-build//build/outputs/apk/debug/android-build-debug.apk

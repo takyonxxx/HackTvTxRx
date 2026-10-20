@@ -1,0 +1,16 @@
+com.hacktvstudio-java-0 C:\Qt\6.11.1\android_arm64_v8a\src\android\java\res
+com.hacktvstudio-annotation-experimental-1.4.1-1 C:\Users\turka\.gradle\caches\9.3.1\transforms\54d527d3261a86b478da778dc90e8895\workspace\transformed\annotation-experimental-1.4.1\res
+com.hacktvstudio-profileinstaller-1.3.0-2 C:\Users\turka\.gradle\caches\9.3.1\transforms\6ab7f5f5006f8c4219f933de6cc03e9c\workspace\transformed\profileinstaller-1.3.0\res
+com.hacktvstudio-startup-runtime-1.1.1-3 C:\Users\turka\.gradle\caches\9.3.1\transforms\ae5a462dda10bb9dd0b61ae9839dc4ea\workspace\transformed\startup-runtime-1.1.1\res
+com.hacktvstudio-core-1.17.0-4 C:\Users\turka\.gradle\caches\9.3.1\transforms\b51518a94f09ee8117d69f5260ad0efa\workspace\transformed\core-1.17.0\res
+com.hacktvstudio-lifecycle-runtime-2.6.2-5 C:\Users\turka\.gradle\caches\9.3.1\transforms\c427603ff396130b95526f49faee7f43\workspace\transformed\lifecycle-runtime-2.6.2\res
+com.hacktvstudio-core-viewtree-1.0.0-6 C:\Users\turka\.gradle\caches\9.3.1\transforms\c6863405f41ad0b8d48bbc983153ec48\workspace\transformed\core-viewtree-1.0.0\res
+com.hacktvstudio-core-runtime-2.2.0-7 C:\Users\turka\.gradle\caches\9.3.1\transforms\cfa39b2b8b31a9533cc2108ebd977527\workspace\transformed\core-runtime-2.2.0\res
+com.hacktvstudio-tracing-1.2.0-8 C:\Users\turka\.gradle\caches\9.3.1\transforms\d195f88f2d1fb7d73c53d79477f10a04\workspace\transformed\tracing-1.2.0\res
+com.hacktvstudio-pngs-9 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\build\generated\res\pngs\debug
+com.hacktvstudio-updated_navigation_xml-10 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\build\generated\updated_navigation_xml\debug
+com.hacktvstudio-packageDebugResources-11 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\build\intermediates\incremental\debug\packageDebugResources\merged.dir
+com.hacktvstudio-packageDebugResources-12 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\build\intermediates\incremental\debug\packageDebugResources\stripped.dir
+com.hacktvstudio-debug-13 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\build\intermediates\merged_res\debug\mergeDebugResources
+com.hacktvstudio-android-build-14 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\res
+com.hacktvstudio-debug-15 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\src\debug\res

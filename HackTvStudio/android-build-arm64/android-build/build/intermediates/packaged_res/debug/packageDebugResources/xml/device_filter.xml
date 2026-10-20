@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- HackRF One / Jawbreaker / rad1o : VID 0x1d50 (7504) -->
+    <usb-device vendor-id="7504" product-id="24713" />
+    <usb-device vendor-id="7504" product-id="24712" />
+    <usb-device vendor-id="7504" product-id="24651" />
+    <usb-device vendor-id="7504" product-id="52245" />
+</resources>

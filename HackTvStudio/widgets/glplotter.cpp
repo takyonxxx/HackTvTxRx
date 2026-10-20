@@ -60,6 +60,12 @@ static inline quint64 time_ms(void)
 CPlotter::CPlotter(QWidget *parent)
     : QOpenGLWidget(parent)
 {
+#ifdef Q_OS_ANDROID
+    // Axis / marker text: the scaled Android app font makes the default QFont
+    // too small to read on the head unit; pin it like the band label (12 px).
+    m_Font.setPixelSize(12);
+#endif
+
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);

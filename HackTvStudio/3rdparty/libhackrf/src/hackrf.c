@@ -509,6 +509,10 @@ static int set_hackrf_configuration(libusb_device_handle* usb_device, int config
 extern "C" {
 #endif
 
+#ifdef __ANDROID__
+static int hackrf_open_setup(libusb_device_handle* usb_device, hackrf_device** device);
+#endif
+
 int ADDCALL hackrf_init(void)
 {
 	int libusb_error;
@@ -516,6 +520,12 @@ int ADDCALL hackrf_init(void)
 		return HACKRF_SUCCESS;
 	}
 
+#ifdef __ANDROID__
+	/* Android apps cannot scan usbfs directly: the device file descriptor is
+	 * obtained from the Java UsbManager and handed to libusb through
+	 * libusb_wrap_sys_device() (see hackrf_open_wrapped). Disable discovery. */
+	libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
+#endif
 	libusb_error = libusb_init(&g_libusb_context);
 	if (libusb_error != 0) {
 		last_libusb_error = libusb_error;
@@ -524,6 +534,31 @@ int ADDCALL hackrf_init(void)
 		return HACKRF_SUCCESS;
 	}
 }
+
+#ifdef __ANDROID__
+/* Open a HackRF from an already-opened USB file descriptor (Android: the fd
+ * comes from UsbManager.openDevice(...).getFileDescriptor()). */
+int ADDCALL hackrf_open_wrapped(int fd, hackrf_device** device)
+{
+	libusb_device_handle* usb_device = NULL;
+	int result;
+	if (device == NULL) {
+		return HACKRF_ERROR_INVALID_PARAM;
+	}
+	if (g_libusb_context == NULL) {
+		result = hackrf_init();
+		if (result != HACKRF_SUCCESS) {
+			return result;
+		}
+	}
+	result = libusb_wrap_sys_device(g_libusb_context, (intptr_t) fd, &usb_device);
+	if (result != 0 || usb_device == NULL) {
+		last_libusb_error = result;
+		return HACKRF_ERROR_LIBUSB;
+	}
+	return hackrf_open_setup(usb_device, device);
+}
+#endif
 
 int ADDCALL hackrf_exit(void)
 {

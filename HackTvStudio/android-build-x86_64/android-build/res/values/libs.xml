@@ -1,0 +1,35 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <!-- DO NOT EDIT THIS: This file is populated automatically by the deployment tool. -->
+
+    <array name="bundled_libs">
+    </array>
+
+    <array name="qt_libs">
+        <item>x86_64;c++_shared</item>
+        <item>x86_64;Qt6Core_x86_64</item>
+        <item>x86_64;Qt6Gui_x86_64</item>
+        <item>x86_64;Qt6Concurrent_x86_64</item>
+        <item>x86_64;Qt6Network_x86_64</item>
+        <item>x86_64;Qt6Multimedia_x86_64</item>
+        <item>x86_64;Qt6OpenGL_x86_64</item>
+        <item>x86_64;Qt6Widgets_x86_64</item>
+        <item>x86_64;Qt6OpenGLWidgets_x86_64</item>
+        <item>x86_64;Qt6Svg_x86_64</item>
+        <item>x86_64;avutil</item>
+        <item>x86_64;swresample</item>
+        <item>x86_64;avcodec</item>
+        <item>x86_64;Qt6FFmpegStub-crypto_x86_64</item>
+        <item>x86_64;Qt6FFmpegStub-ssl_x86_64</item>
+        <item>x86_64;avformat</item>
+        <item>x86_64;swscale</item>
+    </array>
+
+    <array name="load_local_libs">
+        <item>x86_64;libplugins_platforms_qtforandroid_x86_64.so:libplugins_multimedia_ffmpegmediaplugin_x86_64.so:libplugins_multimedia_androidmediaplugin_x86_64.so</item>
+    </array>
+
+    <string name="use_local_qt_libs">1</string>
+    <string name="bundle_local_qt_libs">1</string>
+    <string name="system_libs_prefix"></string>
+</resources>

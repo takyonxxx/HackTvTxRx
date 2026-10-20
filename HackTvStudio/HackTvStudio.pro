@@ -104,7 +104,34 @@ macx {
     LIBS += -lobjc
 }
 
-linux {
+android {
+    # Android USB-host port: libusb uses its Linux usbfs backend, but the device
+    # fd is obtained from the Java UsbManager (HackRfUsb.java) and wrapped with
+    # libusb_wrap_sys_device (hackrf_open_wrapped) because an unprivileged app
+    # cannot scan usbfs. See hackrf/AndroidUsb.cpp.
+    LIBUSB_DIR    = $$PWD/3rdparty/libusb
+    LIBHACKRF_DIR = $$PWD/3rdparty/libhackrf
+
+    INCLUDEPATH += $$LIBUSB_DIR
+    INCLUDEPATH += $$LIBHACKRF_DIR/include
+    INCLUDEPATH += $$LIBHACKRF_DIR/src
+    INCLUDEPATH += $$PWD/hackrf
+
+    SOURCES +=         $$LIBUSB_DIR/core.c         $$LIBUSB_DIR/descriptor.c         $$LIBUSB_DIR/hotplug.c         $$LIBUSB_DIR/io.c         $$LIBUSB_DIR/strerror.c         $$LIBUSB_DIR/sync.c         $$LIBUSB_DIR/os/events_posix.c         $$LIBUSB_DIR/os/threads_posix.c         $$LIBUSB_DIR/os/linux_usbfs.c         $$LIBUSB_DIR/os/linux_netlink.c         $$LIBHACKRF_DIR/src/hackrf.c         $$PWD/hackrf/AndroidUsb.cpp
+
+    HEADERS +=         $$LIBUSB_DIR/config.h         $$LIBUSB_DIR/libusb.h         $$LIBUSB_DIR/libusbi.h         $$LIBHACKRF_DIR/src/hackrf.h         $$PWD/hackrf/AndroidUsb.h
+
+    QMAKE_CFLAGS += -std=gnu11 -w -D_GNU_SOURCE
+    LIBS += -llog
+
+    ANDROID_PACKAGE_SOURCE_DIR = $$PWD/android
+    ANDROID_MIN_SDK_VERSION = 24
+    ANDROID_TARGET_SDK_VERSION = 34
+    ANDROID_VERSION_NAME = 1.0
+    ANDROID_VERSION_CODE = 1
+}
+
+linux:!android {
     # Same vendored libusb + libhackrf, usbfs backend with netlink hotplug
     # (no libudev). Nothing beyond libc / pthread is required.
     LIBUSB_DIR    = $$PWD/3rdparty/libusb

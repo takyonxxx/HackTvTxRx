@@ -110,6 +110,12 @@ void StudioWindow::buildUi()
     QVBoxLayout* root = new QVBoxLayout(central);
     root->setSpacing(6);
     root->setContentsMargins(8, 8, 8, 4);
+#ifdef Q_OS_ANDROID
+    // Head-unit / phone screens are short: tighten everything vertically so the
+    // top strip + spectrum + mode panel all fit without clipping.
+    root->setSpacing(3);
+    root->setContentsMargins(4, 2, 4, 2);
+#endif
 
     root->addWidget(buildTopStrip());
 
@@ -133,7 +139,11 @@ void StudioWindow::buildUi()
     m_plotter->setClickResolution(1000);
     m_plotter->setFftPlotColor(QColor("#CEECF5"));
     m_plotter->setFftFill(true);
+#ifdef Q_OS_ANDROID
+    m_plotter->setMinimumHeight(140);
+#else
     m_plotter->setMinimumHeight(180);
+#endif
     m_plotter->setMinimumWidth(320);
     m_plotter->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     connect(m_plotter, &CPlotter::newDemodFreq, this, &StudioWindow::onPlotterDemodFreq);
@@ -208,8 +218,13 @@ QWidget* StudioWindow::buildTopStrip()
     m_freqCtrl = new CFreqCtrl(tuneGroup);
     m_freqCtrl->setup(0, 0, static_cast<qint64>(BandPlan::HACKRF_MAX_HZ), 1, FCTL_UNIT_MHZ);
     m_freqCtrl->setFrequency(static_cast<qint64>(m_frequency));
+#ifdef Q_OS_ANDROID
+    m_freqCtrl->setMinimumHeight(46);
+    m_freqCtrl->setMaximumHeight(56);
+#else
     m_freqCtrl->setMinimumHeight(64);
     m_freqCtrl->setMaximumHeight(80);
+#endif
     m_freqCtrl->setMinimumWidth(420);
     connect(m_freqCtrl, &CFreqCtrl::newFrequency, this, &StudioWindow::onFrequencyEdited);
     tl->addWidget(m_freqCtrl);
@@ -233,8 +248,13 @@ QWidget* StudioWindow::buildTopStrip()
     QVBoxLayout* ml = new QVBoxLayout(meterGroup);
     ml->setSpacing(2);
     m_meter = new CMeter(meterGroup);
+#ifdef Q_OS_ANDROID
+    m_meter->setMinimumHeight(40);
+    m_meter->setMaximumHeight(56);
+#else
     m_meter->setMinimumHeight(58);
     m_meter->setMaximumHeight(80);
+#endif
     m_meter->setMinimumWidth(220);
     ml->addWidget(m_meter);
     QHBoxLayout* mi = new QHBoxLayout();
@@ -258,9 +278,16 @@ QWidget* StudioWindow::buildDeviceGroup()
     QGridLayout* grid = new QGridLayout(g);
     grid->setHorizontalSpacing(6);
     grid->setVerticalSpacing(3);
+#ifdef Q_OS_ANDROID
+    grid->setVerticalSpacing(1);
+    grid->setContentsMargins(6, 2, 6, 2);
+#endif
 
     m_startButton = new QPushButton("START", g);
     m_startButton->setMinimumHeight(40);
+#ifdef Q_OS_ANDROID
+    m_startButton->setMinimumHeight(30);
+#endif
     m_startButton->setStyleSheet("QPushButton { background: #1f7a3f; color: white; font-size: 12pt; }");
     connect(m_startButton, &QPushButton::clicked, this, &StudioWindow::onStartStop);
     grid->addWidget(m_startButton, 0, 0, 2, 2);          // left block: START spans label + slider columns
@@ -286,6 +313,9 @@ QWidget* StudioWindow::buildDeviceGroup()
     connect(m_recButton, &QPushButton::clicked, this, &StudioWindow::onRecordIq);
     grid->addWidget(m_recButton, 1, 4, 1, 2);
     m_recButton->setMinimumHeight(m_sampleRateCombo->sizeHint().height());
+#ifdef Q_OS_ANDROID
+    m_recButton->hide();   // IQ-to-file capture is a desktop/debug feature
+#endif
 
     auto gainRow = [&](int row, int col, const QString& name, QSlider*& slider, QSpinBox*& spin,
                        int min, int max, int step, int value) {
@@ -380,9 +410,17 @@ void StudioWindow::placeSpectrumOnTop(const QByteArray& state)
     if (!state.isEmpty()) {
         m_splitter->restoreState(state);
     } else {
+#ifdef Q_OS_ANDROID
+        // Spectrum/waterfall gets ~45%% so the radio spectrum is usable; the
+        // smaller Android font keeps the mode panel readable in the rest.
+        m_splitter->setStretchFactor(0, 1);
+        m_splitter->setStretchFactor(1, 1);
+        m_splitter->setSizes({ 320, 380 });
+#else
         m_splitter->setStretchFactor(0, 1);
         m_splitter->setStretchFactor(1, 2);
         m_splitter->setSizes({ 280, 620 });
+#endif
     }
 }
 

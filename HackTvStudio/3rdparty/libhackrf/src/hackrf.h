@@ -1248,6 +1248,14 @@ extern ADDAPI int ADDCALL hackrf_open_by_serial(
 	const char* const desired_serial_number,
 	hackrf_device** device);
 
+#ifdef __ANDROID__
+/**
+ * Open a HackRF from a USB file descriptor obtained from the Android
+ * UsbManager (libusb_wrap_sys_device). Android only.
+ */
+extern ADDAPI int ADDCALL hackrf_open_wrapped(int fd, hackrf_device** device);
+#endif
+
 /**
  * Close a previously opened device
  * @param[in] device device to close

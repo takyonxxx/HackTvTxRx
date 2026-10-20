@@ -1,4 +1,9 @@
 #include "hackrfdevice.h"
+#ifdef __ANDROID__
+#include "AndroidUsb.h"
+#include <QCoreApplication>
+#include <QEventLoop>
+#endif
 #include "modulation.h"
 #include <iostream>
 #include "constants.h"
@@ -12,6 +17,33 @@ std::string removeZerosFromBeginning(const std::string &string) {
         i++;
     }
     return string.substr(i);
+}
+
+// Opens the HackRF handle. On Android the USB fd comes from the Java
+// UsbManager (permission dialog) and is wrapped by libusb; elsewhere libusb
+// enumerates and opens by serial.
+static int hts_open_hackrf(const std::vector<std::string>& serials, hackrf_device** dev)
+{
+#ifdef __ANDROID__
+    (void) serials;
+    int rc = AndroidUsb::requestOpen();
+    if (rc < 0) return HACKRF_ERROR_NOT_FOUND;
+    int fd = AndroidUsb::fileDescriptor();
+    // Wait up to ~15 s for the user to accept the one-time permission dialog.
+    // start() runs on the GUI thread, so we MUST pump the Qt event loop here or
+    // the USB-permission broadcast (delivered on the same looper) never arrives
+    // and the fd would stay pending forever -> first START always "not found".
+    for (int i = 0; i < 300 && fd == -2; ++i) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 40);
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        fd = AndroidUsb::fileDescriptor();
+    }
+    if (fd < 0) return HACKRF_ERROR_NOT_FOUND;
+    return hackrf_open_wrapped(fd, dev);
+#else
+    if (serials.empty()) return HACKRF_ERROR_NOT_FOUND;
+    return hackrf_open_by_serial(serials[0].c_str(), dev);
+#endif
 }
 
 HackRfDevice::HackRfDevice(QObject *parent):
@@ -130,6 +162,15 @@ std::vector<std::string> HackRfDevice::listDevices()
     device_serials.clear();
     device_board_ids.clear();
 
+#ifdef __ANDROID__
+    if (AndroidUsb::isPresent()) {
+        std::string name = AndroidUsb::deviceName().toStdString();
+        if (name.empty()) name = "HackRF";
+        device_serials.push_back(name);
+        device_board_ids.push_back(USB_BOARD_ID_HACKRF_ONE);
+    }
+    return device_serials;
+#else
     auto list = hackrf_device_list();
     if (!list) {
         std::cerr << "Cannot read HackRF devices list" << std::endl;
@@ -147,6 +188,7 @@ std::vector<std::string> HackRfDevice::listDevices()
 
     hackrf_device_list_free(list);
     return device_serials;
+#endif
 }
 
 int HackRfDevice::stop()
@@ -296,7 +338,7 @@ int HackRfDevice::hardReset()
                 return RF_ERROR;
             }
 
-            int r = hackrf_open_by_serial(device_serials[0].c_str(), &h_device);
+            int r = hts_open_hackrf(device_serials, &h_device);
             if (r != HACKRF_SUCCESS || !h_device) {
                 fprintf(stderr, "hardReset: hackrf_open() failed: %s (%d)\n",
                         hackrf_error_name(static_cast<hackrf_error>(r)), r);
@@ -404,7 +446,7 @@ int HackRfDevice::start(rf_mode _mode)
             fprintf(stderr, "Opening HackRF device: %s\n", device_serials[0].c_str());
             fflush(stderr);
 
-            int r = hackrf_open_by_serial(device_serials[0].c_str(), &h_device);
+            int r = hts_open_hackrf(device_serials, &h_device);
             if (r != HACKRF_SUCCESS) {
                 fprintf(stderr, "hackrf_open() failed: %s (%d)\n",
                         hackrf_error_name(static_cast<hackrf_error>(r)), r);
