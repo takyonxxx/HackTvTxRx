@@ -1,3 +1,20 @@
+# ---- Qt / C++ / Android build artifacts (HackTvStudio) ----
+# qmake/androiddeployqt/gradle her derlemede yeniden uretir
+HackTvStudio/android-build-*/
+HackTvStudio/log_*.txt
+HackTvStudio/.qmake.stash
+*.obj
+*.o
+moc_*.cpp
+moc_predefs.h
+qrc_*.cpp
+ui_*.h
+Makefile.Debug
+Makefile.Release
+
+# Derlenmis cikti APK'lari (istenirse elle eklenir)
+# HackTvStudio-*.apk
+
 ### AL ###
 #Template for AL projects for Dynamics 365 Business Central
 #launch.json folder

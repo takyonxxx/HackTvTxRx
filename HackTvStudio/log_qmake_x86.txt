@@ -1,1 +1,0 @@
-﻿Info: creating stash file C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-x86\.qmake.stash
