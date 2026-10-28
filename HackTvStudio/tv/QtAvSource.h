@@ -6,7 +6,9 @@
 #include <QMediaPlayer>
 #include <QMediaCaptureSession>
 #include <QVideoSink>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
 #include <QAudioBufferOutput>
+#endif
 #include <QAudioFormat>
 #include <QTimer>
 #include <atomic>
@@ -23,6 +25,8 @@ extern "C" {
 class QCamera;
 class QAudioSource;
 class QIODevice;
+class QAudioDecoder;
+class QAudioBuffer;
 
 /*
  * Live A/V source for the hacktv encoder, built on Qt Multimedia instead of
@@ -91,13 +95,25 @@ private:
     bool prepare(av_t* av);
     void onVideoFrame(const QVideoFrame& frame);
     void onAudioBuffer(const QAudioBuffer& buffer);
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+    void onDecoderBuffer();                     // Qt 6.5 file-audio path
+#endif
     void onMicReadyRead();
     bool startMicrophone(const QByteArray& audioId);
     void stopMicrophone();
 
     QMediaPlayer m_player;
     QVideoSink m_sink;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
     QAudioBufferOutput* m_audioOut = nullptr;   // format is fixed at construction
+#else
+    // Qt 6.5 has no audio tap on QMediaPlayer, so the file's audio is decoded
+    // separately into one PCM buffer and replayed in step with the video clock.
+    QAudioDecoder* m_decoder = nullptr;
+    std::vector<int16_t> m_fileAudioPcm;        // whole-file PCM, 32 kHz stereo int16 interleaved
+    std::mutex m_fileAudioMutex;
+    std::atomic<qint64> m_fileCursor{0};        // next output frame; resynced to player position()
+#endif
     QAudioFormat m_audioFormat;                 // 32 kHz stereo int16 (what hacktv wants)
 
     // Camera path

@@ -1,0 +1,11 @@
+﻿Generating Android Package
+  Input file: C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-HackTvStudio-deployment-settings.json
+  Output directory: C:/Users/turka/Desktop/HackTvTxRx/HackTvStudio/android-build-armv7/android-build/
+  Application binary: HackTvStudio
+  Android build platform: android-36
+  Install to device: No
+Skipping C:/Qt/6.5.3/android_armv7/lib/libQt6MultimediaQuick_armeabi-v7a.so due to unmet dependencies: lib/libQt6QmlModels_armeabi-v7a.so,lib/libQt6Qml_armeabi-v7a.so,lib/libQt6Quick_armeabi-v7a.so
+Skipping lib/libQt6MultimediaQuick_armeabi-v7a.so due to unmet dependencies: lib/libQt6QmlModels_armeabi-v7a.so,lib/libQt6Qml_armeabi-v7a.so,lib/libQt6Quick_armeabi-v7a.so
+Skipping createRCC
+Android package built successfully in 1.392 ms.
+  -- File: C:/Users/turka/Desktop/HackTvTxRx/HackTvStudio/android-build-armv7/android-build//build/outputs/apk/android-build-debug.apk

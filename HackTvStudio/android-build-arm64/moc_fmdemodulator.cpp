@@ -1,7 +1,7 @@
 /****************************************************************************
 ** Meta object code from reading C++ file 'fmdemodulator.h'
 **
-** Created by: The Qt Meta Object Compiler version 69 (Qt 6.11.1)
+** Created by: The Qt Meta Object Compiler version 68 (Qt 6.5.3)
 **
 ** WARNING! All changes made in this file will be lost!
 *****************************************************************************/
@@ -9,16 +9,19 @@
 #include "../dsp/fmdemodulator.h"
 #include <QtCore/qmetatype.h>
 
+#if __has_include(<QtCore/qtmochelpers.h>)
 #include <QtCore/qtmochelpers.h>
+#else
+QT_BEGIN_MOC_NAMESPACE
+#endif
+
 
 #include <memory>
 
-
-#include <QtCore/qxptype_traits.h>
 #if !defined(Q_MOC_OUTPUT_REVISION)
 #error "The header file 'fmdemodulator.h' doesn't include <QObject>."
-#elif Q_MOC_OUTPUT_REVISION != 69
-#error "This file was generated using the moc from 6.11.1. It"
+#elif Q_MOC_OUTPUT_REVISION != 68
+#error "This file was generated using the moc from 6.5.3. It"
 #error "cannot be used with the include files from this version of Qt."
 #error "(The moc has changed too much.)"
 #endif
@@ -31,54 +34,97 @@ QT_WARNING_PUSH
 QT_WARNING_DISABLE_DEPRECATED
 QT_WARNING_DISABLE_GCC("-Wuseless-cast")
 namespace {
-struct qt_meta_tag_ZN13FMDemodulatorE_t {};
+
+#ifdef QT_MOC_HAS_STRINGDATA
+struct qt_meta_stringdata_CLASSFMDemodulatorENDCLASS_t {};
+static constexpr auto qt_meta_stringdata_CLASSFMDemodulatorENDCLASS = QtMocHelpers::stringData(
+    "FMDemodulator",
+    "stereoStatusChanged",
+    "",
+    "stereo"
+);
+#else  // !QT_MOC_HAS_STRING_DATA
+struct qt_meta_stringdata_CLASSFMDemodulatorENDCLASS_t {
+    uint offsetsAndSizes[8];
+    char stringdata0[14];
+    char stringdata1[20];
+    char stringdata2[1];
+    char stringdata3[7];
+};
+#define QT_MOC_LITERAL(ofs, len) \
+    uint(sizeof(qt_meta_stringdata_CLASSFMDemodulatorENDCLASS_t::offsetsAndSizes) + ofs), len 
+Q_CONSTINIT static const qt_meta_stringdata_CLASSFMDemodulatorENDCLASS_t qt_meta_stringdata_CLASSFMDemodulatorENDCLASS = {
+    {
+        QT_MOC_LITERAL(0, 13),  // "FMDemodulator"
+        QT_MOC_LITERAL(14, 19),  // "stereoStatusChanged"
+        QT_MOC_LITERAL(34, 0),  // ""
+        QT_MOC_LITERAL(35, 6)   // "stereo"
+    },
+    "FMDemodulator",
+    "stereoStatusChanged",
+    "",
+    "stereo"
+};
+#undef QT_MOC_LITERAL
+#endif // !QT_MOC_HAS_STRING_DATA
 } // unnamed namespace
 
-template <> constexpr inline auto FMDemodulator::qt_create_metaobjectdata<qt_meta_tag_ZN13FMDemodulatorE_t>()
-{
-    namespace QMC = QtMocConstants;
-    QtMocHelpers::StringRefStorage qt_stringData {
-        "FMDemodulator",
-        "stereoStatusChanged",
-        "",
-        "stereo"
-    };
+Q_CONSTINIT static const uint qt_meta_data_CLASSFMDemodulatorENDCLASS[] = {
 
-    QtMocHelpers::UintData qt_methods {
-        // Signal 'stereoStatusChanged'
-        QtMocHelpers::SignalData<void(bool)>(1, 2, QMC::AccessPublic, QMetaType::Void, {{
-            { QMetaType::Bool, 3 },
-        }}),
-    };
-    QtMocHelpers::UintData qt_properties {
-    };
-    QtMocHelpers::UintData qt_enums {
-    };
-    return QtMocHelpers::metaObjectData<FMDemodulator, qt_meta_tag_ZN13FMDemodulatorE_t>(QMC::MetaObjectFlag{}, qt_stringData,
-            qt_methods, qt_properties, qt_enums);
-}
+ // content:
+      11,       // revision
+       0,       // classname
+       0,    0, // classinfo
+       1,   14, // methods
+       0,    0, // properties
+       0,    0, // enums/sets
+       0,    0, // constructors
+       0,       // flags
+       1,       // signalCount
+
+ // signals: name, argc, parameters, tag, flags, initial metatype offsets
+       1,    1,   20,    2, 0x06,    1 /* Public */,
+
+ // signals: parameters
+    QMetaType::Void, QMetaType::Bool,    3,
+
+       0        // eod
+};
+
 Q_CONSTINIT const QMetaObject FMDemodulator::staticMetaObject = { {
     QMetaObject::SuperData::link<QObject::staticMetaObject>(),
-    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN13FMDemodulatorE_t>.stringdata,
-    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN13FMDemodulatorE_t>.data,
+    qt_meta_stringdata_CLASSFMDemodulatorENDCLASS.offsetsAndSizes,
+    qt_meta_data_CLASSFMDemodulatorENDCLASS,
     qt_static_metacall,
     nullptr,
-    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN13FMDemodulatorE_t>.metaTypes,
+    qt_incomplete_metaTypeArray<qt_meta_stringdata_CLASSFMDemodulatorENDCLASS_t,
+        // Q_OBJECT / Q_GADGET
+        QtPrivate::TypeAndForceComplete<FMDemodulator, std::true_type>,
+        // method 'stereoStatusChanged'
+        QtPrivate::TypeAndForceComplete<void, std::false_type>,
+        QtPrivate::TypeAndForceComplete<bool, std::false_type>
+    >,
     nullptr
 } };
 
 void FMDemodulator::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
 {
-    auto *_t = static_cast<FMDemodulator *>(_o);
     if (_c == QMetaObject::InvokeMetaMethod) {
+        auto *_t = static_cast<FMDemodulator *>(_o);
+        (void)_t;
         switch (_id) {
-        case 0: _t->stereoStatusChanged((*reinterpret_cast<std::add_pointer_t<bool>>(_a[1]))); break;
+        case 0: _t->stereoStatusChanged((*reinterpret_cast< std::add_pointer_t<bool>>(_a[1]))); break;
         default: ;
         }
-    }
-    if (_c == QMetaObject::IndexOfMethod) {
-        if (QtMocHelpers::indexOfMethod<void (FMDemodulator::*)(bool )>(_a, &FMDemodulator::stereoStatusChanged, 0))
-            return;
+    } else if (_c == QMetaObject::IndexOfMethod) {
+        int *result = reinterpret_cast<int *>(_a[0]);
+        {
+            using _t = void (FMDemodulator::*)(bool );
+            if (_t _q_method = &FMDemodulator::stereoStatusChanged; *reinterpret_cast<_t *>(_a[1]) == _q_method) {
+                *result = 0;
+                return;
+            }
+        }
     }
 }
 
@@ -90,7 +136,7 @@ const QMetaObject *FMDemodulator::metaObject() const
 void *FMDemodulator::qt_metacast(const char *_clname)
 {
     if (!_clname) return nullptr;
-    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN13FMDemodulatorE_t>.strings))
+    if (!strcmp(_clname, qt_meta_stringdata_CLASSFMDemodulatorENDCLASS.stringdata0))
         return static_cast<void*>(this);
     return QObject::qt_metacast(_clname);
 }
@@ -104,8 +150,7 @@ int FMDemodulator::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
         if (_id < 1)
             qt_static_metacall(this, _c, _id, _a);
         _id -= 1;
-    }
-    if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
+    } else if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
         if (_id < 1)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
         _id -= 1;
@@ -116,6 +161,7 @@ int FMDemodulator::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
 // SIGNAL 0
 void FMDemodulator::stereoStatusChanged(bool _t1)
 {
-    QMetaObject::activate<void>(this, &staticMetaObject, 0, nullptr, _t1);
+    void *_a[] = { nullptr, const_cast<void*>(reinterpret_cast<const void*>(std::addressof(_t1))) };
+    QMetaObject::activate(this, &staticMetaObject, 0, _a);
 }
 QT_WARNING_POP

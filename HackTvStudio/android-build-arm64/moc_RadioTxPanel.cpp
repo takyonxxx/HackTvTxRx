@@ -1,7 +1,7 @@
 /****************************************************************************
 ** Meta object code from reading C++ file 'RadioTxPanel.h'
 **
-** Created by: The Qt Meta Object Compiler version 69 (Qt 6.11.1)
+** Created by: The Qt Meta Object Compiler version 68 (Qt 6.5.3)
 **
 ** WARNING! All changes made in this file will be lost!
 *****************************************************************************/
@@ -10,16 +10,19 @@
 #include <QtGui/qtextcursor.h>
 #include <QtCore/qmetatype.h>
 
+#if __has_include(<QtCore/qtmochelpers.h>)
 #include <QtCore/qtmochelpers.h>
+#else
+QT_BEGIN_MOC_NAMESPACE
+#endif
+
 
 #include <memory>
 
-
-#include <QtCore/qxptype_traits.h>
 #if !defined(Q_MOC_OUTPUT_REVISION)
 #error "The header file 'RadioTxPanel.h' doesn't include <QObject>."
-#elif Q_MOC_OUTPUT_REVISION != 69
-#error "This file was generated using the moc from 6.11.1. It"
+#elif Q_MOC_OUTPUT_REVISION != 68
+#error "This file was generated using the moc from 6.5.3. It"
 #error "cannot be used with the include files from this version of Qt."
 #error "(The moc has changed too much.)"
 #endif
@@ -32,43 +35,79 @@ QT_WARNING_PUSH
 QT_WARNING_DISABLE_DEPRECATED
 QT_WARNING_DISABLE_GCC("-Wuseless-cast")
 namespace {
-struct qt_meta_tag_ZN12RadioTxPanelE_t {};
+
+#ifdef QT_MOC_HAS_STRINGDATA
+struct qt_meta_stringdata_CLASSRadioTxPanelENDCLASS_t {};
+static constexpr auto qt_meta_stringdata_CLASSRadioTxPanelENDCLASS = QtMocHelpers::stringData(
+    "RadioTxPanel",
+    "updateStatus",
+    ""
+);
+#else  // !QT_MOC_HAS_STRING_DATA
+struct qt_meta_stringdata_CLASSRadioTxPanelENDCLASS_t {
+    uint offsetsAndSizes[6];
+    char stringdata0[13];
+    char stringdata1[13];
+    char stringdata2[1];
+};
+#define QT_MOC_LITERAL(ofs, len) \
+    uint(sizeof(qt_meta_stringdata_CLASSRadioTxPanelENDCLASS_t::offsetsAndSizes) + ofs), len 
+Q_CONSTINIT static const qt_meta_stringdata_CLASSRadioTxPanelENDCLASS_t qt_meta_stringdata_CLASSRadioTxPanelENDCLASS = {
+    {
+        QT_MOC_LITERAL(0, 12),  // "RadioTxPanel"
+        QT_MOC_LITERAL(13, 12),  // "updateStatus"
+        QT_MOC_LITERAL(26, 0)   // ""
+    },
+    "RadioTxPanel",
+    "updateStatus",
+    ""
+};
+#undef QT_MOC_LITERAL
+#endif // !QT_MOC_HAS_STRING_DATA
 } // unnamed namespace
 
-template <> constexpr inline auto RadioTxPanel::qt_create_metaobjectdata<qt_meta_tag_ZN12RadioTxPanelE_t>()
-{
-    namespace QMC = QtMocConstants;
-    QtMocHelpers::StringRefStorage qt_stringData {
-        "RadioTxPanel",
-        "updateStatus",
-        ""
-    };
+Q_CONSTINIT static const uint qt_meta_data_CLASSRadioTxPanelENDCLASS[] = {
 
-    QtMocHelpers::UintData qt_methods {
-        // Slot 'updateStatus'
-        QtMocHelpers::SlotData<void()>(1, 2, QMC::AccessPrivate, QMetaType::Void),
-    };
-    QtMocHelpers::UintData qt_properties {
-    };
-    QtMocHelpers::UintData qt_enums {
-    };
-    return QtMocHelpers::metaObjectData<RadioTxPanel, qt_meta_tag_ZN12RadioTxPanelE_t>(QMC::MetaObjectFlag{}, qt_stringData,
-            qt_methods, qt_properties, qt_enums);
-}
+ // content:
+      11,       // revision
+       0,       // classname
+       0,    0, // classinfo
+       1,   14, // methods
+       0,    0, // properties
+       0,    0, // enums/sets
+       0,    0, // constructors
+       0,       // flags
+       0,       // signalCount
+
+ // slots: name, argc, parameters, tag, flags, initial metatype offsets
+       1,    0,   20,    2, 0x08,    1 /* Private */,
+
+ // slots: parameters
+    QMetaType::Void,
+
+       0        // eod
+};
+
 Q_CONSTINIT const QMetaObject RadioTxPanel::staticMetaObject = { {
     QMetaObject::SuperData::link<ModePanel::staticMetaObject>(),
-    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN12RadioTxPanelE_t>.stringdata,
-    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN12RadioTxPanelE_t>.data,
+    qt_meta_stringdata_CLASSRadioTxPanelENDCLASS.offsetsAndSizes,
+    qt_meta_data_CLASSRadioTxPanelENDCLASS,
     qt_static_metacall,
     nullptr,
-    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN12RadioTxPanelE_t>.metaTypes,
+    qt_incomplete_metaTypeArray<qt_meta_stringdata_CLASSRadioTxPanelENDCLASS_t,
+        // Q_OBJECT / Q_GADGET
+        QtPrivate::TypeAndForceComplete<RadioTxPanel, std::true_type>,
+        // method 'updateStatus'
+        QtPrivate::TypeAndForceComplete<void, std::false_type>
+    >,
     nullptr
 } };
 
 void RadioTxPanel::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
 {
-    auto *_t = static_cast<RadioTxPanel *>(_o);
     if (_c == QMetaObject::InvokeMetaMethod) {
+        auto *_t = static_cast<RadioTxPanel *>(_o);
+        (void)_t;
         switch (_id) {
         case 0: _t->updateStatus(); break;
         default: ;
@@ -85,7 +124,7 @@ const QMetaObject *RadioTxPanel::metaObject() const
 void *RadioTxPanel::qt_metacast(const char *_clname)
 {
     if (!_clname) return nullptr;
-    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN12RadioTxPanelE_t>.strings))
+    if (!strcmp(_clname, qt_meta_stringdata_CLASSRadioTxPanelENDCLASS.stringdata0))
         return static_cast<void*>(this);
     return ModePanel::qt_metacast(_clname);
 }
@@ -99,8 +138,7 @@ int RadioTxPanel::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
         if (_id < 1)
             qt_static_metacall(this, _c, _id, _a);
         _id -= 1;
-    }
-    if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
+    } else if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
         if (_id < 1)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
         _id -= 1;

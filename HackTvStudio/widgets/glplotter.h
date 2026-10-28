@@ -1,8 +1,14 @@
 #ifndef GLPLOTTER_H
 #define GLPLOTTER_H
 
+#ifdef PLOTTER_NO_GL
+#include <QWidget>
+#include <QPaintEvent>
+#include <QResizeEvent>
+#else
 #include <QOpenGLWidget>
 #include <QOpenGLFunctions>
+#endif
 #include <QTimer>
 #include <QFont>
 #include <QMap>
@@ -22,7 +28,11 @@
 #define PEAK_CLICK_MAX_V_DISTANCE   20
 #define PEAK_H_TOLERANCE            2
 
+#ifdef PLOTTER_NO_GL
+class CPlotter : public QWidget
+#else
 class CPlotter : public QOpenGLWidget, protected QOpenGLFunctions
+#endif
 {
     Q_OBJECT
 
@@ -146,9 +156,16 @@ public slots:
     }
 
 protected:
+#ifdef PLOTTER_NO_GL
+    void paintEvent(QPaintEvent*) override;
+    void resizeEvent(QResizeEvent*) override;
+#else
     void initializeGL() override;
     void resizeGL(int w, int h) override;
     void paintGL() override;
+#endif
+    void renderPlot();                     // shared QPainter drawing (GL and non-GL)
+    void rebuildWaterfall(int w, int h);   // shared resize handling
 
     void mouseMoveEvent(QMouseEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;

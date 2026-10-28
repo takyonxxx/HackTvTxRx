@@ -1,0 +1,9 @@
+com.hacktvstudio-java-0 C:\Qt\6.5.3\android_arm64_v8a\src\android\java\res
+com.hacktvstudio-pngs-1 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\build\generated\res\pngs\debug
+com.hacktvstudio-resValues-2 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\build\generated\res\resValues\debug
+com.hacktvstudio-rs-3 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\build\generated\res\rs\debug
+com.hacktvstudio-mergeDebugResources-4 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\build\intermediates\incremental\debug\mergeDebugResources\merged.dir
+com.hacktvstudio-mergeDebugResources-5 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\build\intermediates\incremental\debug\mergeDebugResources\stripped.dir
+com.hacktvstudio-merged_res-6 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\build\intermediates\merged_res\debug
+com.hacktvstudio-android-build-7 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\res
+com.hacktvstudio-debug-8 C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-arm64\android-build\src\debug\res

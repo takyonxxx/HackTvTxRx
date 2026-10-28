@@ -1,0 +1,45 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.hacktvstudio-mergeDebugResources-4:/values/values.xml",
+            "map": [
+                {
+                    "source": "C:\\Qt\\6.5.3\\android_armv7\\src\\android\\java\\res\\values\\strings.xml",
+                    "from": {
+                        "startLines": "3,4",
+                        "startColumns": "4,4",
+                        "startOffsets": "88,197",
+                        "endColumns": "107,97",
+                        "endOffsets": "191,290"
+                    },
+                    "to": {
+                        "startLines": "20,23",
+                        "startColumns": "4,4",
+                        "startOffsets": "930,1237",
+                        "endColumns": "107,97",
+                        "endOffsets": "1033,1330"
+                    }
+                },
+                {
+                    "source": "C:\\Users\\turka\\Desktop\\HackTvTxRx\\HackTvStudio\\android-build-armv7\\android-build\\res\\values\\libs.xml",
+                    "from": {
+                        "startLines": "4,20,8,26,24,27,25",
+                        "startColumns": "4,4,4,4,4,4,4",
+                        "startOffsets": "152,745,211,1200,991,1252,1151",
+                        "endLines": "6,22,18,26,24,27,25",
+                        "endColumns": "12,12,12,50,158,47,47",
+                        "endOffsets": "203,983,737,1246,1145,1295,1194"
+                    },
+                    "to": {
+                        "startLines": "2,5,8,19,21,22,24",
+                        "startColumns": "4,4,4,4,4,4,4",
+                        "startOffsets": "55,109,350,879,1038,1197,1335",
+                        "endLines": "4,7,18,19,21,22,24",
+                        "endColumns": "12,12,12,50,158,39,47",
+                        "endOffsets": "104,345,874,925,1192,1232,1378"
+                    }
+                }
+            ]
+        }
+    ]
+}

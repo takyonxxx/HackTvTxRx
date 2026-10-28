@@ -58,7 +58,11 @@ static inline quint64 time_ms(void)
 // ============================================================================
 
 CPlotter::CPlotter(QWidget *parent)
+#ifdef PLOTTER_NO_GL
+    : QWidget(parent)
+#else
     : QOpenGLWidget(parent)
+#endif
 {
 #ifdef Q_OS_ANDROID
     // Axis / marker text: the scaled Android app font makes the default QFont
@@ -69,7 +73,9 @@ CPlotter::CPlotter(QWidget *parent)
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+#ifndef PLOTTER_NO_GL
     setUpdateBehavior(QOpenGLWidget::PartialUpdate);
+#endif
 
     // QPainter handles antialiasing internally, no need for MSAA
     // which can cause crashes on some GPU drivers
@@ -101,13 +107,22 @@ QSize CPlotter::sizeHint() const { return QSize(400, 300); }
 // OpenGL lifecycle
 // ============================================================================
 
+#ifdef PLOTTER_NO_GL
+// Software (QWidget) path: no OpenGL context at all. Used on head units whose
+// GPU driver refuses a GL context and crashes the app on launch.
+void CPlotter::paintEvent(QPaintEvent*)   { renderPlot(); }
+void CPlotter::resizeEvent(QResizeEvent*) { rebuildWaterfall(width(), height()); }
+#else
 void CPlotter::initializeGL()
 {
     initializeOpenGLFunctions();
     glClearColor(0.0f, 0.031f, 0.078f, 1.0f);
 }
+void CPlotter::resizeGL(int w, int h) { rebuildWaterfall(w, h); }
+void CPlotter::paintGL()              { renderPlot(); }
+#endif
 
-void CPlotter::resizeGL(int w, int h)
+void CPlotter::rebuildWaterfall(int w, int h)
 {
     Q_UNUSED(w); Q_UNUSED(h);
     // Waterfall image management
@@ -123,10 +138,10 @@ void CPlotter::resizeGL(int w, int h)
 }
 
 // ============================================================================
-// Main paint — QPainter on OpenGL for smooth antialiased rendering
+// Main paint — QPainter (on the GL surface, or straight raster when PLOTTER_NO_GL)
 // ============================================================================
 
-void CPlotter::paintGL()
+void CPlotter::renderPlot()
 {
     const int w = width();
     const int h = height();

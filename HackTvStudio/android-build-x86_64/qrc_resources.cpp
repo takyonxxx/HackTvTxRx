@@ -1,18 +1,13 @@
 /****************************************************************************
 ** Resource object code
 **
-** Created by: The Resource Compiler for Qt version 6.11.1
+** Created by: The Resource Compiler for Qt version 6.5.3
 **
 ** WARNING! All changes made in this file will be lost!
 *****************************************************************************/
 
-#ifdef _MSC_VER
-// disable informational message "function ... selected for automatic inline expansion"
-#pragma warning (disable: 4711)
-#endif
-
 static const unsigned char qt_resource_data[] = {
-  // hacktv.ico
+  // C:/Users/turka/Desktop/HackTvTxRx/HackTvStudio/ico/hacktv.ico
   0x0,0x0,0x41,0x32,
   0x0,
   0x4,0x20,0x3e,0x78,0xda,0xed,0x5d,0x7,0xb4,0x15,0xd5,0xd5,0x36,0x89,0x89,0x5d,
@@ -1101,9 +1096,7 @@ static const unsigned char qt_resource_struct[] = {
 #   define QT_RCC_MANGLE_NAMESPACE(name) name
 #endif
 
-#if defined(QT_INLINE_NAMESPACE)
-inline namespace QT_NAMESPACE {
-#elif defined(QT_NAMESPACE)
+#ifdef QT_NAMESPACE
 namespace QT_NAMESPACE {
 #endif
 

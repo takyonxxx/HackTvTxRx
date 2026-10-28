@@ -14,6 +14,9 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QGroupBox>
+#include <QGridLayout>
+#include <QDialog>
+#include <QLabel>
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QSettings>
@@ -225,7 +228,11 @@ QWidget* StudioWindow::buildTopStrip()
     m_freqCtrl->setMinimumHeight(64);
     m_freqCtrl->setMaximumHeight(80);
 #endif
+#ifdef Q_OS_ANDROID
+    m_freqCtrl->setMinimumWidth(330);
+#else
     m_freqCtrl->setMinimumWidth(420);
+#endif
     connect(m_freqCtrl, &CFreqCtrl::newFrequency, this, &StudioWindow::onFrequencyEdited);
     tl->addWidget(m_freqCtrl);
 
@@ -255,7 +262,11 @@ QWidget* StudioWindow::buildTopStrip()
     m_meter->setMinimumHeight(58);
     m_meter->setMaximumHeight(80);
 #endif
+#ifdef Q_OS_ANDROID
+    m_meter->setMinimumWidth(150);
+#else
     m_meter->setMinimumWidth(220);
+#endif
     ml->addWidget(m_meter);
     QHBoxLayout* mi = new QHBoxLayout();
     m_meterInfo = new QLabel("", meterGroup);
@@ -290,7 +301,6 @@ QWidget* StudioWindow::buildDeviceGroup()
 #endif
     m_startButton->setStyleSheet("QPushButton { background: #1f7a3f; color: white; font-size: 12pt; }");
     connect(m_startButton, &QPushButton::clicked, this, &StudioWindow::onStartStop);
-    grid->addWidget(m_startButton, 0, 0, 2, 2);          // left block: START spans label + slider columns
 
     m_sampleRateCombo = new QComboBox(g);
     const int rates[] = { 2000000, 4000000, 6000000, 8000000, 10000000, 12000000,
@@ -300,60 +310,90 @@ QWidget* StudioWindow::buildDeviceGroup()
     m_sampleRateCombo->setCurrentIndex(m_sampleRateCombo->findData(16000000));
     connect(m_sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &StudioWindow::onSampleRateSelected);
-    grid->addWidget(new QLabel("Rate:", g), 0, 3, Qt::AlignRight);
-    grid->addWidget(m_sampleRateCombo, 0, 4, 1, 2);    // right block: rate above REC IQ
 
     m_ampCheck = new QCheckBox("RF Amp", g);
     m_ampCheck->setChecked(true);
     connect(m_ampCheck, &QCheckBox::toggled, this, [this](bool on) { m_device->setAmpEnable(on); });
-    grid->addWidget(m_ampCheck, 0, 2, 2, 1, Qt::AlignCenter);   // next to START
 
     m_recButton = new QPushButton("REC IQ 0.5 s", g);
     m_recButton->setToolTip("Record 0.5 s of raw int8 IQ to iq_<freq>_<time>.raw");
     connect(m_recButton, &QPushButton::clicked, this, &StudioWindow::onRecordIq);
-    grid->addWidget(m_recButton, 1, 4, 1, 2);
     m_recButton->setMinimumHeight(m_sampleRateCombo->sizeHint().height());
-#ifdef Q_OS_ANDROID
-    m_recButton->hide();   // IQ-to-file capture is a desktop/debug feature
-#endif
 
-    auto gainRow = [&](int row, int col, const QString& name, QSlider*& slider, QSpinBox*& spin,
-                       int min, int max, int step, int value) {
-        grid->addWidget(new QLabel(name, g), row, col, Qt::AlignRight);
-        slider = new QSlider(Qt::Horizontal, g);
-        slider->setRange(min, max);
-        slider->setSingleStep(step);
-        slider->setPageStep(step);
-        slider->setValue(value);
-        spin = new QSpinBox(g);
-        spin->setRange(min, max);
-        spin->setSingleStep(step);
-        spin->setValue(value);
+    // Build one "name [slider] [spin]" row into any grid (main strip or settings dialog).
+    auto gainRow = [](QGridLayout* gg, QWidget* parent, int row, int col, const QString& name,
+                      QSlider*& slider, QSpinBox*& spin, int min, int max, int step, int value) {
+        gg->addWidget(new QLabel(name, parent), row, col, Qt::AlignRight);
+        slider = new QSlider(Qt::Horizontal, parent);
+        slider->setRange(min, max); slider->setSingleStep(step); slider->setPageStep(step);
+        slider->setValue(value); slider->setMinimumWidth(70);
+        spin = new QSpinBox(parent);
+        spin->setRange(min, max); spin->setSingleStep(step); spin->setValue(value);
         spin->setMaximumWidth(64);
         QSlider* s = slider; QSpinBox* sp = spin;
-        connect(slider, &QSlider::valueChanged, g, [sp](int v) {
+        connect(slider, &QSlider::valueChanged, parent, [sp](int v) {
             sp->blockSignals(true); sp->setValue(v); sp->blockSignals(false);
         });
-        connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), g, [s](int v) { s->setValue(v); });
-        slider->setMinimumWidth(70);
-        grid->addWidget(slider, row, col + 1);
-        grid->addWidget(spin, row, col + 2);
+        connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), parent, [s](int v) { s->setValue(v); });
+        gg->addWidget(slider, row, col + 1);
+        gg->addWidget(spin, row, col + 2);
     };
 
-    // Two gains per row keeps the top strip short enough for a 1080p screen
-    gainRow(2, 0, "LNA",    m_lnaSlider,   m_lnaSpin,   0, 40, 8, 32);
-    gainRow(2, 3, "VGA",    m_vgaSlider,   m_vgaSpin,   0, 62, 2, 30);
-    gainRow(3, 0, "AMP",    m_rxAmpSlider, m_rxAmpSpin, 0, 14, 14, 14);
-    gainRow(3, 3, "TX VGA", m_txVgaSlider, m_txVgaSpin, 0, 47, 1, 20);
+#ifdef Q_OS_ANDROID
+    // ---- Head unit: compact strip = START, RF Amp, TX gain, Settings button.
+    //      Everything else (sample rate, RX gains) goes to a separate screen so the
+    //      top strip fits a small in-dash display.
+    grid->addWidget(m_startButton, 0, 0, 2, 1);
+    grid->addWidget(m_ampCheck,    0, 1, 2, 1, Qt::AlignCenter);
+    gainRow(grid, g, 0, 2, "TX", m_txVgaSlider, m_txVgaSpin, 0, 47, 1, 20);
+    m_settingsBtn = new QPushButton(QString::fromUtf8("⚙  Ayarlar"), g);
+    connect(m_settingsBtn, &QPushButton::clicked, this, &StudioWindow::openSettingsDialog);
+    grid->addWidget(m_settingsBtn, 1, 2, 1, 3);
+    grid->setColumnStretch(3, 1);
+
+    // ---- Settings screen (modal): rate + RX gains + IQ record.
+    m_settingsDlg = new QDialog(this);
+    m_settingsDlg->setWindowTitle(QString::fromUtf8("Ayarlar"));
+    QGridLayout* dg = new QGridLayout(m_settingsDlg);
+    dg->addWidget(new QLabel(QString::fromUtf8("Örnekleme (RX):"), m_settingsDlg), 0, 0, Qt::AlignRight);
+    m_sampleRateCombo->setParent(m_settingsDlg);
+    dg->addWidget(m_sampleRateCombo, 0, 1, 1, 2);
+    gainRow(dg, m_settingsDlg, 1, 0, "LNA",    m_lnaSlider,   m_lnaSpin,   0, 40, 8, 32);
+    gainRow(dg, m_settingsDlg, 2, 0, "VGA",    m_vgaSlider,   m_vgaSpin,   0, 62, 2, 30);
+    gainRow(dg, m_settingsDlg, 3, 0, "RX AMP", m_rxAmpSlider, m_rxAmpSpin, 0, 14, 14, 14);
+    QPushButton* closeBtn = new QPushButton(QString::fromUtf8("Kapat"), m_settingsDlg);
+    connect(closeBtn, &QPushButton::clicked, m_settingsDlg, &QDialog::accept);
+    dg->addWidget(closeBtn, 4, 0, 1, 3);
+    m_recButton->setParent(m_settingsDlg);
+    m_recButton->hide();   // IQ-to-file capture is a desktop/debug feature
+#else
+    // ---- Desktop: the full device panel in the strip.
+    grid->addWidget(m_startButton, 0, 0, 2, 2);
+    grid->addWidget(new QLabel("Rate:", g), 0, 3, Qt::AlignRight);
+    grid->addWidget(m_sampleRateCombo, 0, 4, 1, 2);
+    grid->addWidget(m_ampCheck, 0, 2, 2, 1, Qt::AlignCenter);
+    grid->addWidget(m_recButton, 1, 4, 1, 2);
+    gainRow(grid, g, 2, 0, "LNA",    m_lnaSlider,   m_lnaSpin,   0, 40, 8, 32);
+    gainRow(grid, g, 2, 3, "VGA",    m_vgaSlider,   m_vgaSpin,   0, 62, 2, 30);
+    gainRow(grid, g, 3, 0, "AMP",    m_rxAmpSlider, m_rxAmpSpin, 0, 14, 14, 14);
+    gainRow(grid, g, 3, 3, "TX VGA", m_txVgaSlider, m_txVgaSpin, 0, 47, 1, 20);
+    grid->setColumnStretch(1, 1);
+    grid->setColumnStretch(4, 1);
+#endif
+
     m_txVgaSlider->setToolTip("Transmit gain (0-47 dB). Start low; add the RF amp only if needed.");
     connect(m_lnaSlider, &QSlider::valueChanged, this, [this](int v) { m_device->setLnaGain(v); });
     connect(m_vgaSlider, &QSlider::valueChanged, this, [this](int v) { m_device->setVgaGain(v); });
     connect(m_rxAmpSlider, &QSlider::valueChanged, this, [this](int v) { m_device->setRxAmpGain(v); });
     connect(m_txVgaSlider, &QSlider::valueChanged, this, [this](int v) { m_device->setTxVgaGain(v); });
-
-    grid->setColumnStretch(1, 1);
-    grid->setColumnStretch(4, 1);
     return g;
+}
+
+void StudioWindow::openSettingsDialog()
+{
+    if (!m_settingsDlg) return;
+    m_settingsDlg->resize(std::min(460, width() - 20), m_settingsDlg->sizeHint().height());
+    m_settingsDlg->exec();
 }
 
 void StudioWindow::addPanel(ModePanel* panel)

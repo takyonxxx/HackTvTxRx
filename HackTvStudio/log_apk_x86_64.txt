@@ -10,19 +10,6 @@ Generating Android Package
   Android build platform: android-36
   Install to device: No
 Skipping createRCC
-Downloading https://services.gradle.org/distributions/gradle-9.3.1-bin.zip
-.............10%.............20%.............30%.............40%.............50%.............60%.............70%.............80%.............90%.............100%
-
-Welcome to Gradle 9.3.1!
-
-Here are the highlights of this release:
- - Test reporting improvements
- - Error and warning improvements
- - Build authoring improvements
-
-For more details see https://docs.gradle.org/9.3.1/release-notes.html
-
-Starting a Gradle Daemon (subsequent builds will be faster)
 > Task :preBuild UP-TO-DATE
 > Task :preDebugBuild UP-TO-DATE
 > Task :mergeDebugNativeDebugMetadata NO-SOURCE
@@ -31,19 +18,18 @@ Starting a Gradle Daemon (subsequent builds will be faster)
 > Task :processDebugNavigationResources
 > Task :generateDebugAssets UP-TO-DATE
 > Task :javaPreCompileDebug
+> Task :parseDebugLocalResources
 > Task :mergeDebugAssets
 > Task :compressDebugAssets
-> Task :parseDebugLocalResources
 > Task :generateDebugRFile
-> Task :checkDebugAarMetadata
-> Task :compileDebugNavigationResources
 > Task :compileDebugKotlin NO-SOURCE
 > Task :desugarDebugFileDependencies
 > Task :compileDebugJavaWithJavac
+> Task :checkDebugAarMetadata
+> Task :compileDebugNavigationResources
 > Task :mapDebugSourceSetPaths
 > Task :createDebugCompatibleScreenManifests
 > Task :extractDeepLinksDebug
-> Task :mergeDebugResources
 
 > Task :processDebugMainManifest
 package="com.hacktvstudio" found in source AndroidManifest.xml: C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-x86_64\android-build\AndroidManifest.xml.
@@ -52,20 +38,21 @@ Recommendation: remove package="com.hacktvstudio" from the source AndroidManifes
 
 > Task :processDebugManifest
 > Task :processDebugJavaRes NO-SOURCE
+> Task :mergeDebugResources
 > Task :checkDebugDuplicateClasses
-> Task :mergeDebugJniLibFolders
 > Task :mergeDebugJavaResource
+> Task :mergeDebugJniLibFolders
 > Task :mergeLibDexDebug
 > Task :validateSigningDebug
 > Task :writeDebugAppMetadata
 > Task :writeDebugSigningConfigVersions
 > Task :processDebugManifestForPackage
 > Task :mergeDebugNativeLibs
+> Task :processDebugResources
 
 > Task :stripDebugDebugSymbols
 Unable to strip the following libraries, packaging them as they are: libHackTvStudio_x86_64.so, libQt6Concurrent_x86_64.so, libQt6Core_x86_64.so, libQt6FFmpegStub-crypto_x86_64.so, libQt6FFmpegStub-ssl_x86_64.so, libQt6Gui_x86_64.so, libQt6Multimedia_x86_64.so, libQt6Network_x86_64.so, libQt6OpenGLWidgets_x86_64.so, libQt6OpenGL_x86_64.so, libQt6Svg_x86_64.so, libQt6Widgets_x86_64.so, libavcodec.so, libavformat.so, libavutil.so, libc++_shared.so, libplugins_iconengines_qsvgicon_x86_64.so, libplugins_imageformats_qgif_x86_64.so, libplugins_imageformats_qico_x86_64.so, libplugins_imageformats_qjpeg_x86_64.so, libplugins_imageformats_qsvg_x86_64.so, libplugins_multimedia_androidmediaplugin_x86_64.so, libplugins_multimedia_ffmpegmediaplugin_x86_64.so, libplugins_networkinformation_qandroidnetworkinformation_x86_64.so, libplugins_platforms_qminimal_x86_64.so, libplugins_platforms_qoffscreen_x86_64.so, libplugins_platforms_qtforandroid_x86_64.so, libplugins_styles_qandroidstyle_x86_64.so, libplugins_tls_qcertonlybackend_x86_64.so, libplugins_tls_qopensslbackend_x86_64.so, libswresample.so, libswscale.so. Run with --info option to learn more.
 
-> Task :processDebugResources
 > Task :dexBuilderDebug
 > Task :mergeDebugGlobalSynthetics
 > Task :mergeProjectDexDebug
@@ -74,8 +61,8 @@ Unable to strip the following libraries, packaging them as they are: libHackTvSt
 > Task :createDebugApkListingFileRedirect
 > Task :assembleDebug
 
-BUILD SUCCESSFUL in 1m 28s
+BUILD SUCCESSFUL in 3s
 35 actionable tasks: 35 executed
 Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.3.1/userguide/configuration_cache_enabling.html
-Android package built successfully in 91.796 ms.
+Android package built successfully in 7.054 ms.
   -- File: C:/Users/turka/Desktop/HackTvTxRx/HackTvStudio/android-build-x86_64/android-build//build/outputs/apk/debug/android-build-debug.apk

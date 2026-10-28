@@ -1,0 +1,143 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.hacktvstudio"
+4    android:installLocation="auto"
+5    android:versionCode="1"
+6    android:versionName="1.0" >
+7
+8    <uses-sdk
+9        android:minSdkVersion="24"
+9-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml
+10        android:targetSdkVersion="33" />
+10-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml
+11
+12    <uses-feature
+12-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:8:5-86
+13        android:name="android.hardware.usb.host"
+13-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:8:19-59
+14        android:required="true" />
+14-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:8:60-83
+15
+16    <uses-permission android:name="android.permission.INTERNET" />
+16-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:9:5-67
+16-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:9:22-64
+17    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+17-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:10:5-71
+17-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:10:22-68
+18    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+18-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:11:5-80
+18-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:11:22-77
+19    <uses-permission android:name="android.permission.WAKE_LOCK" />
+19-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:12:5-68
+19-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:12:22-65
+20    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+20-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:13:5-80
+20-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:13:22-77
+21    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+21-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:14:5-81
+21-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:14:22-78
+22    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+22-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:15:5-79
+22-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:15:22-76
+23    <uses-permission android:name="android.permission.INTERNET" />
+23-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:9:5-67
+23-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:9:22-64
+24    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+24-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:14:5-81
+24-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:14:22-78
+25    <uses-permission android:name="android.permission.CAMERA" />
+25-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:18:5-65
+25-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:18:22-62
+26    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+26-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:10:5-71
+26-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:10:22-68
+27    <uses-permission android:name="android.permission.BLUETOOTH" />
+27-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:20:5-68
+27-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:20:22-65
+28    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+28-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:11:5-80
+28-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:11:22-77
+29
+30    <supports-screens
+30-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:24:5-28:39
+31        android:anyDensity="true"
+31-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:25:9-34
+32        android:largeScreens="true"
+32-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:26:9-36
+33        android:normalScreens="true"
+33-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:27:9-37
+34        android:smallScreens="true" />
+34-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:28:9-36
+35
+36    <application
+36-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:30:5-65:19
+37        android:name="org.qtproject.qt.android.bindings.QtApplication"
+37-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:31:9-71
+38        android:allowBackup="true"
+38-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:36:9-35
+39        android:debuggable="true"
+40        android:enableOnBackInvokedCallback="false"
+40-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:35:9-52
+41        android:fullBackupOnly="false"
+41-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:37:9-39
+42        android:hardwareAccelerated="true"
+42-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:32:9-43
+43        android:icon="@mipmap/ic_launcher"
+43-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:34:9-43
+44        android:label="HackTv Studio" >
+44-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:33:9-38
+45        <activity
+45-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:38:9-64:20
+46            android:name="com.hacktvstudio.HackTvActivity"
+46-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:39:13-59
+47            android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density"
+47-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:40:13-182
+48            android:exported="true"
+48-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:44:13-36
+49            android:label="HackTv Studio"
+49-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:41:13-42
+50            android:launchMode="singleTop"
+50-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:42:13-43
+51            android:screenOrientation="unspecified" >
+51-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:43:13-52
+52            <intent-filter>
+52-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:45:13-48:29
+53                <action android:name="android.intent.action.MAIN" />
+53-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:46:17-69
+53-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:46:25-66
+54
+55                <category android:name="android.intent.category.LAUNCHER" />
+55-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:47:17-77
+55-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:47:27-74
+56            </intent-filter>
+57
+58            <!-- Auto-launch when the HackRF is plugged into the OTG port -->
+59            <intent-filter>
+59-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:51:13-53:29
+60                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+60-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:52:17-90
+60-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:52:25-87
+61            </intent-filter>
+62
+63            <meta-data
+63-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:54:13-56:57
+64                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+64-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:55:17-79
+65                android:resource="@xml/device_filter" />
+65-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:56:17-54
+66            <meta-data
+66-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:58:13-60:48
+67                android:name="android.app.lib_name"
+67-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:59:17-52
+68                android:value="HackTvStudio" />
+68-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:60:17-45
+69            <meta-data
+69-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:61:13-63:36
+70                android:name="android.app.arguments"
+70-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:62:17-53
+71                android:value="" />
+71-->C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\AndroidManifest.xml:63:17-33
+72        </activity>
+73    </application>
+74
+75</manifest>

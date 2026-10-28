@@ -3,6 +3,7 @@
 #include <QFont>
 #include <QIcon>
 #include <QtWidgets/QStyleFactory>
+#include <QSurfaceFormat>
 #include <QDebug>
 
 int main(int argc, char *argv[])
@@ -10,6 +11,20 @@ int main(int argc, char *argv[])
     // Qt Multimedia: use the bundled FFmpeg backend (video file sources for TV TX)
     qputenv("QT_MEDIA_BACKEND", "ffmpeg");
     qputenv("AV_LOG_FORCE_NOCOLOR", "1");
+
+    // Weak car head-unit GPUs often refuse the default GL context (which asks for a
+    // depth/stencil/MSAA surface), which crashes the spectrum's QOpenGLWidget on its
+    // first show. Request the most widely supported surface: OpenGL ES 2.0, no extras.
+    {
+        QSurfaceFormat fmt;
+        fmt.setRenderableType(QSurfaceFormat::OpenGLES);
+        fmt.setVersion(2, 0);
+        fmt.setDepthBufferSize(0);
+        fmt.setStencilBufferSize(0);
+        fmt.setSamples(0);
+        fmt.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
+        QSurfaceFormat::setDefaultFormat(fmt);
+    }
 
     QApplication app(argc, argv);
 

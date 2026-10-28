@@ -2,6 +2,9 @@
 
 #include <QAudioBuffer>
 #include <QAudioDevice>
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+#include <QAudioDecoder>
+#endif
 #include <QAudioSource>
 #include <QCamera>
 #include <QCameraDevice>
@@ -26,11 +29,20 @@ QtAvSource::QtAvSource(QObject* parent)
     m_audioFormat.setChannelCount(2);
     m_audioFormat.setSampleFormat(QAudioFormat::Int16);
 
-    m_audioOut = new QAudioBufferOutput(m_audioFormat, this);   // Qt resamples to 32 kHz stereo int16
     m_player.setVideoSink(&m_sink);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+    m_audioOut = new QAudioBufferOutput(m_audioFormat, this);   // Qt resamples to 32 kHz stereo int16
     m_player.setAudioBufferOutput(m_audioOut);
-    connect(&m_sink, &QVideoSink::videoFrameChanged, this, &QtAvSource::onVideoFrame);
     connect(m_audioOut, &QAudioBufferOutput::audioBufferReceived, this, &QtAvSource::onAudioBuffer);
+#else
+    // Qt 6.5: decode the file's audio track ourselves (QMediaPlayer has no tap).
+    m_decoder = new QAudioDecoder(this);
+    m_decoder->setAudioFormat(m_audioFormat);
+    connect(m_decoder, &QAudioDecoder::bufferReady, this, &QtAvSource::onDecoderBuffer);
+    // (No error-signal hook: on an unsupported track the decoder stays silent and
+    //  video still plays. Qt 6.5's error signal name differs across patch levels.)
+#endif
+    connect(&m_sink, &QVideoSink::videoFrameChanged, this, &QtAvSource::onVideoFrame);
     connect(&m_player, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus st) {
         if (st == QMediaPlayer::EndOfMedia && !m_loop) m_ended.store(true);
         if (st == QMediaPlayer::InvalidMedia) {
@@ -76,6 +88,14 @@ bool QtAvSource::prepare(av_t* av)
     m_ended.store(false);
     m_error.clear();
     m_audioRing.clear();
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+    if (m_decoder) m_decoder->stop();
+    {
+        std::lock_guard<std::mutex> lk(m_fileAudioMutex);
+        m_fileAudioPcm.clear();
+    }
+    m_fileCursor.store(0);
+#endif
     {
         std::lock_guard<std::mutex> lk(m_frameMutex);
         m_latest = QImage(m_width, m_height, QImage::Format_RGB32);
@@ -140,6 +160,12 @@ bool QtAvSource::open(av_t* av, const QString& file, bool loop)
     m_player.setVideoSink(&m_sink);
     m_player.setLoops(loop ? QMediaPlayer::Infinite : 1);
     m_player.setSource(QUrl::fromLocalFile(file));
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+    // Decode the audio track up front; it outpaces real-time playback and fills
+    // m_fileAudioPcm, which cbReadAudio replays in step with the player clock.
+    m_decoder->setSource(QUrl::fromLocalFile(file));
+    m_decoder->start();
+#endif
     m_player.play();
     m_open = true;
     return true;
@@ -211,6 +237,9 @@ void QtAvSource::close()
     } else {
         m_player.stop();
         m_player.setSource(QUrl());
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+        if (m_decoder) m_decoder->stop();
+#endif
     }
     m_open = false;
 }
@@ -343,6 +372,24 @@ void QtAvSource::onAudioBuffer(const QAudioBuffer& buffer)
     m_audioRing.write(d, static_cast<size_t>(buffer.sampleCount()));   // dropped if the ring is full
 }
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+/* GUI thread (Qt 6.5): collect the decoded file audio into one growing PCM
+ * buffer. Decoding runs ahead of playback, so the buffer is always filled past
+ * the player's current position by the time cbReadAudio reaches it. */
+void QtAvSource::onDecoderBuffer()
+{
+    while (m_decoder && m_decoder->bufferAvailable()) {
+        const QAudioBuffer buf = m_decoder->read();
+        if (!buf.isValid()) continue;
+        if (buf.format().sampleFormat() != QAudioFormat::Int16 || buf.format().channelCount() != 2) continue;
+        const int16_t* d = buf.constData<int16_t>();
+        const int n = buf.sampleCount();           // interleaved int16 count (frames * 2)
+        std::lock_guard<std::mutex> lk(m_fileAudioMutex);
+        m_fileAudioPcm.insert(m_fileAudioPcm.end(), d, d + n);
+    }
+}
+#endif
+
 // ---- TX thread (hacktv callbacks) -----------------------------------------
 
 int QtAvSource::cbReadVideo(void* ctx, av_frame_t* frame)
@@ -400,6 +447,25 @@ int16_t* QtAvSource::cbReadAudio(void* ctx, size_t* samples)
         *samples = MAX_FRAMES;
         return s->m_audioChunk.data();
     }
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+    if (!s->m_isCamera) {
+        // Qt 6.5 file path: replay the decoded PCM, indexed by the player clock
+        // so audio tracks video. Advance monotonically for smooth output; resync
+        // to position() when they drift (a seek or a loop wrap).
+        const qint64 posFrames = s->m_player.position() * 32000 / 1000;
+        qint64 cur = s->m_fileCursor.load();
+        if (cur < 0 || qAbs(cur - posFrames) > 9600) cur = posFrames;   // > 0.3 s drift
+        std::lock_guard<std::mutex> lk(s->m_fileAudioMutex);
+        const qint64 avail = static_cast<qint64>(s->m_fileAudioPcm.size()) / 2;
+        const qint64 n = std::min<qint64>(MAX_FRAMES, avail - cur);
+        if (n <= 0) { *samples = 0; return nullptr; }                   // not decoded yet / ended
+        std::memcpy(s->m_audioChunk.data(), &s->m_fileAudioPcm[cur * 2],
+                    static_cast<size_t>(n) * 2 * sizeof(int16_t));
+        s->m_fileCursor.store(cur + n);
+        *samples = static_cast<size_t>(n);
+        return s->m_audioChunk.data();
+    }
+#endif
     const size_t got = s->m_audioRing.read(s->m_audioChunk.data(), MAX_FRAMES * 2) / 2;
     if (got == 0) {
         *samples = 0;

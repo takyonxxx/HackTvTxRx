@@ -2,7 +2,7 @@
 #define _GNU_SOURCE 1
 #define _LP64 1
 #define __ANDROID_API__ __ANDROID_MIN_SDK_VERSION__
-#define __ANDROID_MIN_SDK_VERSION__ 28
+#define __ANDROID_MIN_SDK_VERSION__ 23
 #define __ANDROID__ 1
 #define __ATOMIC_ACQUIRE 2
 #define __ATOMIC_ACQ_REL 4

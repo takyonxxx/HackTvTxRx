@@ -1,12 +1,14 @@
 #include "TvRecorder.h"
 
 #include <QAudioBuffer>
-#include <QAudioBufferInput>
 #include <QDebug>
 #include <QMediaFormat>
 #include <QUrl>
 #include <QVideoFrame>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+#include <QAudioBufferInput>
 #include <QVideoFrameInput>
+#endif
 #include <algorithm>
 #include <cmath>
 
@@ -25,6 +27,23 @@ TvRecorder::~TvRecorder()
 {
     stop();
 }
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+
+// Qt 6.5 (older head units) has no QVideoFrameInput / QAudioBufferInput, so an
+// app-fed media recorder is not available. The receiver still works; only the
+// record-to-mp4 button is disabled.
+bool TvRecorder::start(const QString&, const QSize&, int, int)
+{
+    m_codecInfo = "kayit yok";
+    emit errorOccurred("Kayit bu surumde (Qt 6.5 / eski Android) desteklenmiyor");
+    return false;
+}
+
+void TvRecorder::pushFrame(const QImage&) {}
+void TvRecorder::pushAudio(const std::vector<float>&) {}
+
+#else
 
 bool TvRecorder::start(const QString& filePath, const QSize& videoSize, int fps, int audioRate)
 {
@@ -94,6 +113,8 @@ bool TvRecorder::start(const QString& filePath, const QSize& videoSize, int fps,
     return true;
 }
 
+#endif  // QT_VERSION >= 6.8 (start)
+
 void TvRecorder::stop()
 {
     if (!m_recording) return;
@@ -103,6 +124,8 @@ void TvRecorder::stop()
              << m_audioSamplesSent << "audio samples";
     emit recordingChanged(false);
 }
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
 
 void TvRecorder::pushFrame(const QImage& frame)
 {
@@ -149,3 +172,5 @@ void TvRecorder::pushAudio(const std::vector<float>& mono)
         ++m_audioBuffersRejected;
     }
 }
+
+#endif  // QT_VERSION >= 6.8 (pushFrame / pushAudio)

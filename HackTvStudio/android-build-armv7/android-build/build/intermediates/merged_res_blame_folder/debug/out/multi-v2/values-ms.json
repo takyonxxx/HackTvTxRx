@@ -1,0 +1,26 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.hacktvstudio-mergeDebugResources-4:/values-ms/values-ms.xml",
+            "map": [
+                {
+                    "source": "C:\\Qt\\6.5.3\\android_armv7\\src\\android\\java\\res\\values-ms\\strings.xml",
+                    "from": {
+                        "startLines": "2,3",
+                        "startColumns": "4,4",
+                        "startOffsets": "57,163",
+                        "endColumns": "104,89",
+                        "endOffsets": "157,248"
+                    },
+                    "to": {
+                        "startLines": "2,3",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,160",
+                        "endColumns": "104,89",
+                        "endOffsets": "155,245"
+                    }
+                }
+            ]
+        }
+    ]
+}

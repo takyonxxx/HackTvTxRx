@@ -55,6 +55,7 @@ private:
     void buildUi();
     QWidget* buildTopStrip();
     QWidget* buildDeviceGroup();
+    void     openSettingsDialog();   // Android: advanced controls live in a separate screen
     void addPanel(ModePanel* panel);
 
     void setFrequency(uint64_t hz, bool fromDial);
@@ -96,6 +97,8 @@ private:
     QSlider* m_txVgaSlider = nullptr;
     QSpinBox* m_txVgaSpin = nullptr;
     QPushButton* m_recButton = nullptr;
+    QDialog*     m_settingsDlg = nullptr;    // Android settings screen (rate, RX gains)
+    QPushButton* m_settingsBtn = nullptr;
 
     // Spectrum
     CPlotter* m_plotter = nullptr;

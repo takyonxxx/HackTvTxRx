@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <array name="bundled_libs">
+        
+    </array>
+    <array name="load_local_libs">
+        <item>armeabi-v7a;libplugins_platforms_qtforandroid_armeabi-v7a.so:libplugins_multimedia_ffmpegmediaplugin_armeabi-v7a.so:libplugins_multimedia_androidmediaplugin_armeabi-v7a.so</item>
+    </array>
+    <array name="qt_libs">
+        <item>armeabi-v7a;c++_shared</item>
+        <item>armeabi-v7a;Qt6Core_armeabi-v7a</item>
+        <item>armeabi-v7a;Qt6Gui_armeabi-v7a</item>
+        <item>armeabi-v7a;Qt6Network_armeabi-v7a</item>
+        <item>armeabi-v7a;Qt6Multimedia_armeabi-v7a</item>
+        <item>armeabi-v7a;Qt6OpenGL_armeabi-v7a</item>
+        <item>armeabi-v7a;Qt6Widgets_armeabi-v7a</item>
+        <item>armeabi-v7a;Qt6OpenGLWidgets_armeabi-v7a</item>
+        <item>armeabi-v7a;Qt6Svg_armeabi-v7a</item>
+    </array>
+    <string name="bundle_local_qt_libs">1</string>
+    <string name="fatal_error_msg">Your application encountered a fatal error and cannot continue.</string>
+    <string name="static_init_classes">org.qtproject.qt.android.multimedia.QtAudioDeviceManager:org.qtproject.qt.android.multimedia.QtMultimediaUtils</string>
+    <string name="system_libs_prefix"/>
+    <string name="unsupported_android_version">This version of Android is not supported.</string>
+    <string name="use_local_qt_libs">1</string>
+</resources>

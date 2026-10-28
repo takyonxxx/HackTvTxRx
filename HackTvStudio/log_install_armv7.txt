@@ -1,0 +1,4 @@
+﻿C:/Qt/Tools/mingw1310_64/bin/mingw32-make -f Makefile INSTALL_ROOT=C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build install
+mingw32-make[1]: Entering directory 'C:/Users/turka/Desktop/HackTvTxRx/HackTvStudio/android-build-armv7'
+C:\Qt\6.5.3\mingw_64\bin\qmake6.exe -install qinstall -exe libHackTvStudio_armeabi-v7a.so C:\Users\turka\Desktop\HackTvTxRx\HackTvStudio\android-build-armv7\android-build\libs\armeabi-v7a\libHackTvStudio_armeabi-v7a.so
+mingw32-make[1]: Leaving directory 'C:/Users/turka/Desktop/HackTvTxRx/HackTvStudio/android-build-armv7'

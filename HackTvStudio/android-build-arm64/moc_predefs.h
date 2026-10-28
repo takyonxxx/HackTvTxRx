@@ -4,7 +4,7 @@
 #define __AARCH64EL__ 1
 #define __AARCH64_CMODEL_SMALL__ 1
 #define __ANDROID_API__ __ANDROID_MIN_SDK_VERSION__
-#define __ANDROID_MIN_SDK_VERSION__ 28
+#define __ANDROID_MIN_SDK_VERSION__ 23
 #define __ANDROID__ 1
 #define __ARM_64BIT_STATE 1
 #define __ARM_ACLE 200

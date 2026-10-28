@@ -7,6 +7,23 @@
 namespace {
 constexpr float kPi = 3.14159265358979f;
 constexpr size_t AUDIO_BLOCK_FRAMES = 480;   // 10 ms at 48 kHz
+
+// Sine lookup table for FM I/Q generation. A weak car head-unit CPU cannot run
+// std::sin + std::cos per sample at 2 Msps (4M transcendental calls/sec), which
+// starved the TX ring and made the audio choppy. A table read is ~20x cheaper.
+constexpr int kSinBits = 13;                 // 8192 entries -> ~0.0008 rad step
+constexpr int kSinSize = 1 << kSinBits;
+constexpr int kSinMask = kSinSize - 1;
+const float* sineTable()
+{
+    static const std::vector<float> tbl = [] {
+        std::vector<float> t(kSinSize);
+        for (int i = 0; i < kSinSize; ++i)
+            t[i] = std::sin(2.0 * 3.14159265358979 * i / kSinSize);
+        return t;
+    }();
+    return tbl.data();
+}
 }
 
 RadioModulator::RadioModulator() = default;
@@ -160,15 +177,20 @@ size_t RadioModulator::txProduce(int8_t* iq, size_t bytes)
             iq[2 * i + 1] = 0;
         }
     } else {
-        // FM: phase advance per sample = 2*pi*deviation*x/fs
+        // FM: phase advance per sample = 2*pi*deviation*x/fs. Sine via lookup table
+        // (std::sin/cos per sample was too slow on the head unit -> TX underruns).
         const double k = 2.0 * kPi * static_cast<double>(m_deviationHz.load()) / static_cast<double>(m_rate);
+        const float* tbl = sineTable();
+        const double scale = static_cast<double>(kSinSize) / (2.0 * kPi);  // radians -> table index
         double ph = m_phase;
         for (size_t i = 0; i < n; ++i) {
             ph += k * bb[i];
             if (ph > kPi)       ph -= 2.0 * kPi;
             else if (ph < -kPi) ph += 2.0 * kPi;
-            iq[2 * i]     = static_cast<int8_t>(std::cos(ph) * amp);
-            iq[2 * i + 1] = static_cast<int8_t>(std::sin(ph) * amp);
+            const int32_t idx  = static_cast<int32_t>(ph * scale) & kSinMask;          // sin(ph)
+            const int32_t idxC = (idx + kSinSize / 4) & kSinMask;                      // cos(ph)=sin(ph+pi/2)
+            iq[2 * i]     = static_cast<int8_t>(tbl[idxC] * amp);
+            iq[2 * i + 1] = static_cast<int8_t>(tbl[idx] * amp);
         }
         m_phase = ph;
     }
