@@ -174,12 +174,7 @@ SOURCES += \
     core/RxEngine.cpp \
     core/TxEngine.cpp \
     dsp/RadioModulator.cpp \
-    tv/QtAvSource.cpp \
-    tv/TestCard.cpp \
-    tv/TvTxEncoder.cpp \
-    tv/TeletextPages.cpp \
     ui/RadioTxPanel.cpp \
-    ui/TvTxPanel.cpp \
     hacktv/acp.c \
     hacktv/av.c \
     hacktv/av_test.c \
@@ -200,7 +195,7 @@ SOURCES += \
     hacktv/vits.c \
     hacktv/wss.c \
     ui/StudioWindow.cpp \
-    ui/TvRxPanel.cpp \
+    ui/Theme.cpp \
     ui/RadioRxPanel.cpp \
     ui/TvRecorder.cpp \
     dsp/fmdemodulator.cpp \
@@ -208,6 +203,27 @@ SOURCES += \
     widgets/glplotter.cpp \
     widgets/freqctrl.cpp \
     widgets/meter.cpp \
+    widgets/analogmeter.cpp \
+
+# TV RX / TX stay a desktop feature; the Android (head-unit) build is radio only.
+!android {
+SOURCES += \
+    tv/QtAvSource.cpp \
+    tv/TestCard.cpp \
+    tv/TvTxEncoder.cpp \
+    tv/TeletextPages.cpp \
+    ui/TvTxPanel.cpp \
+    ui/TvRxPanel.cpp
+HEADERS += \
+    tv/QtAvSource.h \
+    tv/TestCard.h \
+    tv/TvTxEncoder.h \
+    tv/TeletextPages.h \
+    ui/TvTxPanel.h \
+    ui/TvRxPanel.h
+}
+
+SOURCES += \
     $$DRIVER_DIR/hackrfdevice.cpp
 
 HEADERS += \
@@ -221,12 +237,7 @@ HEADERS += \
     core/RxEngine.h \
     core/TxEngine.h \
     dsp/RadioModulator.h \
-    tv/QtAvSource.h \
-    tv/TestCard.h \
-    tv/TvTxEncoder.h \
-    tv/TeletextPages.h \
     ui/RadioTxPanel.h \
-    ui/TvTxPanel.h \
     hacktv/acp.h \
     hacktv/av.h \
     hacktv/av_test.h \
@@ -255,7 +266,7 @@ HEADERS += \
     core/WorkerQueue.h \
     ui/ModePanel.h \
     ui/StudioWindow.h \
-    ui/TvRxPanel.h \
+    ui/Theme.h \
     ui/RadioRxPanel.h \
     ui/TvRecorder.h \
     dsp/fmdemodulator.h \
@@ -264,6 +275,7 @@ HEADERS += \
     widgets/glplotter.h \
     widgets/freqctrl.h \
     widgets/meter.h \
+    widgets/analogmeter.h \
     $$DRIVER_DIR/hackrfdevice.h \
     $$DRIVER_DIR/constants.h \
     $$DRIVER_DIR/modulation.h \

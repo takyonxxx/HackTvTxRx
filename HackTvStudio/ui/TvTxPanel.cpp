@@ -16,6 +16,10 @@
 #include <QDir>
 #include <cmath>
 #include <QVBoxLayout>
+#include <QDialog>
+#include <QPushButton>
+#include <QScrollArea>
+#include <algorithm>
 
 TvTxPanel::TvTxPanel(QWidget* parent)
     : ModePanel(parent)
@@ -67,6 +71,9 @@ void TvTxPanel::buildUi()
     pl->setContentsMargins(6, 6, 6, 6);
     m_preview = new VideoView(prevGroup);
     m_preview->setWideAspect(false);
+#ifdef Q_OS_ANDROID
+    m_preview->setMinimumHeight(140);     // smaller floor so the settings button fits below
+#endif
     pl->addWidget(m_preview);
     // Playback position for the video file source (slider seeks the running transmission)
     QHBoxLayout* seekRow = new QHBoxLayout();
@@ -185,7 +192,9 @@ void TvTxPanel::buildUi()
     updateSourceWidgets();
     rl->addWidget(srcGroup);
     rl->addStretch();
+#ifndef Q_OS_ANDROID
     grid->addWidget(left, 1, 0);
+#endif
 
     // ---- Bottom right: options (three checkbox columns, two form columns)
     QGroupBox* optGroup = new QGroupBox("Options", this);
@@ -256,12 +265,62 @@ void TvTxPanel::buildUi()
     gl->setRowStretch(6, 1);
     gl->setColumnStretch(1, 1);
     gl->setColumnStretch(3, 1);
+
+#ifdef Q_OS_ANDROID
+    // Android: the source/standard setup and the many broadcast options move into
+    // a dialog so the tab shows only the preview + TX monitor and fits the screen.
+    m_tabSettings = new QDialog(this);
+    m_tabSettings->setWindowTitle(QString::fromUtf8("TV TX ayarları"));
+    QVBoxLayout* dl = new QVBoxLayout(m_tabSettings);
+    // Two columns inside a scroll area so the dialog always fits and Kapat stays visible.
+    QWidget* body = new QWidget(m_tabSettings);
+    QHBoxLayout* cols = new QHBoxLayout(body);
+    cols->setContentsMargins(0, 0, 0, 0);
+    QVBoxLayout* c1 = new QVBoxLayout();
+    c1->addWidget(left);              // TV standard + Video source
+    c1->addStretch();
+    QVBoxLayout* c2 = new QVBoxLayout();
+    c2->addWidget(optGroup);          // broadcast options
+    c2->addStretch();
+    cols->addLayout(c1);
+    cols->addLayout(c2);
+    QScrollArea* sc = new QScrollArea(m_tabSettings);
+    sc->setWidget(body);
+    sc->setWidgetResizable(true);
+    sc->setFrameShape(QFrame::NoFrame);
+    dl->addWidget(sc, 1);
+    QPushButton* closeBtn = new QPushButton(QString::fromUtf8("Kapat"), m_tabSettings);
+    connect(closeBtn, &QPushButton::clicked, m_tabSettings, &QDialog::accept);
+    dl->addWidget(closeBtn);
+
+    m_tabSettingsBtn = new QPushButton(QString::fromUtf8("⚙ Kaynak · TV standardı · yayın seçenekleri"), this);
+    m_tabSettingsBtn->setMinimumHeight(34);
+    connect(m_tabSettingsBtn, &QPushButton::clicked, this, &TvTxPanel::openTabSettings);
+    grid->addWidget(m_tabSettingsBtn, 1, 0, 1, 2);
+#else
     grid->addWidget(optGroup, 1, 1);
+#endif
 
     grid->setRowStretch(0, 1);          // preview and spectrum take the height
     grid->setRowStretch(1, 0);
     grid->setColumnStretch(0, 3);
     grid->setColumnStretch(1, 2);
+}
+
+void TvTxPanel::openTabSettings()
+{
+    if (!m_tabSettings) return;
+    // Fill most of the screen (the scroll area's own hint is tiny) so the columns
+    // are comfortable rather than cramped.
+    // Size against the whole window, not the panel (which is only the tab area),
+    // so the dialog is tall enough to show every row without a scroll bar.
+    QWidget* top = window();
+    const int winW = top ? top->width() : width();
+    const int winH = top ? top->height() : height();
+    const int w = std::min(920, winW - 24);
+    const int h = winH - 40;
+    m_tabSettings->resize(w, h);
+    m_tabSettings->exec();
 }
 
 void TvTxPanel::browseFile()

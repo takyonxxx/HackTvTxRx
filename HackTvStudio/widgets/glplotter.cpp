@@ -32,13 +32,14 @@ static int gettimeofday(struct timeval *tp, struct timezone *)
 #define COLPAL_MIX    0
 #define DEFAULT_FREQ_STEP 5
 
-#define PLOTTER_BGD_COLOR        QColor(4, 14, 22)
-#define PLOTTER_GRID_COLOR       QColor(28, 105, 168, 90)
-#define PLOTTER_TEXT_COLOR       QColor(180, 220, 180)
-#define PLOTTER_CENTER_LINE_COL  QColor(255, 255, 0, 140)
-#define PLOTTER_FILTER_LINE_COL  QColor(255, 80, 80, 180)
+// Lighter slate-blue scheme: readable in a car, not a black hole
+#define PLOTTER_BGD_COLOR        QColor(20, 34, 56)
+#define PLOTTER_GRID_COLOR       QColor(90, 150, 210, 110)
+#define PLOTTER_TEXT_COLOR       QColor(215, 235, 250)
+#define PLOTTER_CENTER_LINE_COL  QColor(255, 230, 80, 170)
+#define PLOTTER_FILTER_LINE_COL  QColor(255, 120, 100, 200)
 #define PLOTTER_FILTER_BOX_COL   QColor(0, 180, 255, 30)
-#define WF_BG_COLOR              QColor(2, 8, 30)
+#define WF_BG_COLOR              QColor(14, 24, 52)
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #define FONT_WIDTH(metrics, text) metrics.horizontalAdvance(text)
@@ -80,6 +81,13 @@ CPlotter::CPlotter(QWidget *parent)
     // QPainter handles antialiasing internally, no need for MSAA
     // which can cause crashes on some GPU drivers
 
+    m_bgCol   = PLOTTER_BGD_COLOR;
+    m_gridCol = PLOTTER_GRID_COLOR;
+    m_textCol = PLOTTER_TEXT_COLOR;
+    m_wfBgCol = WF_BG_COLOR;
+    m_lineCol = QColor(240, 248, 255);
+    m_fillTop = QColor(80, 210, 255);
+    m_fillBot = QColor(20, 38, 80);
     m_FftColor = QColor(0xCE, 0xEC, 0xF5);
     m_FftFillCol = m_FftColor;
     m_FftFillCol.setAlpha(60);
@@ -116,7 +124,7 @@ void CPlotter::resizeEvent(QResizeEvent*) { rebuildWaterfall(width(), height());
 void CPlotter::initializeGL()
 {
     initializeOpenGLFunctions();
-    glClearColor(0.0f, 0.031f, 0.078f, 1.0f);
+    glClearColor(m_bgCol.redF(), m_bgCol.greenF(), m_bgCol.blueF(), 1.0f);
 }
 void CPlotter::resizeGL(int w, int h) { rebuildWaterfall(w, h); }
 void CPlotter::paintGL()              { renderPlot(); }
@@ -130,7 +138,7 @@ void CPlotter::rebuildWaterfall(int w, int h)
     if (wfH < 1) wfH = 1;
     if (m_waterfallImg.isNull()) {
         m_waterfallImg = QImage(w, wfH, QImage::Format_RGB32);
-        m_waterfallImg.fill(WF_BG_COLOR.rgb());
+        m_waterfallImg.fill(m_wfBgCol.rgb());
     } else {
         m_waterfallImg = m_waterfallImg.scaled(w, wfH, Qt::IgnoreAspectRatio, Qt::FastTransformation);
     }
@@ -155,7 +163,7 @@ void CPlotter::renderPlot()
     painter.setRenderHint(QPainter::TextAntialiasing, true);
 
     // Background
-    painter.fillRect(0, 0, w, specH, PLOTTER_BGD_COLOR);
+    painter.fillRect(0, 0, w, specH, m_bgCol);
 
     // Filter box (behind everything)
     if (m_FilterBoxEnabled)
@@ -204,12 +212,12 @@ void CPlotter::drawGrid(QPainter &painter, int w, int h)
     int plotH = h - xAxisHeight;
     if (plotW < 10 || plotH < 10) return;
 
-    QPen gridPen(PLOTTER_GRID_COLOR);
+    QPen gridPen(m_gridCol);
     gridPen.setStyle(Qt::SolidLine);
     gridPen.setWidthF(1.0);
     painter.setFont(m_Font);
 
-    QColor gridCol = PLOTTER_GRID_COLOR;
+    QColor gridCol = m_gridCol;
 
     // Horizontal grid (dB) — draw as filled rects for reliable OpenGL rendering
     const int topMargin = 10; // prevent top label clipping
@@ -222,7 +230,7 @@ void CPlotter::drawGrid(QPainter &painter, int w, int h)
         int y = topMargin + (int)((m_PandMaxdB - db) * pixPerDb);
         if (y < 0 || y >= plotH) continue;
         painter.fillRect(m_YAxisWidth, y, plotW, 1, gridCol);
-        painter.setPen(PLOTTER_TEXT_COLOR);
+        painter.setPen(m_textCol);
         painter.drawText(2, y + metrics.ascent() / 2, QString::number((int)db));
     }
 
@@ -304,14 +312,16 @@ void CPlotter::drawSpectrum(QPainter &painter, int w, int specH)
         fillPath.closeSubpath();
 
         QLinearGradient grad(0, 0, 0, specH);
-        grad.setColorAt(0.0,  QColor(245, 250, 255, 255));  // pure white at peaks
-        grad.setColorAt(0.02, QColor(200, 225, 255, 255));  // white-blue
-        grad.setColorAt(0.08, QColor(120, 180, 255, 255));  // light blue
-        grad.setColorAt(0.20, QColor(50, 120, 240, 255));   // sharp to medium blue
-        grad.setColorAt(0.40, QColor(20, 70, 200, 255));    // deep blue
-        grad.setColorAt(0.60, QColor(8, 40, 150, 255));     // dark blue
-        grad.setColorAt(0.80, QColor(3, 18, 80, 255));      // very dark navy
-        grad.setColorAt(1.0,  QColor(1, 6, 35, 255));       // almost black at bottom
+        // Theme-driven: line colour at the peaks, fillTop just below, fillBottom at the floor
+        auto mix = [](const QColor& a, const QColor& b, float f) {
+            return QColor(int(a.red() + (b.red() - a.red()) * f), int(a.green() + (b.green() - a.green()) * f),
+                          int(a.blue() + (b.blue() - a.blue()) * f));
+        };
+        grad.setColorAt(0.0,  m_lineCol);
+        grad.setColorAt(0.04, mix(m_lineCol, m_fillTop, 0.5f));
+        grad.setColorAt(0.12, m_fillTop);
+        grad.setColorAt(0.45, mix(m_fillTop, m_fillBot, 0.5f));
+        grad.setColorAt(1.0,  m_fillBot);
 
         painter.setPen(Qt::NoPen);
         painter.setBrush(grad);
@@ -320,14 +330,15 @@ void CPlotter::drawSpectrum(QPainter &painter, int w, int specH)
 
     // Draw spectrum line — white like SDRuno
     // Subtle glow under the white line
-    QPen glowPen(QColor(180, 210, 255, 50));
+    QColor glowCol = m_lineCol; glowCol.setAlpha(50);
+    QPen glowPen(glowCol);
     glowPen.setWidthF(3.0);
     painter.setPen(glowPen);
     painter.setBrush(Qt::NoBrush);
     painter.drawPath(specPath);
 
     // Main white line
-    QPen mainPen(QColor(240, 248, 255));
+    QPen mainPen(m_lineCol);
     mainPen.setWidthF(1.2);
     painter.setPen(mainPen);
     painter.drawPath(specPath);
@@ -421,7 +432,7 @@ void CPlotter::drawWaterfall(QPainter &painter, int w, int h)
                     if (msec_per_wfline > 0)
                         m_wfbuf[i] = 255;
                 } else {
-                    line[i] = WF_BG_COLOR.rgb();
+                    line[i] = m_wfBgCol.rgb();
                 }
             }
         }
@@ -597,7 +608,7 @@ void CPlotter::drawFreqLabels(QPainter &painter, int w, int specH)
     int plotW = w - m_YAxisWidth;
     if (plotW < 10) return;
 
-    painter.setPen(PLOTTER_TEXT_COLOR);
+    painter.setPen(m_textCol);
     painter.setFont(m_Font);
 
     for (int i = 0; i <= m_HorDivs; i++) {
@@ -971,6 +982,16 @@ void CPlotter::calcDivSize(qint64 low, qint64 high, int divswanted, qint64 &adjl
 // Public slots (settings)
 // ============================================================================
 
+void CPlotter::setThemeColors(const QColor& bg, const QColor& grid, const QColor& text, const QColor& wfBg,
+                              const QColor& fftLine, const QColor& fillTop, const QColor& fillBottom)
+{
+    m_bgCol = bg; m_gridCol = grid; m_textCol = text; m_wfBgCol = wfBg;
+    m_lineCol = fftLine; m_fillTop = fillTop; m_fillBot = fillBottom;
+    if (!m_waterfallImg.isNull()) m_waterfallImg.fill(m_wfBgCol.rgb());
+    m_DrawOverlay = true;
+    update();
+}
+
 void CPlotter::setFftPlotColor(const QColor color)
 {
     m_FftColor = color;
@@ -1076,7 +1097,7 @@ void CPlotter::setFftRate(int rate_hz)
 void CPlotter::clearWaterfall(void)
 {
     if (!m_waterfallImg.isNull())
-        m_waterfallImg.fill(WF_BG_COLOR.rgb());
+        m_waterfallImg.fill(m_wfBgCol.rgb());
     memset(m_wfbuf, 255, MAX_SCREENSIZE);
 }
 
@@ -1102,13 +1123,13 @@ void CPlotter::setWaterfallPalette(int pal)
     for (int i = 0; i < 256; i++) {
         float t;
         if (i < 50) {
-            // Noise floor: near-black → deep dark blue (dominant background color)
+            // Noise floor: slate navy (dominant background colour, deliberately not black)
             t = (float)i / 50.0f;
-            m_ColorTbl[i].setRgb(0, 0, (int)(8 + 40 * t));
+            m_ColorTbl[i].setRgb((int)(14 - 8 * t), (int)(24 - 10 * t), (int)(52 + 40 * t));
         } else if (i < 90) {
-            // Dark blue → medium blue
+            // Navy → medium blue
             t = (float)(i - 50) / 40.0f;
-            m_ColorTbl[i].setRgb(0, (int)(12 * t), (int)(48 + 75 * t));
+            m_ColorTbl[i].setRgb((int)(6 * (1 - t)), (int)(14 + 10 * t), (int)(92 + 60 * t));
         } else if (i < 130) {
             // Medium blue → bright blue
             t = (float)(i - 90) / 40.0f;

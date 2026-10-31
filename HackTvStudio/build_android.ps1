@@ -1,7 +1,7 @@
 # HackTv Studio - Android APK build (Qt 6.11.1, qmake flow)
 # Usage:  .\build_android.ps1 x86_64   (emulator)
 #         .\build_android.ps1 arm64    (car head unit)
-param([string]$Abi = "x86_64", [switch]$NoGl, [string]$QtVer = "6.11.1")
+param([string]$Abi = "x86_64", [switch]$NoGl, [string]$QtVer = "6.11.1", [switch]$SoOnly)
 # Native tools (clang/gradle) write warnings to stderr; do NOT treat those as
 # terminating errors. We check $LASTEXITCODE after each step instead.
 $ErrorActionPreference = "Continue"
@@ -50,6 +50,13 @@ Run "$qt\bin\qmake.bat" $qmakeArgs "qmake_$Abi"
 Write-Host "== make (compile native .so)"
 Run $make @("-j8") "make_$Abi"
 
+if ($SoOnly) {
+    $so = Get-ChildItem -Recurse "$bdir" -Filter "libHackTvStudio_*.so" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $so) { throw "SoOnly: .so uretilemedi" }
+    Write-Host "== SO-ONLY HAZIR: $($so.FullName)  ($($so.Length) bytes)"
+    return
+}
+
 if ($QtVer -like "6.5*") {
     # Qt 6.5 ships AGP 7.4.1, whose aapt2 cannot parse the android-36 platform
     # (new resource-table format). androiddeployqt still generates the full Gradle
@@ -70,7 +77,7 @@ if ($QtVer -like "6.5*") {
     Set-Content $gp $txt -Encoding UTF8 -NoNewline
 
     Write-Host "== gradlew assembleDebug (android-33)"
-    Run "$andBuild\gradlew.bat" @("-p", $andBuild, "assembleDebug") "gradle_$Abi"
+    Run "$andBuild\gradlew.bat" @("-p", $andBuild, "--no-daemon", "assembleDebug") "gradle_$Abi"
 } else {
     Write-Host "== make apk (androiddeployqt + gradle)"
     Run $make @("apk") "apk_$Abi"

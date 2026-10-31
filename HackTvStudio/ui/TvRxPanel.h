@@ -117,6 +117,10 @@ private:
     QWidget* buildAudioGroup();
     QWidget* buildSyncGroup();
     QWidget* buildRecordGroup();
+    void openTabSettings();                 // Android: show secondary controls dialog
+
+    class QDialog* m_tabSettings = nullptr;
+    QPushButton* m_tabSettingsBtn = nullptr;
 
     TvRxPipeline* m_pipe;
     TvRecorder* m_recorder = nullptr;

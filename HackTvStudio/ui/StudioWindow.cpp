@@ -1,14 +1,19 @@
 #include "StudioWindow.h"
 #include "ModePanel.h"
-#include "TvRxPanel.h"
 #include "RadioRxPanel.h"
 #include "RadioTxPanel.h"
+#ifndef Q_OS_ANDROID
+#include "TvRxPanel.h"
 #include "TvTxPanel.h"
+#endif
 #include "widgets/glplotter.h"
 #include "widgets/freqctrl.h"
 #include "widgets/meter.h"
+#include "widgets/analogmeter.h"
+#include "Theme.h"
 
 #include <QApplication>
+#include <algorithm>
 #include <cmath>
 #include <QCloseEvent>
 #include <QDateTime>
@@ -28,6 +33,16 @@
 #include <QVBoxLayout>
 
 namespace {
+
+#ifdef Q_OS_ANDROID
+constexpr const char* kSplitterKey = "splitterA1";   // vertical (spectrum on top) layout
+constexpr uint64_t    kDefaultFrequency  = 100000000ULL;   // radio-only app: FM broadcast
+constexpr uint32_t    kDefaultSampleRate = 2000000;
+#else
+constexpr const char* kSplitterKey = "splitterV4";   // vertical layout (spectrum on top) on the desktop too
+constexpr uint64_t    kDefaultFrequency  = 479250000ULL;   // desktop: analogue TV channel (original)
+constexpr uint32_t    kDefaultSampleRate = 16000000;
+#endif
 
 /* Tabs whose real implementation arrives in a later phase. */
 class PlaceholderPanel : public ModePanel
@@ -125,9 +140,15 @@ void StudioWindow::buildUi()
     // ---- Spectrum + waterfall with a vertical range slider
     QWidget* specWidget = new QWidget(this);
     m_specWidget = specWidget;
-    QHBoxLayout* specLayout = new QHBoxLayout(specWidget);
+    QVBoxLayout* specOuter = new QVBoxLayout(specWidget);
+    specOuter->setContentsMargins(0, 0, 0, 0);
+    specOuter->setSpacing(4);
+    if (m_meterGroup) m_meterGroup->hide();   // the bar meter is replaced by the needle S-meter (right of the spectrum)
+    QWidget* specRow = new QWidget(specWidget);
+    QHBoxLayout* specLayout = new QHBoxLayout(specRow);
     specLayout->setContentsMargins(0, 0, 0, 0);
     specLayout->setSpacing(4);
+    specOuter->addWidget(specRow, 1);
 
     m_plotter = new CPlotter(this);
     m_plotter->setSampleRate(static_cast<float>(m_sampleRate));
@@ -142,8 +163,12 @@ void StudioWindow::buildUi()
     m_plotter->setClickResolution(1000);
     m_plotter->setFftPlotColor(QColor("#CEECF5"));
     m_plotter->setFftFill(true);
+    {
+        const Theme& t = Themes::current();
+        m_plotter->setThemeColors(t.plotBg, t.plotGrid, t.plotText, t.wfBg, t.fftLine, t.fillTop, t.fillBottom);
+    }
 #ifdef Q_OS_ANDROID
-    m_plotter->setMinimumHeight(140);
+    m_plotter->setMinimumHeight(120);
 #else
     m_plotter->setMinimumHeight(180);
 #endif
@@ -166,6 +191,17 @@ void StudioWindow::buildUi()
         m_plotter->setFftRange(static_cast<float>(v), 0.0f);
     });
     specLayout->addWidget(m_plotterRange);
+    // Needle S-meter at the far right, same height as spectrum + waterfall
+    m_analogMeter = new AnalogMeter(specRow);
+    {
+        const Theme& t = Themes::current();
+        m_analogMeter->setThemeColors(t.plotBg, t.plotText, t.accent);
+    }
+    QVBoxLayout* meterCol = new QVBoxLayout();      // meter at the top, nothing drawn below it
+    meterCol->setContentsMargins(0, 0, 0, 0);
+    meterCol->addWidget(m_analogMeter, 0, Qt::AlignTop);
+    meterCol->addStretch(1);
+    specLayout->addLayout(meterCol);
 
     // ---- Mode tabs
     m_tabs = new QTabWidget(this);
@@ -173,16 +209,21 @@ void StudioWindow::buildUi()
     addPanel(new RadioRxPanel(this));
     m_radioRxTab = 0;
     addPanel(new RadioTxPanel(this));
+#ifndef Q_OS_ANDROID
     addPanel(new TvRxPanel(this));
     m_tvRxTab = 2;
     addPanel(new TvTxPanel(this));
+#endif
     connect(m_tabs, &QTabWidget::currentChanged, this, &StudioWindow::onTabChanged);
 
     // Spectrum column / strip and the mode tabs share one splitter whose orientation
     // decides the layout: vertical = spectrum on top, horizontal = spectrum on the right.
+    // Controls on the left, spectrum + waterfall on the right half (head-unit friendly).
+    // Spectrum + waterfall (+ S-meter) fill the width on top, the mode tabs sit under them.
     m_splitter = new QSplitter(Qt::Vertical, this);
     m_splitter->addWidget(specWidget);
     m_splitter->addWidget(m_tabs);
+    m_splitter->setHandleWidth(4);
     m_splitter->setChildrenCollapsible(false);
     root->addWidget(m_splitter, 1);
     placeSpectrumOnTop();
@@ -222,14 +263,14 @@ QWidget* StudioWindow::buildTopStrip()
     m_freqCtrl->setup(0, 0, static_cast<qint64>(BandPlan::HACKRF_MAX_HZ), 1, FCTL_UNIT_MHZ);
     m_freqCtrl->setFrequency(static_cast<qint64>(m_frequency));
 #ifdef Q_OS_ANDROID
-    m_freqCtrl->setMinimumHeight(46);
-    m_freqCtrl->setMaximumHeight(56);
+    m_freqCtrl->setMinimumHeight(74);        // big digits: tuned by finger on the head unit
+    m_freqCtrl->setMaximumHeight(96);
 #else
     m_freqCtrl->setMinimumHeight(64);
     m_freqCtrl->setMaximumHeight(80);
 #endif
 #ifdef Q_OS_ANDROID
-    m_freqCtrl->setMinimumWidth(330);
+    m_freqCtrl->setMinimumWidth(440);        // big digits (height-driven) but leaves room for HackRF at 1024px
 #else
     m_freqCtrl->setMinimumWidth(420);
 #endif
@@ -238,26 +279,78 @@ QWidget* StudioWindow::buildTopStrip()
 
     QHBoxLayout* bandRow = new QHBoxLayout();
     m_bandLabel = new QLabel(tuneGroup);
-    m_bandLabel->setStyleSheet("QLabel { color: #00ffcc; font-weight: bold; font-size: 11pt; }");
+    m_bandLabel->setStyleSheet(QString("QLabel { color: %1; font-weight: bold; font-size: 11pt; }").arg(Themes::current().accent.name()));
     m_modeLabel = new QLabel(tuneGroup);
-    m_modeLabel->setStyleSheet("QLabel { color: #c8f0ff; font-size: 10pt; }");
+    m_modeLabel->setStyleSheet("QLabel { font-size: 10pt; }");
     m_autoModeCheck = new QCheckBox("Auto mode", tuneGroup);
     m_autoModeCheck->setToolTip("Switch to the TV or Radio receiver automatically from the band plan");
     m_autoModeCheck->setChecked(true);
     bandRow->addWidget(m_bandLabel);
     bandRow->addWidget(m_modeLabel, 1);
-    bandRow->addWidget(m_autoModeCheck);
+    // Quick tuning: ±1 MHz / ±100 kHz buttons beside the band name. "Auto mode"
+    // lives in the device box (desktop) / ⚙ settings dialog (Android), see buildDeviceGroup.
+    auto stepBtn = [this, tuneGroup](const QString& text, qint64 delta) {
+        QPushButton* b = new QPushButton(text, tuneGroup);
+        b->setMinimumHeight(34);
+        b->setMinimumWidth(68);
+        b->setStyleSheet("QPushButton { font-size: 12pt; font-weight: bold; padding: 2px 6px; }");
+        connect(b, &QPushButton::clicked, this, [this, delta] {
+            qint64 f = static_cast<qint64>(m_frequency) + delta;
+            f = std::max<qint64>(0, std::min<qint64>(f, static_cast<qint64>(BandPlan::HACKRF_MAX_HZ)));
+            setFrequency(static_cast<uint64_t>(f), false);
+        });
+        return b;
+    };
+    bandRow->addWidget(stepBtn(QString::fromUtf8("−1 M"),   -1000000));
+    bandRow->addWidget(stepBtn(QString::fromUtf8("−100 k"), -100000));
+    bandRow->addWidget(stepBtn("+100 k", 100000));
+    bandRow->addWidget(stepBtn("+1 M",   1000000));
     tl->addLayout(bandRow);
+#ifdef Q_OS_ANDROID
+    l->addWidget(tuneGroup, 3);          // big frequency, but 3:2 leaves the HackRF box real room (no right-edge clip on the head unit)
+#else
     l->addWidget(tuneGroup, 2);
+#endif
+
+    // Big finger-sized + / - between the frequency and the HackRF box. The step
+    // follows the channel width of the active panel (WFM 100 kHz, NFM 12.5 kHz, AM 10 kHz).
+    QVBoxLayout* stepCol = new QVBoxLayout();
+    stepCol->setSpacing(4);
+    stepCol->setContentsMargins(0, 0, 0, 0);
+    auto bigStep = [this, strip](const QString& sign, int dir) {
+        QPushButton* b = new QPushButton(sign, strip);
+        b->setMinimumWidth(78);
+        b->setMaximumWidth(96);
+        b->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+        b->setStyleSheet("QPushButton { font-size: 15pt; font-weight: bold; padding: 2px; }");
+        b->setAutoRepeat(true);
+        b->setAutoRepeatDelay(400);
+        b->setAutoRepeatInterval(120);
+        connect(b, &QPushButton::clicked, this, [this, dir] {
+            qint64 f = static_cast<qint64>(m_frequency) + dir * fingerStepHz();
+            f = std::max<qint64>(0, std::min<qint64>(f, static_cast<qint64>(BandPlan::HACKRF_MAX_HZ)));
+            setFrequency(static_cast<uint64_t>(f), false);
+        });
+        return b;
+    };
+    m_stepUpBtn   = bigStep("+", +1);
+    m_stepDownBtn = bigStep(QString::fromUtf8("−"), -1);
+    stepCol->addWidget(m_stepUpBtn, 1);
+    stepCol->addWidget(m_stepDownBtn, 1);
+    l->addLayout(stepCol);
 
     // S-meter: power inside the tuned channel (filter box / TV channel)
-    QGroupBox* meterGroup = new QGroupBox("Channel power", strip);
+    m_meterGroup = new QGroupBox("Channel power", strip);
+    QGroupBox* meterGroup = m_meterGroup;
     QVBoxLayout* ml = new QVBoxLayout(meterGroup);
     ml->setSpacing(2);
+#ifdef Q_OS_ANDROID
+    ml->setContentsMargins(6, 2, 6, 2);      // compact: docked above the spectrum
+#endif
     m_meter = new CMeter(meterGroup);
 #ifdef Q_OS_ANDROID
-    m_meter->setMinimumHeight(40);
-    m_meter->setMaximumHeight(56);
+    m_meter->setMinimumHeight(44);
+    m_meter->setMaximumHeight(52);
 #else
     m_meter->setMinimumHeight(58);
     m_meter->setMaximumHeight(80);
@@ -276,10 +369,13 @@ QWidget* StudioWindow::buildTopStrip()
     m_overloadLabel->setToolTip("ADC samples hitting full scale: lower LNA/VGA or switch the RF amp off");
     mi->addWidget(m_meterInfo, 1);
     mi->addWidget(m_overloadLabel);
-    ml->addLayout(mi);
-    l->addWidget(meterGroup, 1);
+    ml->addLayout(mi);                       // (group stays hidden: the needle S-meter replaced it)
 
+#ifdef Q_OS_ANDROID
+    l->addWidget(buildDeviceGroup(), 2);     // 3:2 with frequency: enough width that the box border + TX spin never clip
+#else
     l->addWidget(buildDeviceGroup(), 2);
+#endif
     return strip;
 }
 
@@ -290,14 +386,14 @@ QWidget* StudioWindow::buildDeviceGroup()
     grid->setHorizontalSpacing(6);
     grid->setVerticalSpacing(3);
 #ifdef Q_OS_ANDROID
-    grid->setVerticalSpacing(1);
-    grid->setContentsMargins(6, 2, 6, 2);
+    grid->setVerticalSpacing(6);   // vertical stack: keep rows from touching
+    grid->setContentsMargins(6, 4, 8, 4);
 #endif
 
     m_startButton = new QPushButton("START", g);
     m_startButton->setMinimumHeight(40);
 #ifdef Q_OS_ANDROID
-    m_startButton->setMinimumHeight(30);
+    m_startButton->setMinimumHeight(46);   // big, prominent START on top of the box
 #endif
     m_startButton->setStyleSheet("QPushButton { background: #1f7a3f; color: white; font-size: 12pt; }");
     connect(m_startButton, &QPushButton::clicked, this, &StudioWindow::onStartStop);
@@ -307,7 +403,7 @@ QWidget* StudioWindow::buildDeviceGroup()
                           12500000, 14000000, 16000000, 18000000, 20000000 };
     for (int r : rates)
         m_sampleRateCombo->addItem(QString("%1 MS/s").arg(r / 1e6, 0, 'g', 4), r);
-    m_sampleRateCombo->setCurrentIndex(m_sampleRateCombo->findData(16000000));
+    m_sampleRateCombo->setCurrentIndex(m_sampleRateCombo->findData(static_cast<int>(m_sampleRate)));
     connect(m_sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &StudioWindow::onSampleRateSelected);
 
@@ -343,13 +439,24 @@ QWidget* StudioWindow::buildDeviceGroup()
     // ---- Head unit: compact strip = START, RF Amp, TX gain, Settings button.
     //      Everything else (sample rate, RX gains) goes to a separate screen so the
     //      top strip fits a small in-dash display.
-    grid->addWidget(m_startButton, 0, 0, 2, 1);
-    grid->addWidget(m_ampCheck,    0, 1, 2, 1, Qt::AlignCenter);
-    gainRow(grid, g, 0, 2, "TX", m_txVgaSlider, m_txVgaSpin, 0, 47, 1, 20);
+    // Row 0: big START (full width). Row 1: RF Amp (big) + long TX bar + big value box, all on
+    // one line at the same height. Row 2: Settings. Columns: [RFAmp][TX lbl][slider][spin].
+    grid->addWidget(m_startButton, 0, 0, 1, 4);                 // START (big) on top, full width
+    m_ampCheck->setStyleSheet("QCheckBox { font-size: 13pt; spacing: 10px; }"
+                              "QCheckBox::indicator { width: 30px; height: 30px; }");   // bigger checkbox
+    grid->addWidget(m_ampCheck, 1, 0, Qt::AlignVCenter);       // RF Amp, lower (TX row), left
+    gainRow(grid, g, 1, 1, "TX", m_txVgaSlider, m_txVgaSpin, 0, 47, 1, 20);  // TX lbl c1, slider c2, spin c3
+    m_txVgaSlider->setMinimumWidth(80);
+    m_txVgaSlider->setMinimumHeight(34);                        // taller/bigger TX bar
+    m_txVgaSpin->setMinimumWidth(66);                           // bigger value box
+    m_txVgaSpin->setMaximumWidth(96);
+    m_txVgaSpin->setMinimumHeight(34);
+    m_txVgaSpin->setStyleSheet("QSpinBox { font-size: 13pt; }");
     m_settingsBtn = new QPushButton(QString::fromUtf8("⚙  Ayarlar"), g);
     connect(m_settingsBtn, &QPushButton::clicked, this, &StudioWindow::openSettingsDialog);
-    grid->addWidget(m_settingsBtn, 1, 2, 1, 3);
-    grid->setColumnStretch(3, 1);
+    grid->addWidget(m_settingsBtn, 2, 0, 1, 4);                 // Settings, full width
+    grid->setColumnStretch(2, 1);                              // TX slider column stretches = long bar
+    grid->setContentsMargins(6, 2, 8, 2);
 
     // ---- Settings screen (modal): rate + RX gains + IQ record.
     m_settingsDlg = new QDialog(this);
@@ -361,9 +468,20 @@ QWidget* StudioWindow::buildDeviceGroup()
     gainRow(dg, m_settingsDlg, 1, 0, "LNA",    m_lnaSlider,   m_lnaSpin,   0, 40, 8, 32);
     gainRow(dg, m_settingsDlg, 2, 0, "VGA",    m_vgaSlider,   m_vgaSpin,   0, 62, 2, 30);
     gainRow(dg, m_settingsDlg, 3, 0, "RX AMP", m_rxAmpSlider, m_rxAmpSpin, 0, 14, 14, 14);
+    m_autoModeCheck->setParent(m_settingsDlg);
+    m_autoModeCheck->setText(QString::fromUtf8("Banda göre RX/TX sekmesini otomatik seç"));
+    dg->addWidget(m_autoModeCheck, 4, 0, 1, 3);
+    dg->addWidget(new QLabel("Tema:", m_settingsDlg), 5, 0, Qt::AlignRight);
+    m_themeCombo = new QComboBox(m_settingsDlg);
+    for (const Theme& t : Themes::all())
+        m_themeCombo->addItem(t.name, t.id);
+    m_themeCombo->setCurrentIndex(std::max(0, m_themeCombo->findData(Themes::current().id)));
+    connect(m_themeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int i) { applyTheme(m_themeCombo->itemData(i).toString()); });
+    dg->addWidget(m_themeCombo, 5, 1, 1, 2);
     QPushButton* closeBtn = new QPushButton(QString::fromUtf8("Kapat"), m_settingsDlg);
     connect(closeBtn, &QPushButton::clicked, m_settingsDlg, &QDialog::accept);
-    dg->addWidget(closeBtn, 4, 0, 1, 3);
+    dg->addWidget(closeBtn, 6, 0, 1, 3);
     m_recButton->setParent(m_settingsDlg);
     m_recButton->hide();   // IQ-to-file capture is a desktop/debug feature
 #else
@@ -377,6 +495,17 @@ QWidget* StudioWindow::buildDeviceGroup()
     gainRow(grid, g, 2, 3, "VGA",    m_vgaSlider,   m_vgaSpin,   0, 62, 2, 30);
     gainRow(grid, g, 3, 0, "AMP",    m_rxAmpSlider, m_rxAmpSpin, 0, 14, 14, 14);
     gainRow(grid, g, 3, 3, "TX VGA", m_txVgaSlider, m_txVgaSpin, 0, 47, 1, 20);
+    // Row 4: auto mode (moved out of the frequency box to make room for the step buttons) + theme
+    m_autoModeCheck->setParent(g);
+    grid->addWidget(m_autoModeCheck, 4, 0, 1, 3);
+    grid->addWidget(new QLabel("Theme:", g), 4, 3, Qt::AlignRight);
+    m_themeCombo = new QComboBox(g);
+    for (const Theme& t : Themes::all())
+        m_themeCombo->addItem(t.name, t.id);
+    m_themeCombo->setCurrentIndex(std::max(0, m_themeCombo->findData(Themes::current().id)));
+    connect(m_themeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int i) { applyTheme(m_themeCombo->itemData(i).toString()); });
+    grid->addWidget(m_themeCombo, 4, 4, 1, 2);
     grid->setColumnStretch(1, 1);
     grid->setColumnStretch(4, 1);
 #endif
@@ -387,6 +516,46 @@ QWidget* StudioWindow::buildDeviceGroup()
     connect(m_rxAmpSlider, &QSlider::valueChanged, this, [this](int v) { m_device->setRxAmpGain(v); });
     connect(m_txVgaSlider, &QSlider::valueChanged, this, [this](int v) { m_device->setTxVgaGain(v); });
     return g;
+}
+
+qint64 StudioWindow::fingerStepHz() const
+{
+    int lo = 0, hi = 0;
+    if (m_active && m_active->meterRange(m_frequency, lo, hi)) {
+        // Channel width -> a sensible tuning raster for that service
+        const int bw = std::max(std::abs(lo), std::abs(hi));
+        if (bw >= 100000) return 100000;   // WFM broadcast
+        if (bw >= 25000)  return 25000;    // airband / wide NFM
+        if (bw >= 12500)  return 12500;    // NFM (PMR / amateur)
+        if (bw >= 10000)  return 10000;    // AM
+        if (bw >= 5000)   return 5000;
+        return 1000;
+    }
+    const qint64 dial = m_freqCtrl ? m_freqCtrl->getActiveStep() : 0;   // TX: the digit selected on the dial
+    return dial > 0 ? dial : 100000;
+}
+
+void StudioWindow::refreshStepLabels()
+{
+    if (!m_stepUpBtn) return;
+    const qint64 st = fingerStepHz();
+    QString s;
+    if (st >= 1000000)   s = QString("%1 M").arg(st / 1e6, 0, 'g', 3);
+    else if (st >= 1000) s = QString("%1 k").arg(st / 1e3, 0, 'g', 4);
+    else                 s = QString("%1 Hz").arg(st);
+    m_stepUpBtn->setText("+\n" + s);
+    m_stepDownBtn->setText(QString::fromUtf8("−\n") + s);
+}
+
+void StudioWindow::applyTheme(const QString& id)
+{
+    const Theme& t = Themes::byId(id);
+    Themes::apply(t);
+    m_plotter->setThemeColors(t.plotBg, t.plotGrid, t.plotText, t.wfBg, t.fftLine, t.fillTop, t.fillBottom);
+    if (m_analogMeter) m_analogMeter->setThemeColors(t.plotBg, t.plotText, t.accent);
+    m_bandLabel->setStyleSheet(QString("QLabel { color: %1; font-weight: bold; font-size: 11pt; }").arg(t.accent.name()));
+    QSettings s("MarenRobotics", "HackTvStudio");
+    s.setValue("theme", t.id);
 }
 
 void StudioWindow::openSettingsDialog()
@@ -400,8 +569,13 @@ void StudioWindow::addPanel(ModePanel* panel)
 {
     m_panels.push_back(panel);
 
-    // A vertical-only scroll area: on a small screen the panel scrolls instead
-    // of pushing the window's minimum height past the screen.
+#ifdef Q_OS_ANDROID
+    // Head unit: no scroll area — the layout compresses to fit the screen so every
+    // tab is fully visible (overflow controls live in the ⚙ settings dialog).
+    m_tabs->addTab(panel, panel->title());
+#else
+    // Desktop: a vertical-only scroll area: on a small window the panel scrolls
+    // instead of pushing the window's minimum height past the screen.
     QScrollArea* scroll = new QScrollArea(m_tabs);
     scroll->setWidget(panel);
     scroll->setWidgetResizable(true);
@@ -411,6 +585,7 @@ void StudioWindow::addPanel(ModePanel* panel)
     scroll->viewport()->setAutoFillBackground(false);
     scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
     m_tabs->addTab(scroll, panel->title());
+#endif
     connect(panel, &ModePanel::statusText, this, [this, panel](const QString& t) {
         if (panel == m_active) m_panelStatusLabel->setText(t);
     });
@@ -433,33 +608,35 @@ void StudioWindow::dockSpectrum(ModePanel* panel)
         m_specDocked = true;
         m_plotter->setPercent2DScreen(50);
     } else if (m_specDocked || m_splitter->indexOf(m_specWidget) < 0) {
-        // Back to the strip above the tabs
+        // Back to the right side of the controls
         m_specDocked = false;
-        m_splitter->insertWidget(0, m_specWidget);
+        m_splitter->insertWidget(1, m_specWidget);
         m_specWidget->show();
         placeSpectrumOnTop(m_splitterStateV);
     }
 }
 
+// Horizontal layout: controls on the left, spectrum + waterfall on the right half.
 void StudioWindow::placeSpectrumOnTop(const QByteArray& state)
 {
     if (!m_splitter || m_specDocked) return;
-    m_splitter->insertWidget(0, m_specWidget);
-    m_splitter->insertWidget(1, m_tabs);
-    m_plotter->setPercent2DScreen(62);
+    m_splitter->insertWidget(0, m_specWidget);   // spectrum + waterfall full width on top
+    m_splitter->insertWidget(1, m_tabs);         // mode panel below
+    m_plotter->setPercent2DScreen(55);
+#ifdef Q_OS_ANDROID
+    m_tabs->setMaximumHeight(215);               // head unit: one compact control row
+#endif
     if (!state.isEmpty()) {
         m_splitter->restoreState(state);
     } else {
 #ifdef Q_OS_ANDROID
-        // Spectrum/waterfall gets ~45%% so the radio spectrum is usable; the
-        // smaller Android font keeps the mode panel readable in the rest.
-        m_splitter->setStretchFactor(0, 1);
-        m_splitter->setStretchFactor(1, 1);
-        m_splitter->setSizes({ 320, 380 });
+        m_splitter->setStretchFactor(0, 1);      // all spare height goes to the spectrum
+        m_splitter->setStretchFactor(1, 0);
+        m_splitter->setSizes({ 400, 190 });
 #else
-        m_splitter->setStretchFactor(0, 1);
+        m_splitter->setStretchFactor(0, 3);      // desktop: the panels are taller, share the height
         m_splitter->setStretchFactor(1, 2);
-        m_splitter->setSizes({ 280, 620 });
+        m_splitter->setSizes({ 480, 360 });
 #endif
     }
 }
@@ -506,11 +683,13 @@ void StudioWindow::updateBandLabel()
 {
     const BandInfo band = BandPlan::lookup(m_frequency);
     QString name = band.name;
+#ifndef Q_OS_ANDROID
     if (band.mode == Modulation::TV) {
         const TvChannel ch = BandPlan::tvChannel(m_frequency);
         if (ch.valid)
             name += QString("  ·  Channel %1 (video %2)").arg(ch.name, BandPlan::formatFrequency(ch.videoCarrierHz));
     }
+#endif
     m_bandLabel->setText(name);
     m_modeLabel->setText(band.mode == Modulation::None ? QString() : "·  " + BandPlan::modulationName(band.mode));
 
@@ -527,9 +706,11 @@ void StudioWindow::autoSelectMode(const BandInfo& band)
 
     int target = -1;
     switch (band.mode) {
+#ifndef Q_OS_ANDROID
     case Modulation::TV:
         target = m_tvRxTab;
         break;
+#endif
     case Modulation::AM: case Modulation::NFM: case Modulation::WFM:
     case Modulation::LSB: case Modulation::USB:
         target = m_radioRxTab;
@@ -660,6 +841,7 @@ void StudioWindow::onDeviceState(DeviceController::State state)
         m_stateLabel->setText("IDLE");
         m_stateLabel->setStyleSheet("QLabel { font-weight: bold; color: #708090; padding: 0 8px; }");
         m_meter->setLevel(-120.0f);
+        if (m_analogMeter) { m_analogMeter->setLevel(0.0f); m_analogMeter->setClipRatio(0.0f); }
         break;
     }
 }
@@ -697,6 +879,29 @@ void StudioWindow::onSpectrum(const QVector<float>& bins, float levelDbfs)
         m_meterInfo->setText("whole span");
     }
     m_meter->setLevel(level);
+    if (m_analogMeter && !bins.isEmpty()) {
+        // Needle = SNR: the strongest bin inside the tuned channel above the noise
+        // floor (median of the whole span). Independent of LNA/VGA/AMP settings and
+        // of how wide the channel is, so a good FM station and a good TV channel
+        // both read around S9 instead of pegging the needle at full gain.
+        const int n = bins.size();
+        int i0 = 0, i1 = n - 1;
+        if (lowHz < highHz) {
+            const double binHz = static_cast<double>(m_sampleRate) / n;
+            i0 = std::max(0, std::min(n - 1, n / 2 + static_cast<int>(std::floor(lowHz / binHz))));
+            i1 = std::max(i0, std::min(n - 1, n / 2 + static_cast<int>(std::ceil(highHz / binHz))));
+        }
+        float peak = -200.0f;
+        for (int i = i0; i <= i1; ++i) peak = std::max(peak, bins[i]);
+        // Noise floor = 10th percentile of the span: the median is far too high when
+        // the band is packed with stations (FM broadcast at 2 MS/s).
+        QVector<float> sorted = bins;
+        const int k = std::max(0, n / 10);
+        std::nth_element(sorted.begin(), sorted.begin() + k, sorted.end());
+        const float floor = sorted[k];
+        m_analogMeter->setLevel(std::max(0.0f, peak - floor));
+        m_analogMeter->setInfo(m_meterInfo->text());
+    }
 }
 
 void StudioWindow::onRecordIq()
@@ -770,6 +975,8 @@ void StudioWindow::updateStatusBar()
         m_overloadLabel->setText(QString("ADC OVERLOAD %1%").arg(clip * 100.0f, 0, 'f', 1));
     else
         m_overloadLabel->clear();
+    if (m_analogMeter) m_analogMeter->setClipRatio(clip);
+    refreshStepLabels();
 }
 
 // ============================================================================
@@ -790,7 +997,7 @@ void StudioWindow::saveSettings()
     s.setValue("activeTab",  m_tabs->currentIndex());
     s.setValue("plotterFloor", m_plotterRange->value());
     if (!m_specDocked && m_splitter->count() == 2) m_splitterStateV = m_splitter->saveState();
-    s.setValue("splitterV3", m_splitterStateV);
+    s.setValue(kSplitterKey, m_splitterStateV);
     s.setValue("geometry",   saveGeometry());
     for (ModePanel* p : m_panels)
         p->saveSettings(s);
@@ -811,8 +1018,8 @@ void StudioWindow::loadSettings()
         s.setValue("migratedFromPALBDecoder", true);
     }
 
-    m_frequency = s.value("frequency", static_cast<qulonglong>(479250000ULL)).toULongLong();
-    const int rate = s.value("sampleRate", 16000000).toInt();
+    m_frequency = s.value("frequency", static_cast<qulonglong>(kDefaultFrequency)).toULongLong();
+    const int rate = s.value("sampleRate", static_cast<int>(kDefaultSampleRate)).toInt();
     const int ri = m_sampleRateCombo->findData(rate);
     if (ri >= 0) {
         m_sampleRateCombo->blockSignals(true);
@@ -831,14 +1038,18 @@ void StudioWindow::loadSettings()
     m_ampCheck->setChecked(s.value("ampEnable", true).toBool());
     m_autoModeCheck->setChecked(s.value("autoMode", true).toBool());
     m_plotterRange->setValue(s.value("plotterFloor", -110).toInt());
-    m_splitterStateV = s.value("splitterV3").toByteArray();
+    m_splitterStateV = s.value(kSplitterKey).toByteArray();
     placeSpectrumOnTop(m_splitterStateV);
     if (s.contains("geometry")) restoreGeometry(s.value("geometry").toByteArray());
 
     for (ModePanel* p : m_panels)
         p->loadSettings(s);
 
+#ifdef Q_OS_ANDROID
+    const int tab = s.value("activeTab", m_radioRxTab).toInt();
+#else
     const int tab = s.value("activeTab", m_tvRxTab).toInt();
+#endif
     if (tab >= 0 && tab < m_tabs->count())
         m_tabs->setCurrentIndex(tab);
 }

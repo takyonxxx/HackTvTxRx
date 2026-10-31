@@ -9,6 +9,8 @@
 #include <QProcess>
 #include <QUrl>
 #include <QPushButton>
+#include <QDialog>
+#include <QScrollArea>
 #include <QStandardPaths>
 #include "core/BandPlan.h"
 
@@ -157,6 +159,9 @@ void TvRxPanel::buildUi()
     QVBoxLayout* vl = new QVBoxLayout(m_videoGroup);
     vl->setContentsMargins(6, 6, 6, 6);
     m_video = new VideoView(m_videoGroup);
+#ifdef Q_OS_ANDROID
+    m_video->setMinimumHeight(140);       // smaller floor so the settings button fits below
+#endif
     m_video->setToolTip("Double-click: fullscreen");
     connect(m_video, &VideoView::doubleClicked, this, &TvRxPanel::toggleFullscreen);
     vl->addWidget(m_video);
@@ -167,6 +172,41 @@ void TvRxPanel::buildUi()
     m_specSlot->setContentsMargins(6, 6, 6, 6);
     grid->addWidget(specGroup, 0, 1);
 
+#ifdef Q_OS_ANDROID
+    // Android: only the picture + spectrum fill the tab; the processing, audio,
+    // sync and recording controls move into a settings dialog so everything fits.
+    m_tabSettings = new QDialog(this);
+    m_tabSettings->setWindowTitle(QString::fromUtf8("TV RX ayarları"));
+    QVBoxLayout* dl = new QVBoxLayout(m_tabSettings);
+    // Two columns, inside a scroll area, so the dialog always fits the screen and
+    // the Kapat button stays visible no matter how tall the controls are.
+    QWidget* body = new QWidget(m_tabSettings);
+    QHBoxLayout* cols = new QHBoxLayout(body);
+    cols->setContentsMargins(0, 0, 0, 0);
+    QVBoxLayout* c1 = new QVBoxLayout();
+    c1->addWidget(buildVideoProcessingGroup());
+    c1->addWidget(buildAudioGroup());
+    c1->addStretch();
+    QVBoxLayout* c2 = new QVBoxLayout();
+    c2->addWidget(buildSyncGroup());
+    c2->addWidget(buildRecordGroup());
+    c2->addStretch();
+    cols->addLayout(c1);
+    cols->addLayout(c2);
+    QScrollArea* sc = new QScrollArea(m_tabSettings);
+    sc->setWidget(body);
+    sc->setWidgetResizable(true);
+    sc->setFrameShape(QFrame::NoFrame);
+    dl->addWidget(sc, 1);
+    QPushButton* closeBtn = new QPushButton(QString::fromUtf8("Kapat"), m_tabSettings);
+    connect(closeBtn, &QPushButton::clicked, m_tabSettings, &QDialog::accept);
+    dl->addWidget(closeBtn);
+
+    m_tabSettingsBtn = new QPushButton(QString::fromUtf8("⚙ Görüntü · Ses · Senkron · Kayıt"), this);
+    m_tabSettingsBtn->setMinimumHeight(34);
+    connect(m_tabSettingsBtn, &QPushButton::clicked, this, &TvRxPanel::openTabSettings);
+    grid->addWidget(m_tabSettingsBtn, 1, 0, 1, 2);
+#else
     grid->addWidget(buildVideoProcessingGroup(), 1, 0);
 
     QWidget* bottomRight = new QWidget(this);
@@ -177,11 +217,28 @@ void TvRxPanel::buildUi()
     br->addWidget(buildSyncGroup(), 1);
     br->addWidget(buildRecordGroup(), 1);
     grid->addWidget(bottomRight, 1, 1);
+#endif
 
     grid->setRowStretch(0, 1);          // the picture and the spectrum take the height
     grid->setRowStretch(1, 0);
     grid->setColumnStretch(0, 3);
     grid->setColumnStretch(1, 2);
+}
+
+void TvRxPanel::openTabSettings()
+{
+    if (!m_tabSettings) return;
+    // Size the dialog generously (the scroll area's own hint is tiny); it fills
+    // most of the screen so the two columns show without a cramped scroll.
+    // Size against the whole window, not the panel (which is only the tab area),
+    // so the dialog is tall enough to show every row without a scroll bar.
+    QWidget* top = window();
+    const int winW = top ? top->width() : width();
+    const int winH = top ? top->height() : height();
+    const int w = std::min(920, winW - 24);
+    const int h = winH - 40;
+    m_tabSettings->resize(w, h);
+    m_tabSettings->exec();
 }
 
 QWidget* TvRxPanel::buildVideoProcessingGroup()

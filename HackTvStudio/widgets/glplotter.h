@@ -141,6 +141,8 @@ public slots:
     void zoomOnXAxis(float level);
 
     void setFftPlotColor(const QColor color);
+    void setThemeColors(const QColor& bg, const QColor& grid, const QColor& text, const QColor& wfBg,
+                        const QColor& fftLine, const QColor& fillTop, const QColor& fillBottom);
     void setFftFill(bool enabled);
     void setPeakHold(bool enabled);
     void setFftRange(float min, float max);
@@ -201,6 +203,8 @@ private:
 
     // Color table for waterfall
     QColor      m_ColorTbl[256];
+    // Theme colours (see Themes / setThemeColors)
+    QColor      m_bgCol, m_gridCol, m_textCol, m_wfBgCol, m_lineCol, m_fillTop, m_fillBot;
 
     // FFT data (internal copies)
     std::mutex  m_fftMutex;

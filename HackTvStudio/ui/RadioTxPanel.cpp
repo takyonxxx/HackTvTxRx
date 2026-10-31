@@ -3,12 +3,14 @@
 #include <QAudioDevice>
 #include <QButtonGroup>
 #include <QDebug>
+#include <QDialog>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QMediaDevices>
 #include <QStandardPaths>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <cmath>
 
 
@@ -33,16 +35,24 @@ RadioTxPanel::~RadioTxPanel()
 
 void RadioTxPanel::buildUi()
 {
-    QHBoxLayout* root = new QHBoxLayout(this);
-    root->setSpacing(10);
-    root->setContentsMargins(8, 8, 8, 8);
-
-    // ---- Modulation
+    // ---- Modulation (mode choice)
+#ifdef Q_OS_ANDROID
+    QGroupBox* modGroup = new QGroupBox(QString::fromUtf8("Modülasyon"), this);
+#else
     QGroupBox* modGroup = new QGroupBox("Modulation", this);
+#endif
     QVBoxLayout* ml = new QVBoxLayout(modGroup);
+#ifdef Q_OS_ANDROID
+    ml->setSpacing(2);
+    ml->setContentsMargins(8, 2, 8, 2);
+    m_wfmRadio = new QRadioButton(QString::fromUtf8("WFM  (FM yayın)"), modGroup);
+    m_nfmRadio = new QRadioButton(QString::fromUtf8("NFM  (amatör / PMR)"), modGroup);
+    m_amRadio  = new QRadioButton("AM", modGroup);
+#else
     m_wfmRadio = new QRadioButton("WFM  —  broadcast FM, stereo pilot", modGroup);
     m_nfmRadio = new QRadioButton("NFM  —  narrow FM (amateur, PMR)", modGroup);
     m_amRadio  = new QRadioButton("AM   —  DSB amplitude modulation", modGroup);
+#endif
     QButtonGroup* bg = new QButtonGroup(modGroup);
     bg->addButton(m_wfmRadio); bg->addButton(m_nfmRadio); bg->addButton(m_amRadio);
     m_wfmRadio->setChecked(true);
@@ -50,14 +60,21 @@ void RadioTxPanel::buildUi()
     for (QRadioButton* r : { m_wfmRadio, m_nfmRadio, m_amRadio })
         connect(r, &QRadioButton::toggled, this, [this](bool on) { if (on) applyMode(); });
 
+#ifdef Q_OS_ANDROID
+    m_followBandCheck = new QCheckBox(QString::fromUtf8("Banda göre otomatik"), modGroup);
+#else
     m_followBandCheck = new QCheckBox("Follow band plan (auto modulation)", modGroup);
+#endif
     m_followBandCheck->setChecked(true);
     m_followBandCheck->setToolTip("FM broadcast -> WFM, amateur / PMR / marine -> NFM, airband / CB / MW -> AM");
     ml->addWidget(m_followBandCheck);
 
+    // ---- Modulation details (deviation, depth, pre-emphasis, level). On the
+    //      desktop these rows live inside the Modulation group (original layout);
+    //      on Android they go to the settings dialog.
     QHBoxLayout* devRow = new QHBoxLayout();
-    devRow->addWidget(new QLabel("Deviation:", modGroup));
-    m_devSpin = new QDoubleSpinBox(modGroup);
+    devRow->addWidget(new QLabel("Deviation:", this));
+    m_devSpin = new QDoubleSpinBox(this);
     m_devSpin->setRange(0.5, 150.0);
     m_devSpin->setDecimals(1);
     m_devSpin->setSuffix(" kHz");
@@ -66,14 +83,13 @@ void RadioTxPanel::buildUi()
     connect(m_devSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
             [this](double v) { m_mod.setDeviationHz(static_cast<float>(v * 1000.0)); });
     devRow->addWidget(m_devSpin, 1);
-    ml->addLayout(devRow);
 
     QHBoxLayout* depthRow = new QHBoxLayout();
-    depthRow->addWidget(new QLabel("AM depth:", modGroup));
-    m_depthSlider = new QSlider(Qt::Horizontal, modGroup);
+    depthRow->addWidget(new QLabel("AM depth:", this));
+    m_depthSlider = new QSlider(Qt::Horizontal, this);
     m_depthSlider->setRange(10, 120);
     m_depthSlider->setValue(80);
-    m_depthLabel = new QLabel("80%", modGroup);
+    m_depthLabel = new QLabel("80%", this);
     m_depthLabel->setMinimumWidth(40);
     connect(m_depthSlider, &QSlider::valueChanged, this, [this](int v) {
         m_depthLabel->setText(QString("%1%").arg(v));
@@ -81,11 +97,10 @@ void RadioTxPanel::buildUi()
     });
     depthRow->addWidget(m_depthSlider, 1);
     depthRow->addWidget(m_depthLabel);
-    ml->addLayout(depthRow);
 
     QHBoxLayout* preRow = new QHBoxLayout();
-    preRow->addWidget(new QLabel("Pre-emphasis:", modGroup));
-    m_preemphCombo = new QComboBox(modGroup);
+    preRow->addWidget(new QLabel("Pre-emphasis:", this));
+    m_preemphCombo = new QComboBox(this);
     m_preemphCombo->addItem("Off", 0);
     m_preemphCombo->addItem("50 µs (EU)", 50);
     m_preemphCombo->addItem("75 µs (US)", 75);
@@ -93,14 +108,13 @@ void RadioTxPanel::buildUi()
     connect(m_preemphCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             [this](int) { m_mod.setPreemphasisUs(static_cast<float>(m_preemphCombo->currentData().toInt())); });
     preRow->addWidget(m_preemphCombo, 1);
-    ml->addLayout(preRow);
 
     QHBoxLayout* ampRow = new QHBoxLayout();
-    ampRow->addWidget(new QLabel("Baseband level:", modGroup));
-    m_ampSlider = new QSlider(Qt::Horizontal, modGroup);
+    ampRow->addWidget(new QLabel("Baseband level:", this));
+    m_ampSlider = new QSlider(Qt::Horizontal, this);
     m_ampSlider->setRange(5, 100);
     m_ampSlider->setValue(50);
-    m_ampLabel = new QLabel("50%", modGroup);
+    m_ampLabel = new QLabel("50%", this);
     m_ampLabel->setMinimumWidth(40);
     connect(m_ampSlider, &QSlider::valueChanged, this, [this](int v) {
         m_ampLabel->setText(QString("%1%").arg(v));
@@ -108,16 +122,131 @@ void RadioTxPanel::buildUi()
     });
     ampRow->addWidget(m_ampSlider, 1);
     ampRow->addWidget(m_ampLabel);
-    ml->addLayout(ampRow);
 
-    QLabel* legal = new QLabel("<i>Transmitting needs a licence for the band you use. Test into a dummy load.</i>", modGroup);
+    QLabel* legal = new QLabel("<i>Transmitting needs a licence for the band you use. Test into a dummy load.</i>", this);
     legal->setWordWrap(true);
     legal->setStyleSheet("QLabel { color: #ff8800; font-size: 8pt; }");
+
+    // ---- Microphone / source widgets
+    m_micCombo = new QComboBox(this);
+    for (const QAudioDevice& d : QMediaDevices::audioInputs())
+        m_micCombo->addItem(d.description(), d.id());
+
+    m_pttButton = new QPushButton("PUSH TO TALK", this);
+    m_pttButton->setCheckable(true);
+    m_pttButton->setMinimumHeight(36);
+    m_pttButton->setToolTip("Toggle: microphone audio is sent while this is down, silence otherwise");
+#ifdef Q_OS_ANDROID
+    connect(m_pttButton, &QPushButton::toggled, this, [this](bool on) {
+        m_pttButton->setStyleSheet(on ? "QPushButton { background: #c03838; color: white; font-size: 14pt; font-weight: bold; }"
+                                      : "QPushButton { font-size: 14pt; font-weight: bold; }");
+        m_pttButton->setText(on ? QString::fromUtf8("KONUŞUYOR  (durdur)") : "PUSH TO TALK");
+    });
+    m_pttButton->setStyleSheet("QPushButton { font-size: 14pt; font-weight: bold; }");
+#else
+    connect(m_pttButton, &QPushButton::toggled, this, [this](bool on) {
+        m_pttButton->setStyleSheet(on ? "QPushButton { background: #a03030; color: white; }" : QString());
+        m_pttButton->setText(on ? "TALKING  (click to stop)" : "PUSH TO TALK");
+    });
+#endif
+
+    QHBoxLayout* gainRow = new QHBoxLayout();
+    gainRow->addWidget(new QLabel("Audio gain:", this));
+    m_gainSlider = new QSlider(Qt::Horizontal, this);
+    m_gainSlider->setRange(1, 200);     // x0.1
+    m_gainSlider->setValue(10);
+    m_gainLabel = new QLabel("x1.0", this);
+    m_gainLabel->setMinimumWidth(44);
+    connect(m_gainSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_gainLabel->setText(QString("x%1").arg(v / 10.0, 0, 'f', 1));
+        m_mod.setAudioGain(v / 10.0f);
+    });
+    gainRow->addWidget(m_gainSlider, 1);
+    gainRow->addWidget(m_gainLabel);
+
+    m_agcCheck = new QCheckBox("Auto level (AGC)", this);
+    m_agcCheck->setChecked(true);
+    connect(m_agcCheck, &QCheckBox::toggled, this, [this](bool on) { m_mod.setAgc(on); });
+
+    QHBoxLayout* vuRow = new QHBoxLayout();
+#ifdef Q_OS_ANDROID
+    vuRow->addWidget(new QLabel("Seviye:", this));
+#else
+    vuRow->addWidget(new QLabel("Input:", this));
+#endif
+    m_vu = new QProgressBar(this);
+    m_vu->setRange(0, 100);
+    m_vu->setTextVisible(false);
+    m_vu->setFixedHeight(14);
+    vuRow->addWidget(m_vu, 1);
+
+    m_statusLabel = new QLabel("", this);
+    m_statusLabel->setStyleSheet("QLabel { color: #9fb3c8; font-size: 8pt; }");
+    m_statusLabel->setWordWrap(true);
+
+#ifdef Q_OS_ANDROID
+    // ---- Head unit: one compact row under the spectrum = mode | mic + level | big PTT | settings.
+    //      Microphone is the only source; modulation details + audio processing live in the ⚙ dialog.
+    ml->addStretch();
+
+    QGroupBox* micGroup = new QGroupBox("Mikrofon", this);
+    QVBoxLayout* sl = new QVBoxLayout(micGroup);
+    sl->setSpacing(4);
+    sl->setContentsMargins(8, 2, 8, 2);
+    sl->addWidget(m_micCombo);
+    sl->addLayout(vuRow);
+    sl->addWidget(m_statusLabel);
+
+    QHBoxLayout* root = new QHBoxLayout(this);
+    root->setSpacing(8);
+    root->setContentsMargins(6, 4, 6, 4);
+    root->addWidget(modGroup, 2);
+    root->addWidget(micGroup, 3);
+    m_pttButton->setMinimumHeight(70);
+    m_pttButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    root->addWidget(m_pttButton, 3);
+
+    QGroupBox* advGroup = new QGroupBox(QString::fromUtf8("Modülasyon ayarları"), this);
+    QVBoxLayout* al = new QVBoxLayout(advGroup);
+    al->addLayout(devRow);
+    al->addLayout(depthRow);
+    al->addLayout(preRow);
+    al->addLayout(ampRow);
+    al->addWidget(legal);
+    QGroupBox* audioGroup = new QGroupBox("Ses", this);
+    QVBoxLayout* agl = new QVBoxLayout(audioGroup);
+    agl->addLayout(gainRow);
+    agl->addWidget(m_agcCheck);
+
+    m_tabSettings = new QDialog(this);
+    m_tabSettings->setWindowTitle(QString::fromUtf8("Radyo TX ayarları"));
+    QVBoxLayout* dl = new QVBoxLayout(m_tabSettings);
+    dl->addWidget(advGroup);
+    dl->addWidget(audioGroup);
+    QPushButton* closeBtn = new QPushButton(QString::fromUtf8("Kapat"), m_tabSettings);
+    connect(closeBtn, &QPushButton::clicked, m_tabSettings, &QDialog::accept);
+    dl->addWidget(closeBtn);
+
+    m_tabSettingsBtn = new QPushButton(QString::fromUtf8("⚙\nTX\nayarları"), this);
+    m_tabSettingsBtn->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    m_tabSettingsBtn->setMinimumWidth(80);
+    connect(m_tabSettingsBtn, &QPushButton::clicked, this, &RadioTxPanel::openTabSettings);
+    root->addWidget(m_tabSettingsBtn, 1);
+#else
+    // ---- Desktop (original layout): Modulation group with its details on the
+    //      left, "Audio source" (microphone / file / test tone) on the right.
+    ml->addLayout(devRow);
+    ml->addLayout(depthRow);
+    ml->addLayout(preRow);
+    ml->addLayout(ampRow);
     ml->addWidget(legal);
     ml->addStretch();
+
+    QHBoxLayout* root = new QHBoxLayout(this);
+    root->setSpacing(10);
+    root->setContentsMargins(8, 8, 8, 8);
     root->addWidget(modGroup, 1);
 
-    // ---- Source
     QGroupBox* srcGroup = new QGroupBox("Audio source", this);
     QVBoxLayout* sl = new QVBoxLayout(srcGroup);
 
@@ -130,18 +259,7 @@ void RadioTxPanel::buildUi()
 
     sl->addWidget(m_micRadio);
     QHBoxLayout* micRow = new QHBoxLayout();
-    m_micCombo = new QComboBox(srcGroup);
-    for (const QAudioDevice& d : QMediaDevices::audioInputs())
-        m_micCombo->addItem(d.description(), d.id());
     micRow->addWidget(m_micCombo, 1);
-    m_pttButton = new QPushButton("PUSH TO TALK", srcGroup);
-    m_pttButton->setCheckable(true);
-    m_pttButton->setMinimumHeight(36);
-    m_pttButton->setToolTip("Toggle: microphone audio is sent while this is down, silence otherwise");
-    connect(m_pttButton, &QPushButton::toggled, this, [this](bool on) {
-        m_pttButton->setStyleSheet(on ? "QPushButton { background: #a03030; color: white; }" : QString());
-        m_pttButton->setText(on ? "TALKING  (click to stop)" : "PUSH TO TALK");
-    });
     micRow->addWidget(m_pttButton);
     sl->addLayout(micRow);
 
@@ -177,41 +295,25 @@ void RadioTxPanel::buildUi()
     toneRow->addStretch();
     sl->addLayout(toneRow);
 
-    QHBoxLayout* gainRow = new QHBoxLayout();
-    gainRow->addWidget(new QLabel("Audio gain:", srcGroup));
-    m_gainSlider = new QSlider(Qt::Horizontal, srcGroup);
-    m_gainSlider->setRange(1, 200);     // x0.1
-    m_gainSlider->setValue(10);
-    m_gainLabel = new QLabel("x1.0", srcGroup);
-    m_gainLabel->setMinimumWidth(44);
-    connect(m_gainSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_gainLabel->setText(QString("x%1").arg(v / 10.0, 0, 'f', 1));
-        m_mod.setAudioGain(v / 10.0f);
-    });
-    gainRow->addWidget(m_gainSlider, 1);
-    gainRow->addWidget(m_gainLabel);
     sl->addLayout(gainRow);
-
-    m_agcCheck = new QCheckBox("Auto level (AGC)", srcGroup);
-    m_agcCheck->setChecked(true);
-    connect(m_agcCheck, &QCheckBox::toggled, this, [this](bool on) { m_mod.setAgc(on); });
     sl->addWidget(m_agcCheck);
-
-    QHBoxLayout* vuRow = new QHBoxLayout();
-    vuRow->addWidget(new QLabel("Input:", srcGroup));
-    m_vu = new QProgressBar(srcGroup);
-    m_vu->setRange(0, 100);
-    m_vu->setTextVisible(false);
-    m_vu->setFixedHeight(14);
-    vuRow->addWidget(m_vu, 1);
     sl->addLayout(vuRow);
-
-    m_statusLabel = new QLabel("", srcGroup);
-    m_statusLabel->setStyleSheet("QLabel { color: #708090; font-size: 8pt; }");
-    m_statusLabel->setWordWrap(true);
     sl->addWidget(m_statusLabel);
     sl->addStretch();
     root->addWidget(srcGroup, 2);
+#endif
+}
+
+void RadioTxPanel::openTabSettings()
+{
+    if (!m_tabSettings) return;
+    m_tabSettings->resize(std::min(560, width() - 20), m_tabSettings->sizeHint().height());
+    m_tabSettings->exec();
+}
+
+bool RadioTxPanel::micSelected() const
+{
+    return !m_micRadio || m_micRadio->isChecked();   // Android: always the microphone
 }
 
 void RadioTxPanel::applyMode()
@@ -299,6 +401,7 @@ void RadioTxPanel::stopMic()
 
 void RadioTxPanel::browseFile()
 {
+    if (!m_fileEdit) return;
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::MusicLocation);
     const QString f = QFileDialog::getOpenFileName(this, "Audio file", dir,
                                                    "Audio (*.mp3 *.wav *.flac *.ogg *.m4a *.aac *.wma);;All files (*)");
@@ -309,6 +412,7 @@ void RadioTxPanel::browseFile()
 
 void RadioTxPanel::decodeFile(const QString& path)
 {
+    if (!m_fileInfo) return;
     if (path.isEmpty() || !QFileInfo::exists(path)) return;
     if (m_decoder) { m_decoder->stop(); m_decoder->deleteLater(); m_decoder = nullptr; }
     m_fileData.clear();
@@ -381,11 +485,11 @@ size_t RadioTxPanel::pullAudio(float* stereo, size_t frames)
 
 void RadioTxPanel::setSourceWidgetsEnabled(bool on)
 {
-    m_micRadio->setEnabled(on);
-    m_fileRadio->setEnabled(on);
-    m_toneRadio->setEnabled(on);
-    m_fileEdit->setEnabled(on);
-    m_browseButton->setEnabled(on);
+    if (m_micRadio)     m_micRadio->setEnabled(on);
+    if (m_fileRadio)    m_fileRadio->setEnabled(on);
+    if (m_toneRadio)    m_toneRadio->setEnabled(on);
+    if (m_fileEdit)     m_fileEdit->setEnabled(on);
+    if (m_browseButton) m_browseButton->setEnabled(on);
     m_micCombo->setEnabled(on);
 }
 
@@ -419,11 +523,13 @@ ITxSource* RadioTxPanel::txSource()
     m_mod.clearAudio();
     m_filePos.store(0);
     m_tonePhase = 0.0;
-    m_pullLoop.store(m_loopCheck->isChecked());
-    m_toneHz.store(static_cast<float>(m_toneSpin->value()));
-    m_pullKind.store(m_fileRadio->isChecked() ? 1 : (m_toneRadio->isChecked() ? 2 : 0), std::memory_order_release);
+    m_pullLoop.store(m_loopCheck ? m_loopCheck->isChecked() : true);
+    m_toneHz.store(m_toneSpin ? static_cast<float>(m_toneSpin->value()) : 1000.0f);
+    const bool file = m_fileRadio && m_fileRadio->isChecked();
+    const bool tone = m_toneRadio && m_toneRadio->isChecked();
+    m_pullKind.store(file ? 1 : (tone ? 2 : 0), std::memory_order_release);
     setSourceWidgetsEnabled(false);      // m_fileData must stay frozen while the TX thread reads it
-    if (m_micRadio->isChecked()) startMic();
+    if (micSelected()) startMic();
     return &m_mod;
 }
 
@@ -447,16 +553,21 @@ void RadioTxPanel::updateStatus()
     const float db = m_mod.inputLevelDb();
     m_vu->setValue(std::clamp(static_cast<int>((db + 60.0f) * (100.0f / 60.0f)), 0, 100));
 
+    const bool file = m_fileRadio && m_fileRadio->isChecked();
     if (!m_running) {
         emit statusText("Radio TX idle");
-        m_statusLabel->setText(m_fileRadio->isChecked() && !m_fileReady ? "Choose an audio file" : "Press START to transmit");
+#ifdef Q_OS_ANDROID
+        m_statusLabel->setText(QString::fromUtf8("START'a bas, sonra PUSH TO TALK"));
+#else
+        m_statusLabel->setText(file && !m_fileReady ? "Choose an audio file" : "Press START to transmit");
+#endif
         return;
     }
     QString mode = m_wfmRadio->isChecked() ? "WFM" : (m_nfmRadio->isChecked() ? "NFM" : "AM");
-    QString src = m_micRadio->isChecked() ? (m_pttButton->isChecked() ? "mic (talking)" : "mic (PTT released)")
-                : m_fileRadio->isChecked() ? "file" : "tone";
+    QString src = micSelected() ? (m_pttButton->isChecked() ? "mic (talking)" : "mic (PTT released)")
+                : file ? "file" : "tone";
     QString s = QString("Radio TX | %1 | %2 | input %3 dBFS").arg(mode, src).arg(db, 0, 'f', 0);
-    if (m_fileRadio->isChecked() && m_fileReady)
+    if (file && m_fileReady)
         s += QString(" | %1%").arg(100.0 * m_filePos.load() / std::max<size_t>(1, m_fileData.size()), 0, 'f', 0);
     if (m_mod.underrunFrames())
         s += QString(" | audio underrun %1 ms").arg(m_mod.underrunFrames() * 1000 / RadioModulator::AUDIO_RATE);
@@ -469,16 +580,16 @@ void RadioTxPanel::saveSettings(QSettings& s)
     s.beginGroup("radioTx");
     s.setValue("mode", m_nfmRadio->isChecked() ? 1 : (m_amRadio->isChecked() ? 2 : 0));
     s.setValue("followBand", m_followBandCheck->isChecked());
-    s.setValue("source", m_fileRadio->isChecked() ? 1 : (m_toneRadio->isChecked() ? 2 : 0));
+    if (m_fileRadio) s.setValue("source", m_fileRadio->isChecked() ? 1 : (m_toneRadio->isChecked() ? 2 : 0));
     s.setValue("deviation", m_devSpin->value());
     s.setValue("depth", m_depthSlider->value());
     s.setValue("preemph", m_preemphCombo->currentIndex());
     s.setValue("amplitude", m_ampSlider->value());
     s.setValue("gain", m_gainSlider->value());
     s.setValue("agc", m_agcCheck->isChecked());
-    s.setValue("file", m_fileEdit->text());
-    s.setValue("loop", m_loopCheck->isChecked());
-    s.setValue("tone", m_toneSpin->value());
+    if (m_fileEdit)  s.setValue("file", m_fileEdit->text());
+    if (m_loopCheck) s.setValue("loop", m_loopCheck->isChecked());
+    if (m_toneSpin)  s.setValue("tone", m_toneSpin->value());
     s.setValue("mic", m_micCombo->currentIndex());
     s.endGroup();
 }
@@ -495,15 +606,16 @@ void RadioTxPanel::loadSettings(QSettings& s)
     m_ampSlider->setValue(s.value("amplitude", 50).toInt());
     m_gainSlider->setValue(s.value("gain", 10).toInt());
     m_agcCheck->setChecked(s.value("agc", true).toBool());
-    m_fileEdit->setText(s.value("file").toString());
-    m_loopCheck->setChecked(s.value("loop", true).toBool());
-    m_toneSpin->setValue(s.value("tone", 1000.0).toDouble());
+    if (m_fileEdit)  m_fileEdit->setText(s.value("file").toString());
+    if (m_loopCheck) m_loopCheck->setChecked(s.value("loop", true).toBool());
+    if (m_toneSpin)  m_toneSpin->setValue(s.value("tone", 1000.0).toDouble());
     const int mic = s.value("mic", 0).toInt();
     if (mic >= 0 && mic < m_micCombo->count()) m_micCombo->setCurrentIndex(mic);
     s.endGroup();
 
     (mode == 1 ? m_nfmRadio : mode == 2 ? m_amRadio : m_wfmRadio)->setChecked(true);
-    (src == 1 ? m_fileRadio : src == 2 ? m_toneRadio : m_micRadio)->setChecked(true);
+    if (m_micRadio)
+        (src == 1 ? m_fileRadio : src == 2 ? m_toneRadio : m_micRadio)->setChecked(true);
     applyMode();
-    if (!m_fileEdit->text().isEmpty()) decodeFile(m_fileEdit->text());
+    if (m_fileEdit && !m_fileEdit->text().isEmpty()) decodeFile(m_fileEdit->text());
 }

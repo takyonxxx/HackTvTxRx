@@ -1,10 +1,21 @@
 #include "RadioRxPanel.h"
+#include "Theme.h"
+
+// Head unit shows short Turkish labels; the desktop keeps the original English ones.
+#ifdef Q_OS_ANDROID
+#define UI_TXT(android, desktop) QString::fromUtf8(android)
+#else
+#define UI_TXT(android, desktop) QString::fromUtf8(desktop)
+#endif
 
 #include <QButtonGroup>
 #include <QPushButton>
+#include <QDialog>
+#include <algorithm>
 #include <QDebug>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QGridLayout>
 #include <cmath>
 
 // ============================================================================
@@ -200,8 +211,8 @@ RadioRxPanel::RadioRxPanel(QWidget* parent)
 
     connect(m_sink, &RadioRxSink::stereoChanged, this, [this](bool st) {
         m_stereoLabel->setText(st ? "STEREO" : "MONO");
-        m_stereoLabel->setStyleSheet(st ? "QLabel { color: #00ffcc; font-weight: bold; }"
-                                        : "QLabel { color: #708090; font-weight: bold; }");
+        m_stereoLabel->setStyleSheet(st ? Themes::accentLabelCss()
+                                        : Themes::dimLabelCss());
     }, Qt::QueuedConnection);
 
     m_statusTimer = new QTimer(this);
@@ -213,16 +224,20 @@ RadioRxPanel::RadioRxPanel(QWidget* parent)
 
 void RadioRxPanel::buildUi()
 {
-    QHBoxLayout* root = new QHBoxLayout(this);
-    root->setSpacing(10);
-    root->setContentsMargins(8, 8, 8, 8);
-
     // ---- Demodulation
-    QGroupBox* modeGroup = new QGroupBox("Demodulation", this);
+    QGroupBox* modeGroup = new QGroupBox(UI_TXT("Demodülasyon", "Demodulation"), this);
     QVBoxLayout* ml = new QVBoxLayout(modeGroup);
+#ifdef Q_OS_ANDROID
+    ml->setSpacing(2);
+    ml->setContentsMargins(8, 2, 8, 2);
+    m_wfmRadio = new QRadioButton(QString::fromUtf8("WFM  (FM yayın)"), modeGroup);
+    m_nfmRadio = new QRadioButton(QString::fromUtf8("NFM  (amatör / PMR)"), modeGroup);
+    m_amRadio  = new QRadioButton(QString::fromUtf8("AM   (MW / havacılık)"), modeGroup);
+#else
     m_wfmRadio = new QRadioButton("WFM  —  broadcast FM, stereo", modeGroup);
     m_nfmRadio = new QRadioButton("NFM  —  narrow FM (amateur, PMR, marine)", modeGroup);
     m_amRadio  = new QRadioButton("AM   —  MW/SW broadcast, airband, CB", modeGroup);
+#endif
     QButtonGroup* bg = new QButtonGroup(modeGroup);
     bg->addButton(m_wfmRadio); bg->addButton(m_nfmRadio); bg->addButton(m_amRadio);
     m_wfmRadio->setChecked(true);
@@ -233,29 +248,34 @@ void RadioRxPanel::buildUi()
     connect(m_nfmRadio, &QRadioButton::toggled, this, [this](bool on) { if (on) applyMode(RadioRxSink::Mode::NFM, true); });
     connect(m_amRadio,  &QRadioButton::toggled, this, [this](bool on) { if (on) applyMode(RadioRxSink::Mode::AM,  true); });
 
-    m_followBandCheck = new QCheckBox("Follow band plan (auto demod)", modeGroup);
+    m_followBandCheck = new QCheckBox(UI_TXT("Banda göre otomatik", "Follow band plan (auto demod)"), modeGroup);
     m_followBandCheck->setChecked(true);
     m_followBandCheck->setToolTip("Pick WFM / NFM / AM automatically from the tuned band");
     ml->addWidget(m_followBandCheck);
 
-    QPushButton* defaultsBtn = new QPushButton("Reset mode defaults", modeGroup);
+    QPushButton* defaultsBtn = new QPushButton(UI_TXT("Mod varsayılanlarına dön", "Reset mode defaults"), modeGroup);
     defaultsBtn->setToolTip("Bandwidth, de-emphasis, mod index and gain back to the preset for this mode");
     connect(defaultsBtn, &QPushButton::clicked, this, [this] { applyModeDefaults(currentMode()); });
-    ml->addWidget(defaultsBtn);
 
     QHBoxLayout* stRow = new QHBoxLayout();
-    stRow->addWidget(new QLabel("Signal:", modeGroup));
+    stRow->addWidget(new QLabel(UI_TXT("Sinyal:", "Signal:"), modeGroup));
     m_stereoLabel = new QLabel("MONO", modeGroup);
-    m_stereoLabel->setStyleSheet("QLabel { color: #708090; font-weight: bold; }");
+    m_stereoLabel->setStyleSheet(Themes::dimLabelCss());
     stRow->addWidget(m_stereoLabel);
     stRow->addStretch();
+#ifndef Q_OS_ANDROID
+    ml->addWidget(defaultsBtn);
     ml->addLayout(stRow);
     ml->addStretch();
-    root->addWidget(modeGroup, 1);
+#endif
 
     // ---- Channel
-    QGroupBox* chGroup = new QGroupBox("Channel", this);
+    QGroupBox* chGroup = new QGroupBox(UI_TXT("Kanal", "Channel"), this);
     QVBoxLayout* cl = new QVBoxLayout(chGroup);
+#ifdef Q_OS_ANDROID
+    cl->setSpacing(4);
+    cl->setContentsMargins(8, 2, 8, 2);
+#endif
 
     QHBoxLayout* bwRow = new QHBoxLayout();
     bwRow->addWidget(new QLabel("Bandwidth:", chGroup));
@@ -277,10 +297,8 @@ void RadioRxPanel::buildUi()
     });
     bwRow->addWidget(m_bwSlider, 1);
     bwRow->addWidget(m_bwSpin);
-    cl->addLayout(bwRow);
     QLabel* bwHint = new QLabel("<i>Drag the filter edges on the spectrum, or set it here.</i>", chGroup);
-    bwHint->setStyleSheet("QLabel { color: #708090; font-size: 8pt; }");
-    cl->addWidget(bwHint);
+    bwHint->setStyleSheet("QLabel { color: #9fb3c8; font-size: 8pt; }");
 
     QHBoxLayout* sqRow = new QHBoxLayout();
     sqRow->addWidget(new QLabel("Squelch:", chGroup));
@@ -296,21 +314,21 @@ void RadioRxPanel::buildUi()
     });
     sqRow->addWidget(m_squelchSlider, 1);
     sqRow->addWidget(m_squelchLabel);
-    cl->addLayout(sqRow);
 
     QHBoxLayout* lvRow = new QHBoxLayout();
-    lvRow->addWidget(new QLabel("Channel level:", chGroup));
+    lvRow->addWidget(new QLabel(UI_TXT("Seviye:", "Channel level:"), chGroup));
     m_levelLabel = new QLabel("--- dBFS", chGroup);
-    m_levelLabel->setStyleSheet("QLabel { color: #00ffcc; font-weight: bold; }");
+    m_levelLabel->setStyleSheet(Themes::accentLabelCss());
     lvRow->addWidget(m_levelLabel);
     lvRow->addStretch();
-    cl->addLayout(lvRow);
-    cl->addStretch();
-    root->addWidget(chGroup, 1);
 
     // ---- Audio
-    QGroupBox* auGroup = new QGroupBox("Audio", this);
+    QGroupBox* auGroup = new QGroupBox(UI_TXT("Ses", "Audio"), this);
     QVBoxLayout* al = new QVBoxLayout(auGroup);
+#ifdef Q_OS_ANDROID
+    al->setSpacing(4);
+    al->setContentsMargins(8, 2, 8, 2);
+#endif
 
     QHBoxLayout* gRow = new QHBoxLayout();
     gRow->addWidget(new QLabel("Gain:", auGroup));
@@ -331,10 +349,9 @@ void RadioRxPanel::buildUi()
             [this](double v) { m_gainSlider->setValue(static_cast<int>(std::lround(v * 10))); });
     gRow->addWidget(m_gainSlider, 1);
     gRow->addWidget(m_gainSpin);
-    al->addLayout(gRow);
 
     QHBoxLayout* vRow = new QHBoxLayout();
-    vRow->addWidget(new QLabel("Volume:", auGroup));
+    vRow->addWidget(new QLabel(UI_TXT("Ses:", "Volume:"), auGroup));
     m_volumeSlider = new QSlider(Qt::Horizontal, auGroup);
     m_volumeSlider->setRange(0, 100);
     m_volumeSlider->setValue(50);
@@ -348,9 +365,6 @@ void RadioRxPanel::buildUi()
     });
     vRow->addWidget(m_volumeSlider, 1);
     vRow->addWidget(m_volumeLabel);
-    al->addLayout(vRow);
-    al->addStretch();
-    root->addWidget(auGroup, 1);
 
     // ---- FM options
     m_fmGroup = new QGroupBox("FM", this);
@@ -389,7 +403,82 @@ void RadioRxPanel::buildUi()
     connect(m_forceMonoCheck, &QCheckBox::toggled, this, [this](bool on) { m_sink->setForceMono(on); });
     fl->addWidget(m_forceMonoCheck);
     fl->addStretch();
-    root->addWidget(m_fmGroup, 1);
+
+#ifdef Q_OS_ANDROID
+    // Head unit: one compact row under the spectrum = mode | squelch + level | volume | settings.
+    // Bandwidth, audio gain, FM details and the preset reset live in the ⚙ dialog.
+    QHBoxLayout* root = new QHBoxLayout(this);
+    root->setSpacing(8);
+    root->setContentsMargins(6, 4, 6, 4);
+    root->addWidget(modeGroup, 2);
+
+    cl->addLayout(sqRow);
+    QHBoxLayout* lvRow2 = new QHBoxLayout();
+    lvRow2->addLayout(lvRow, 1);
+    lvRow2->addLayout(stRow);
+    cl->addLayout(lvRow2);
+    cl->addStretch();
+    root->addWidget(chGroup, 3);
+
+    m_volumeSlider->setMinimumHeight(34);
+    m_volumeLabel->setStyleSheet("QLabel { font-size: 13pt; font-weight: bold; }");
+    al->addLayout(vRow);
+    al->addStretch();
+    root->addWidget(auGroup, 2);
+
+    // Dialog: channel width + audio gain + FM
+    QGroupBox* dlgCh = new QGroupBox(QString::fromUtf8("Kanal genişliği"), this);
+    QVBoxLayout* dcl = new QVBoxLayout(dlgCh);
+    dcl->addLayout(bwRow);
+    dcl->addWidget(bwHint);
+    QGroupBox* dlgAu = new QGroupBox(QString::fromUtf8("Ses kazancı"), this);
+    QVBoxLayout* dal = new QVBoxLayout(dlgAu);
+    dal->addLayout(gRow);
+
+    m_tabSettings = new QDialog(this);
+    m_tabSettings->setWindowTitle(QString::fromUtf8("Radyo RX ayarları"));
+    QVBoxLayout* dl = new QVBoxLayout(m_tabSettings);
+    dl->addWidget(dlgCh);
+    dl->addWidget(dlgAu);
+    dl->addWidget(m_fmGroup);
+    dl->addWidget(defaultsBtn);
+    QPushButton* closeBtn = new QPushButton(QString::fromUtf8("Kapat"), m_tabSettings);
+    connect(closeBtn, &QPushButton::clicked, m_tabSettings, &QDialog::accept);
+    dl->addWidget(closeBtn);
+
+    m_tabSettingsBtn = new QPushButton(QString::fromUtf8("⚙\nRX\nayarları"), this);
+    m_tabSettingsBtn->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    m_tabSettingsBtn->setMinimumWidth(80);
+    connect(m_tabSettingsBtn, &QPushButton::clicked, this, &RadioRxPanel::openTabSettings);
+    root->addWidget(m_tabSettingsBtn, 1);
+#else
+    // Desktop: the four groups stack 2x2 in the left half of the window.
+    QGridLayout* root = new QGridLayout(this);
+    root->setSpacing(10);
+    root->setContentsMargins(8, 8, 8, 8);
+    root->addWidget(modeGroup, 0, 0);
+    cl->addLayout(bwRow);
+    cl->addWidget(bwHint);
+    cl->addLayout(sqRow);
+    cl->addLayout(lvRow);
+    cl->addStretch();
+    root->addWidget(chGroup, 0, 1);
+    al->addLayout(gRow);
+    al->addLayout(vRow);
+    al->addStretch();
+    root->addWidget(auGroup, 1, 0);
+    root->addWidget(m_fmGroup, 1, 1);
+    root->setRowStretch(2, 1);
+    root->setColumnStretch(0, 1);
+    root->setColumnStretch(1, 1);
+#endif
+}
+
+void RadioRxPanel::openTabSettings()
+{
+    if (!m_tabSettings) return;
+    m_tabSettings->resize(std::min(560, width() - 20), m_tabSettings->sizeHint().height());
+    m_tabSettings->exec();
 }
 
 RadioRxSink::Mode RadioRxPanel::currentMode() const
@@ -518,8 +607,8 @@ void RadioRxPanel::updateStatus()
     const float lvl = m_sink->channelLevelDb();
     const bool open = m_sink->squelchOpen();
     m_levelLabel->setText(QString("%1 dBFS%2").arg(lvl, 0, 'f', 1).arg(open ? "" : "  (squelched)"));
-    m_levelLabel->setStyleSheet(open ? "QLabel { color: #00ffcc; font-weight: bold; }"
-                                     : "QLabel { color: #708090; font-weight: bold; }");
+    m_levelLabel->setStyleSheet(open ? Themes::accentLabelCss()
+                                     : Themes::dimLabelCss());
 
     QString modeName = "WFM";
     if (m_nfmRadio->isChecked()) modeName = "NFM";

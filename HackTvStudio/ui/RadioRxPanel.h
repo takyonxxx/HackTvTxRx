@@ -121,6 +121,9 @@ private slots:
 
 private:
     void buildUi();
+    void openTabSettings();                 // Android: Audio + FM dialog
+    class QDialog* m_tabSettings = nullptr;
+    class QPushButton* m_tabSettingsBtn = nullptr;
     void applyMode(RadioRxSink::Mode m, bool applyPreset);
     void applyModeDefaults(RadioRxSink::Mode m);   // bandwidth, de-emphasis, mod index, gain (HackTvGui presets)
     void setBandwidthHz(int hz, bool pushFilterBox);

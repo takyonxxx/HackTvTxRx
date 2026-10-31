@@ -47,6 +47,9 @@ private slots:
 
 private:
     void buildUi();
+    void openTabSettings();                 // Android: show Options dialog
+    class QDialog* m_tabSettings = nullptr;
+    QPushButton* m_tabSettingsBtn = nullptr;
     void browseFile();
     void writeInfoPages(bool announce);
     bool usesInfoPages() const;

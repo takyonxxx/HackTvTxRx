@@ -25,6 +25,9 @@
  * Radio transmitter: WFM stereo / NFM / AM from the microphone (push-to-talk),
  * an audio file or a test tone. The modulator runs on the TX engine thread;
  * this panel only feeds it audio at 48 kHz.
+ *
+ * Android (head unit): microphone only, one compact control row; modulation
+ * details and audio processing live in a settings dialog.
  */
 class RadioTxPanel : public ModePanel
 {
@@ -50,9 +53,11 @@ private slots:
 
 private:
     void buildUi();
+    void openTabSettings();                 // Android: modulation details + audio dialog
     void applyMode();
     void startMic();
     void stopMic();
+    bool micSelected() const;
     void browseFile();
     void decodeFile(const QString& path);
 
@@ -71,7 +76,7 @@ private:
     QLabel* m_ampLabel = nullptr;
 
     // source
-    QRadioButton* m_micRadio = nullptr;
+    QRadioButton* m_micRadio = nullptr;      // desktop only (Android: microphone always)
     QRadioButton* m_fileRadio = nullptr;
     QRadioButton* m_toneRadio = nullptr;
     QComboBox* m_micCombo = nullptr;
@@ -86,6 +91,8 @@ private:
     QCheckBox* m_agcCheck = nullptr;
     QProgressBar* m_vu = nullptr;
     QLabel* m_statusLabel = nullptr;
+    class QDialog* m_tabSettings = nullptr;
+    QPushButton* m_tabSettingsBtn = nullptr;
 
     // audio sources
     std::unique_ptr<QAudioSource> m_micSource;

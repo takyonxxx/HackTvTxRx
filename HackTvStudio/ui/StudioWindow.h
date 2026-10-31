@@ -20,6 +20,7 @@
 class CPlotter;
 class CFreqCtrl;
 class CMeter;
+class AnalogMeter;
 class ModePanel;
 class QSplitter;
 
@@ -83,6 +84,8 @@ private:
     QLabel* m_modeLabel = nullptr;
     QCheckBox* m_autoModeCheck = nullptr;
     CMeter* m_meter = nullptr;
+    AnalogMeter* m_analogMeter = nullptr;     // Android: needle S-meter at the right edge of the spectrum
+    class QGroupBox* m_meterGroup = nullptr;   // Android: docked above the spectrum, not in the top strip
     QLabel* m_meterInfo = nullptr;
     QLabel* m_overloadLabel = nullptr;
     QPushButton* m_startButton = nullptr;
@@ -99,6 +102,12 @@ private:
     QPushButton* m_recButton = nullptr;
     QDialog*     m_settingsDlg = nullptr;    // Android settings screen (rate, RX gains)
     QPushButton* m_settingsBtn = nullptr;
+    QPushButton* m_stepUpBtn = nullptr;      // Android: big finger +/- tuning, step follows the channel width
+    QPushButton* m_stepDownBtn = nullptr;
+    QComboBox*   m_themeCombo = nullptr;
+    qint64 fingerStepHz() const;
+    void   refreshStepLabels();
+    void   applyTheme(const QString& id);
 
     // Spectrum
     CPlotter* m_plotter = nullptr;
@@ -121,8 +130,13 @@ private:
     QLabel* m_panelStatusLabel = nullptr;
     QTimer* m_statusTimer = nullptr;
 
-    uint64_t m_frequency = 479250000ULL;
+#ifdef Q_OS_ANDROID
+    uint64_t m_frequency = 100000000ULL;   // radio-only head unit: FM broadcast
+    uint32_t m_sampleRate = 2000000;
+#else
+    uint64_t m_frequency = 479250000ULL;   // desktop: TV + radio (original defaults)
     uint32_t m_sampleRate = 16000000;
+#endif
     bool m_switchingTab = false;
 };
 
