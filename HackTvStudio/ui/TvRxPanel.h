@@ -185,6 +185,7 @@ private:
     QLabel* m_volumeLabel = nullptr;
 
     QLabel* m_syncRateLabel = nullptr;
+    QLabel* m_syncRowLabel = nullptr;     // same sync % again, in the scan row under the picture
     QSlider* m_syncThresholdSlider = nullptr;
     QDoubleSpinBox* m_syncThresholdSpin = nullptr;
     QCheckBox* m_autoSyncCheck = nullptr;

@@ -201,6 +201,14 @@ void TvRxPanel::buildUi()
     });
     scanRow->addWidget(m_scanButton);
     scanRow->addWidget(m_scanStatus, 1);
+    scanRow->addWidget(new QLabel(UI_TXT("Senkron:", "Sync:"), m_videoGroup));
+    m_syncRowLabel = new QLabel("---%", m_videoGroup);
+    m_syncRowLabel->setMinimumWidth(64);
+    m_syncRowLabel->setAlignment(Qt::AlignCenter);
+    m_syncRowLabel->setStyleSheet("QLabel { font-size: 12pt; font-weight: bold; color: #708090; "
+                                  "padding: 2px 6px; background-color: #0a0c12; border-radius: 3px; }");
+    scanRow->addWidget(m_syncRowLabel);
+    scanRow->addSpacing(8);
     scanRow->addWidget(new QLabel(UI_TXT("Bulunan:", "Found:"), m_videoGroup));
     scanRow->addWidget(m_foundCombo);
     vl->addLayout(scanRow);
@@ -613,6 +621,9 @@ void TvRxPanel::onDeviceStopped()
     if (m_recorder->isRecording()) m_recorder->stop();
     m_recButton->setEnabled(false);
     m_syncRateLabel->setText("---%");
+    m_syncRowLabel->setText("---%");
+    m_syncRowLabel->setStyleSheet("QLabel { font-size: 12pt; font-weight: bold; color: #708090; "
+                                  "padding: 2px 6px; background-color: #0a0c12; border-radius: 3px; }");
 }
 
 void TvRxPanel::onFrameReady(const QImage& frame)
@@ -642,6 +653,9 @@ void TvRxPanel::onSyncStatsUpdated(float syncRate, float, float)
     m_syncRateLabel->setStyleSheet(QString("QLabel { font-size: 14pt; font-weight: bold; color: %1; "
                                            "padding: 4px; background-color: #0a0c12; border-radius: 3px; }")
                                        .arg(color));
+    m_syncRowLabel->setText(m_syncRateLabel->text());
+    m_syncRowLabel->setStyleSheet(QString("QLabel { font-size: 12pt; font-weight: bold; color: %1; "
+                                          "padding: 2px 6px; background-color: #0a0c12; border-radius: 3px; }").arg(color));
 }
 
 void TvRxPanel::onAudioReady(const std::vector<float>& samples)
