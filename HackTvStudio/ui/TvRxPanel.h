@@ -25,6 +25,9 @@
 class VideoView;
 class TvRecorder;
 class QPushButton;
+class QComboBox;
+class QSpinBox;
+class QListWidget;
 
 /*
  * PAL-B/G receive pipeline: FrameBuffer -> PALDecoder (video thread)
@@ -94,6 +97,8 @@ public:
     }
 
     void onActivated() override;
+    void onDeactivated() override;
+    void onSignalLevel(float snrDb) override;
     void onFrequencyChanged(uint64_t hz) override;
     void onSampleRateChanged(uint32_t hz) override;
     void onDeviceStarted() override;
@@ -110,12 +115,40 @@ private slots:
     void toggleFullscreen();
     void toggleRecording();
     void openRecordFolder();
+    void toggleScan();
+    void scanTick();
 
 private:
     void buildUi();
     QWidget* buildVideoProcessingGroup();
     QWidget* buildAudioGroup();
     QWidget* buildSyncGroup();
+    QWidget* buildScanGroup();
+    // ---- automatic channel scan (tune every CCIR channel, keep the ones with sync + signal)
+    struct ScanTarget { QString name; uint64_t tuneHz; };
+    struct ScanResult { QString name; uint64_t tuneHz; float sync; float snr; };
+    enum class ScanPhase { Idle, Boot, Settle, Quick, Measure };
+    void startScan();
+    void stopScan(const QString& why);
+    void scanNextChannel();
+    void setScanStatus(const QString& text);
+    void addScanResult(const ScanResult& r);
+    void refreshScanViews();
+    QVector<ScanTarget> m_scanPlan;
+    QVector<ScanResult> m_scanResults;
+    ScanPhase m_scanPhase = ScanPhase::Idle;
+    int   m_scanIdx = -1;
+    float m_scanSnrMax = 0.0f;
+    float m_scanSyncMax = 0.0f;
+    int   m_scanSyncSamples = 0;
+    QTimer* m_scanTimer = nullptr;
+    QPushButton* m_scanButton = nullptr;
+    QLabel* m_scanStatus = nullptr;
+    QComboBox* m_foundCombo = nullptr;
+    QComboBox* m_scanRangeCombo = nullptr;
+    QSpinBox* m_scanMinSyncSpin = nullptr;
+    QSpinBox* m_scanMinSnrSpin = nullptr;
+    QListWidget* m_scanList = nullptr;
     QWidget* buildRecordGroup();
     void openTabSettings();                 // Android: show secondary controls dialog
 

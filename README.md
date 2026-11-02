@@ -79,6 +79,12 @@ tab per mode underneath:
 
 ### TV RX (PAL-B/G)
 
+- **Automatic channel scan** (*SCAN CHANNELS* / *KANAL TARA* under the picture, both platforms):
+  tunes every CCIR channel of the chosen band (UHF E21–E69, VHF E2–E12, or both), looks at the
+  S-meter SNR first and, when something is there, at the decoder's sync rate. A channel counts as
+  found when both pass the thresholds in the *Channel scan* group (defaults: sync ≥ 70 %, signal
+  ≥ 20 dB; a real channel reads ~92 % / +55 dB). Found channels are listed with their numbers,
+  kept across restarts, and selectable from the *Found* box; the scan ends on the strongest one.
 - Real-time PAL-B/G colour decoding at 720×576 from 16 MS/s: synchronous detection, carrier AFC,
   flywheel sync with sub-sample timing, burst-locked chroma with per-line V-switch detection,
   temporal noise reduction, 16:9 / 4:3 display, fullscreen.

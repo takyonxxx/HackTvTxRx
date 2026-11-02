@@ -58,6 +58,8 @@ public:
     virtual void onFilterRangeChanged(int lowHz, int highHz) { (void)lowHz; (void)highHz; }
     virtual void onDeviceStarted() {}
     virtual void onDeviceStopped() {}
+    /* SNR the S-meter shows for the active panel (dB above the noise floor), per spectrum frame. */
+    virtual void onSignalLevel(float snrDb) { (void)snrDb; }
 
     virtual void saveSettings(QSettings& s) { (void)s; }
     virtual void loadSettings(QSettings& s) { (void)s; }
@@ -67,6 +69,9 @@ signals:
     void statusText(const QString& text);
     /* Ask the main window to draw the spectrum filter box at [low, high] Hz around the centre. */
     void filterRangeRequested(int lowHz, int highHz);
+    /* Ask the main window to tune (channel scan) / to start the device if it is idle. */
+    void tuneRequested(quint64 hz);
+    void startRequested();
 };
 
 #endif // MODEPANEL_H

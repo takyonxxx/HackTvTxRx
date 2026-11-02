@@ -590,6 +590,12 @@ void StudioWindow::addPanel(ModePanel* panel)
         m_plotter->setDemodRanges(low * 2, -1000, 1000, high * 2, true);
         m_plotter->setHiLowCutFrequencies(low, high);
     });
+    connect(panel, &ModePanel::tuneRequested, this, [this, panel](quint64 hz) {
+        if (panel == m_active) setFrequency(static_cast<uint64_t>(hz), false);
+    });
+    connect(panel, &ModePanel::startRequested, this, [this, panel] {
+        if (panel == m_active && !m_device->isRunning()) startDevice();
+    });
 }
 
 void StudioWindow::dockSpectrum(ModePanel* panel)
@@ -896,6 +902,7 @@ void StudioWindow::onSpectrum(const QVector<float>& bins, float levelDbfs)
         const float floor = sorted[k];
         m_analogMeter->setLevel(std::max(0.0f, peak - floor));
         m_analogMeter->setInfo(m_meterInfo->text());
+        if (m_active) m_active->onSignalLevel(std::max(0.0f, peak - floor));
     }
 }
 

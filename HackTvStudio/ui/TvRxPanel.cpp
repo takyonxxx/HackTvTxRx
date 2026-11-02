@@ -9,6 +9,9 @@
 #include <QProcess>
 #include <QUrl>
 #include <QPushButton>
+#include <QComboBox>
+#include <QSpinBox>
+#include <QListWidget>
 #include <QDialog>
 #include <QScrollArea>
 #include <QStandardPaths>
@@ -141,6 +144,10 @@ TvRxPanel::TvRxPanel(QWidget* parent)
                 }
             }, Qt::QueuedConnection);
 
+    m_scanTimer = new QTimer(this);
+    m_scanTimer->setSingleShot(true);
+    connect(m_scanTimer, &QTimer::timeout, this, &TvRxPanel::scanTick);
+
     m_statusTimer = new QTimer(this);
     connect(m_statusTimer, &QTimer::timeout, this, &TvRxPanel::updateStatus);
     m_statusTimer->start(1000);
@@ -171,6 +178,31 @@ void TvRxPanel::buildUi()
     m_video->setToolTip("Double-click: fullscreen");
     connect(m_video, &VideoView::doubleClicked, this, &TvRxPanel::toggleFullscreen);
     vl->addWidget(m_video);
+    // Channel scan: start/stop, progress, and a quick picker of the channels found
+    QHBoxLayout* scanRow = new QHBoxLayout();
+    scanRow->setContentsMargins(0, 0, 0, 0);
+    scanRow->setSpacing(6);
+    m_scanButton = new QPushButton(UI_TXT("KANAL TARA", "SCAN CHANNELS"), m_videoGroup);
+#ifdef Q_OS_ANDROID
+    m_scanButton->setMinimumHeight(40);
+#endif
+    connect(m_scanButton, &QPushButton::clicked, this, &TvRxPanel::toggleScan);
+    m_scanStatus = new QLabel(UI_TXT("Yayın yapan kanalları bulmak için tara", "Scan the band for channels that are on air"), m_videoGroup);
+    m_scanStatus->setStyleSheet("QLabel { color: #708090; }");
+    m_foundCombo = new QComboBox(m_videoGroup);
+    m_foundCombo->setMinimumWidth(170);
+    m_foundCombo->setEnabled(false);
+    m_foundCombo->setToolTip(UI_TXT("Bulunan kanallar: seçince o kanala geçer", "Channels found by the scan: pick one to tune to it"));
+    connect(m_foundCombo, QOverload<int>::of(&QComboBox::activated), this, [this](int i) {
+        if (m_scanPhase != ScanPhase::Idle || i < 0) return;
+        const quint64 hz = m_foundCombo->itemData(i).toULongLong();
+        if (hz) emit tuneRequested(hz);
+    });
+    scanRow->addWidget(m_scanButton);
+    scanRow->addWidget(m_scanStatus, 1);
+    scanRow->addWidget(new QLabel(UI_TXT("Bulunan:", "Found:"), m_videoGroup));
+    scanRow->addWidget(m_foundCombo);
+    vl->addLayout(scanRow);
     grid->addWidget(m_videoGroup, 0, 0);
 
     QGroupBox* specGroup = new QGroupBox(UI_TXT("Spektrum", "Spectrum"), this);
@@ -196,6 +228,7 @@ void TvRxPanel::buildUi()
     QVBoxLayout* c2 = new QVBoxLayout();
     c2->addWidget(buildSyncGroup());
     c2->addWidget(buildRecordGroup());
+    c2->addWidget(buildScanGroup());
     c2->addStretch();
     cols->addLayout(c1);
     cols->addLayout(c2);
@@ -208,12 +241,18 @@ void TvRxPanel::buildUi()
     connect(closeBtn, &QPushButton::clicked, m_tabSettings, &QDialog::accept);
     dl->addWidget(closeBtn);
 
-    m_tabSettingsBtn = new QPushButton(QString::fromUtf8("⚙ Görüntü · Ses · Senkron · Kayıt"), this);
+    m_tabSettingsBtn = new QPushButton(QString::fromUtf8("⚙ Görüntü · Ses · Senkron · Kayıt · Tarama"), this);
     m_tabSettingsBtn->setMinimumHeight(34);
     connect(m_tabSettingsBtn, &QPushButton::clicked, this, &TvRxPanel::openTabSettings);
     grid->addWidget(m_tabSettingsBtn, 1, 0, 1, 2);
 #else
-    grid->addWidget(buildVideoProcessingGroup(), 1, 0);
+    QWidget* bottomLeft = new QWidget(this);
+    QHBoxLayout* bl = new QHBoxLayout(bottomLeft);
+    bl->setContentsMargins(0, 0, 0, 0);
+    bl->setSpacing(8);
+    bl->addWidget(buildVideoProcessingGroup(), 3);
+    bl->addWidget(buildScanGroup(), 2);
+    grid->addWidget(bottomLeft, 1, 0);
 
     QWidget* bottomRight = new QWidget(this);
     QHBoxLayout* br = new QHBoxLayout(bottomRight);
@@ -564,6 +603,8 @@ void TvRxPanel::onDeviceStarted()
 void TvRxPanel::onDeviceStopped()
 {
     m_running = false;
+    if (m_scanPhase != ScanPhase::Idle && m_scanPhase != ScanPhase::Boot)
+        stopScan(UI_TXT("Tarama durduruldu", "Scan stopped"));
     if (m_recorder->isRecording()) m_recorder->stop();
     m_recButton->setEnabled(false);
     m_syncRateLabel->setText("---%");
@@ -582,6 +623,10 @@ void TvRxPanel::onFrameReady(const QImage& frame)
 
 void TvRxPanel::onSyncStatsUpdated(float syncRate, float, float)
 {
+    if (m_scanPhase == ScanPhase::Measure) {
+        m_scanSyncMax = std::max(m_scanSyncMax, syncRate);
+        ++m_scanSyncSamples;
+    }
     QString color;
     if (syncRate >= 95.0f)      color = "#00ffcc";
     else if (syncRate >= 85.0f) color = "#ffd700";
@@ -674,6 +719,13 @@ void TvRxPanel::saveSettings(QSettings& s)
     s.setValue("audioEnabled",  m_audioEnabledCheck->isChecked());
     s.setValue("audioGain",     m_audioGainSlider->value());
     s.setValue("volume",        m_volumeSlider->value());
+    s.setValue("scanRange",     m_scanRangeCombo->currentIndex());
+    s.setValue("scanMinSync",   m_scanMinSyncSpin->value());
+    s.setValue("scanMinSnr",    m_scanMinSnrSpin->value());
+    QStringList found;
+    for (const ScanResult& r : m_scanResults)
+        found << QString("%1|%2|%3|%4").arg(r.name).arg(r.tuneHz).arg(r.sync, 0, 'f', 1).arg(r.snr, 0, 'f', 1);
+    s.setValue("scanFound",     found);
 }
 
 void TvRxPanel::loadSettings(QSettings& s)
@@ -693,6 +745,16 @@ void TvRxPanel::loadSettings(QSettings& s)
     m_audioEnabledCheck->setChecked(s.value("audioEnabled", true).toBool());
     m_audioGainSlider->setValue(s.value("audioGain", 10).toInt());
     m_volumeSlider->setValue(s.value("volume", 10).toInt());
+    m_scanRangeCombo->setCurrentIndex(s.value("scanRange", 0).toInt());
+    m_scanMinSyncSpin->setValue(s.value("scanMinSync", 70).toInt());
+    m_scanMinSnrSpin->setValue(s.value("scanMinSnr", 20).toInt());
+    m_scanResults.clear();
+    for (const QString& line : s.value("scanFound").toStringList()) {
+        const QStringList f = line.split('|');
+        if (f.size() != 4) continue;
+        m_scanResults.push_back({ f[0], f[1].toULongLong(), f[2].toFloat(), f[3].toFloat() });
+    }
+    refreshScanViews();
 
     // Sliders that did not change value never emitted valueChanged: push explicitly
     m_pipe->decoder()->setVideoGain(m_videoGainSlider->value() / 10.0f);
@@ -710,4 +772,226 @@ void TvRxPanel::loadSettings(QSettings& s)
     m_pipe->audioDemod()->setAudioGain(m_audioGainSlider->value() / 10.0f);
     m_pipe->audioOut()->setVolume(m_volumeSlider->value());
     m_video->setWideAspect(m_wideCheck->isChecked());
+}
+
+// ============================================================================
+// Automatic channel scan
+// ============================================================================
+
+// Tune 1 MHz above the video carrier: the HackRF DC spike then sits outside the
+// vestigial sideband and the whole 7/8 MHz channel (audio at +4.5 MHz) is inside
+// the 16 MS/s span.
+static const uint64_t kScanTuneOffsetHz = 1000000ULL;
+
+QWidget* TvRxPanel::buildScanGroup()
+{
+    QGroupBox* g = new QGroupBox(UI_TXT("Kanal tarama", "Channel scan"), this);
+    QVBoxLayout* l = new QVBoxLayout(g);
+
+    QHBoxLayout* r1 = new QHBoxLayout();
+    r1->setSpacing(6);
+    r1->addWidget(new QLabel(UI_TXT("Bant:", "Band:"), g));
+    m_scanRangeCombo = new QComboBox(g);
+    m_scanRangeCombo->addItem(QString::fromUtf8("UHF  E21–E69"));
+    m_scanRangeCombo->addItem(QString::fromUtf8("VHF  E2–E12"));
+    m_scanRangeCombo->addItem(QString::fromUtf8("VHF + UHF"));
+    r1->addWidget(m_scanRangeCombo, 1);
+    r1->addWidget(new QLabel(UI_TXT("Senkron ≥", "Sync ≥"), g));
+    m_scanMinSyncSpin = new QSpinBox(g);
+    m_scanMinSyncSpin->setRange(0, 100);
+    m_scanMinSyncSpin->setValue(70);
+    m_scanMinSyncSpin->setSuffix(" %");
+    m_scanMinSyncSpin->setToolTip(UI_TXT("Kanalın bulunmuş sayılması için en düşük senkron oranı",
+                                         "Lowest sync rate for a channel to count as found"));
+    r1->addWidget(m_scanMinSyncSpin);
+    r1->addWidget(new QLabel(UI_TXT("Sinyal ≥", "Signal ≥"), g));
+    m_scanMinSnrSpin = new QSpinBox(g);
+    m_scanMinSnrSpin->setRange(0, 100);
+    m_scanMinSnrSpin->setValue(20);
+    m_scanMinSnrSpin->setSuffix(" dB");
+    m_scanMinSnrSpin->setToolTip(UI_TXT("S-metredeki en düşük SNR (S4 = 20 dB, S9 = 40 dB)",
+                                        "Lowest S-meter SNR (S4 = 20 dB, S9 = 40 dB)"));
+    r1->addWidget(m_scanMinSnrSpin);
+    l->addLayout(r1);
+
+    m_scanList = new QListWidget(g);
+#ifdef Q_OS_ANDROID
+    m_scanList->setMinimumHeight(120);
+#else
+    m_scanList->setMaximumHeight(96);
+#endif
+    m_scanList->setToolTip(UI_TXT("Kanala tıkla: ayarla", "Click a channel to tune to it"));
+    connect(m_scanList, &QListWidget::itemClicked, this, [this](QListWidgetItem* it) {
+        if (m_scanPhase != ScanPhase::Idle) return;
+        const quint64 hz = it->data(Qt::UserRole).toULongLong();
+        if (hz) emit tuneRequested(hz);
+    });
+    l->addWidget(m_scanList, 1);
+
+    QHBoxLayout* r2 = new QHBoxLayout();
+    QLabel* hint = new QLabel(UI_TXT("Bulunan kanala tıklayınca o kanala geçilir.",
+                                     "Click a found channel to tune to it."), g);
+    hint->setStyleSheet("QLabel { color: #708090; font-size: 8pt; }");
+    r2->addWidget(hint, 1);
+    QPushButton* clearBtn = new QPushButton(UI_TXT("Listeyi temizle", "Clear list"), g);
+    connect(clearBtn, &QPushButton::clicked, this, [this] {
+        m_scanResults.clear();
+        refreshScanViews();
+        setScanStatus(UI_TXT("Liste temizlendi", "List cleared"));
+    });
+    r2->addWidget(clearBtn);
+    l->addLayout(r2);
+    return g;
+}
+
+void TvRxPanel::setScanStatus(const QString& text)
+{
+    m_scanStatus->setText(text);
+}
+
+void TvRxPanel::toggleScan()
+{
+    if (m_scanPhase == ScanPhase::Idle) startScan();
+    else stopScan(UI_TXT("Tarama durduruldu", "Scan stopped"));
+}
+
+void TvRxPanel::startScan()
+{
+    m_scanPlan.clear();
+    const int range = m_scanRangeCombo->currentIndex();   // 0 UHF, 1 VHF, 2 both
+    auto add = [this](int number, uint64_t startHz) {
+        m_scanPlan.push_back({ QString("E%1").arg(number), startHz + 1250000ULL + kScanTuneOffsetHz });
+    };
+    if (range == 1 || range == 2) {
+        for (int i = 0; i < 3; ++i) add(2 + i, 47000000ULL + i * 7000000ULL);     // Band I
+        for (int i = 0; i < 8; ++i) add(5 + i, 174000000ULL + i * 7000000ULL);    // Band III
+    }
+    if (range == 0 || range == 2)
+        for (int i = 0; i < 49; ++i) add(21 + i, 470000000ULL + i * 8000000ULL);  // Band IV/V
+
+    m_scanIdx = -1;
+    m_scanButton->setText(UI_TXT("TARAMAYI DURDUR", "STOP SCAN"));
+    m_scanButton->setStyleSheet("QPushButton { background: #a03030; color: white; }");
+    m_scanRangeCombo->setEnabled(false);
+
+    if (!m_running) {
+        // Device idle: ask the main window to start it, give it a moment, then go.
+        // Arm the timer first and ask from the event loop: a failed start pops a
+        // modal error box, and the timer must still end the scan behind it.
+        m_scanPhase = ScanPhase::Boot;
+        setScanStatus(UI_TXT("HackRF başlatılıyor…", "Starting the HackRF…"));
+        m_scanTimer->start(1500);
+        QMetaObject::invokeMethod(this, [this] { emit startRequested(); }, Qt::QueuedConnection);
+        return;
+    }
+    scanNextChannel();
+}
+
+void TvRxPanel::stopScan(const QString& why)
+{
+    m_scanTimer->stop();
+    m_scanPhase = ScanPhase::Idle;
+    m_scanButton->setText(UI_TXT("KANAL TARA", "SCAN CHANNELS"));
+    m_scanButton->setStyleSheet(QString());
+    m_scanRangeCombo->setEnabled(true);
+    setScanStatus(why);
+}
+
+void TvRxPanel::scanNextChannel()
+{
+    if (++m_scanIdx >= m_scanPlan.size()) {
+        // Done: show the strongest channel found (or say that none was)
+        const ScanResult* best = nullptr;
+        for (const ScanResult& r : m_scanResults)
+            if (!best || r.snr > best->snr) best = &r;
+        if (best) emit tuneRequested(best->tuneHz);
+        stopScan(m_scanResults.isEmpty()
+                     ? UI_TXT("Tarama bitti: kanal bulunamadı", "Scan finished: no channel found")
+                     : UI_TXT("Tarama bitti: %1 kanal bulundu", "Scan finished: %1 channel(s) found")
+                           .arg(m_scanResults.size()));
+        return;
+    }
+    const ScanTarget& t = m_scanPlan[m_scanIdx];
+    m_scanSnrMax = 0.0f;
+    m_scanSyncMax = 0.0f;
+    m_scanSyncSamples = 0;
+    emit tuneRequested(t.tuneHz);
+    setScanStatus(UI_TXT("%1 taranıyor · %2/%3 · %4 bulundu", "Scanning %1 · %2/%3 · %4 found")
+                      .arg(t.name).arg(m_scanIdx + 1).arg(m_scanPlan.size()).arg(m_scanResults.size()));
+    m_scanPhase = ScanPhase::Settle;
+    m_scanTimer->start(400);        // let the tuner / spectrum settle on the new channel
+}
+
+void TvRxPanel::scanTick()
+{
+    switch (m_scanPhase) {
+    case ScanPhase::Boot:
+        if (!m_running) { stopScan(UI_TXT("HackRF başlatılamadı", "Could not start the HackRF")); return; }
+        scanNextChannel();
+        return;
+    case ScanPhase::Settle:
+        // Discard whatever arrived while retuning; a short look at the S-meter first
+        m_scanSnrMax = 0.0f;
+        m_scanPhase = ScanPhase::Quick;
+        m_scanTimer->start(300);
+        return;
+    case ScanPhase::Quick:
+        if (m_scanSnrMax < static_cast<float>(m_scanMinSnrSpin->value())) { scanNextChannel(); return; }
+        // Something is there: wait for the decoder's sync statistics (one every 0.625 s)
+        m_scanSyncMax = 0.0f;
+        m_scanSyncSamples = 0;
+        m_scanPhase = ScanPhase::Measure;
+        m_scanTimer->start(1600);
+        return;
+    case ScanPhase::Measure: {
+        const bool found = m_scanSyncMax >= static_cast<float>(m_scanMinSyncSpin->value()) &&
+                           m_scanSnrMax  >= static_cast<float>(m_scanMinSnrSpin->value());
+        if (found) {
+            const ScanTarget& t = m_scanPlan[m_scanIdx];
+            addScanResult({ t.name, t.tuneHz, m_scanSyncMax, m_scanSnrMax });
+        }
+        scanNextChannel();
+        return;
+    }
+    default:
+        return;
+    }
+}
+
+void TvRxPanel::addScanResult(const ScanResult& r)
+{
+    for (int i = 0; i < m_scanResults.size(); ++i)
+        if (m_scanResults[i].name == r.name) { m_scanResults.removeAt(i); break; }
+    m_scanResults.push_back(r);
+    std::sort(m_scanResults.begin(), m_scanResults.end(),
+              [](const ScanResult& a, const ScanResult& b) { return a.tuneHz < b.tuneHz; });
+    refreshScanViews();
+}
+
+void TvRxPanel::refreshScanViews()
+{
+    m_scanList->clear();
+    m_foundCombo->clear();
+    for (const ScanResult& r : m_scanResults) {
+        const QString mhz = QString::number(r.tuneHz / 1e6, 'f', 3) + " MHz";
+        QListWidgetItem* it = new QListWidgetItem(
+            QString::fromUtf8("%1   %2   %3 %4 %   %5 +%6 dB")
+                .arg(r.name, mhz, UI_TXT("senkron", "sync")).arg(r.sync, 0, 'f', 1)
+                .arg(UI_TXT("sinyal", "signal")).arg(r.snr, 0, 'f', 0),
+            m_scanList);
+        it->setData(Qt::UserRole, static_cast<quint64>(r.tuneHz));
+        m_foundCombo->addItem(QString("%1  %2").arg(r.name, mhz), static_cast<quint64>(r.tuneHz));
+    }
+    m_foundCombo->setEnabled(!m_scanResults.isEmpty());
+}
+
+void TvRxPanel::onDeactivated()
+{
+    if (m_scanPhase != ScanPhase::Idle) stopScan(UI_TXT("Tarama durduruldu", "Scan stopped"));
+}
+
+void TvRxPanel::onSignalLevel(float snrDb)
+{
+    if (m_scanPhase == ScanPhase::Quick || m_scanPhase == ScanPhase::Measure)
+        m_scanSnrMax = std::max(m_scanSnrMax, snrDb);
 }
