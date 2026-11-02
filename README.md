@@ -10,7 +10,7 @@ Desktop (Full HD) and the **Android version for car head units** (1280×720 in-d
 screens) share one compact layout: spectrum + waterfall on top, one row of big controls per
 tab, a needle S-meter, and the advanced settings tucked into ⚙ dialogs, so nothing scrolls.
 
-![HackTvStudio — TV RX on the desktop](hacktvstudio.jpg)
+![HackTvStudio — TV RX on the desktop: PAL picture, channel scan, S-meter](desktop_tv_rx.png)
 
 Based on [hacktv](https://github.com/fsphil/hacktv) by Philip Heron (TV encoder)
 and the spectrum / frequency widgets of [gqrx](https://github.com/gqrx-sdr/gqrx).
@@ -113,13 +113,13 @@ tab per mode underneath:
   page 100 with the frequency, channel, standard, picture format, sound, source and start time
   (refreshed on every START). The page header carries a live date/time clock.
 
-![HackTvStudio — TV TX test card](hacktvstudio_test.jpg)
+![HackTvStudio — TV TX test card on air](desktop_tv_tx.png)
 
-The desktop now uses the same compact layout as the head unit (designed for 1920×1080):
+The desktop uses the same compact layout as the head unit (designed for 1920×1080):
+
+![Desktop Radio RX](desktop_radio_rx.png)
 
 ![Desktop Radio TX](desktop_radio_tx.png)
-
-![Desktop TV RX](desktop_tv_rx.png)
 
 ### Supported hardware
 
