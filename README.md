@@ -6,9 +6,9 @@ transmitter, PAL-B/G television receiver and analogue television transmitter
 (PAL, SECAM, NTSC, MAC…). Everything is compiled into the executable — no MSYS2,
 no FFmpeg DLLs, no external SDR libraries.
 
-The same source also builds an **Android version for car head units**
-(1280×720 in-dash screens) with all four modes: big finger-sized controls, spectrum +
-waterfall on top, a needle S-meter, and the advanced settings tucked into ⚙ dialogs.
+Desktop (Full HD) and the **Android version for car head units** (1280×720 in-dash
+screens) share one compact layout: spectrum + waterfall on top, one row of big controls per
+tab, a needle S-meter, and the advanced settings tucked into ⚙ dialogs, so nothing scrolls.
 
 ![HackTvStudio — TV RX on the desktop](hacktvstudio.jpg)
 
@@ -114,6 +114,12 @@ tab per mode underneath:
   (refreshed on every START). The page header carries a live date/time clock.
 
 ![HackTvStudio — TV TX test card](hacktvstudio_test.jpg)
+
+The desktop now uses the same compact layout as the head unit (designed for 1920×1080):
+
+![Desktop Radio TX](desktop_radio_tx.png)
+
+![Desktop TV RX](desktop_tv_rx.png)
 
 ### Supported hardware
 

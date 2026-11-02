@@ -1,4 +1,5 @@
 #include "RadioRxPanel.h"
+#include "UiMode.h"
 #include "Theme.h"
 
 // Head unit shows short Turkish labels; the desktop keeps the original English ones.
@@ -227,17 +228,13 @@ void RadioRxPanel::buildUi()
     // ---- Demodulation
     QGroupBox* modeGroup = new QGroupBox(UI_TXT("Demodülasyon", "Demodulation"), this);
     QVBoxLayout* ml = new QVBoxLayout(modeGroup);
-#ifdef Q_OS_ANDROID
+#if HACKTV_COMPACT_UI
     ml->setSpacing(2);
     ml->setContentsMargins(8, 2, 8, 2);
-    m_wfmRadio = new QRadioButton(QString::fromUtf8("WFM  (FM yayın)"), modeGroup);
-    m_nfmRadio = new QRadioButton(QString::fromUtf8("NFM  (amatör / PMR)"), modeGroup);
-    m_amRadio  = new QRadioButton(QString::fromUtf8("AM   (MW / havacılık)"), modeGroup);
-#else
-    m_wfmRadio = new QRadioButton("WFM  —  broadcast FM, stereo", modeGroup);
-    m_nfmRadio = new QRadioButton("NFM  —  narrow FM (amateur, PMR, marine)", modeGroup);
-    m_amRadio  = new QRadioButton("AM   —  MW/SW broadcast, airband, CB", modeGroup);
 #endif
+    m_wfmRadio = new QRadioButton(UI_TXT("WFM  (FM yayın)", "WFM  —  broadcast FM, stereo"), modeGroup);
+    m_nfmRadio = new QRadioButton(UI_TXT("NFM  (amatör / PMR)", "NFM  —  amateur / PMR / marine"), modeGroup);
+    m_amRadio  = new QRadioButton(UI_TXT("AM   (MW / havacılık)", "AM   —  MW / airband / CB"), modeGroup);
     QButtonGroup* bg = new QButtonGroup(modeGroup);
     bg->addButton(m_wfmRadio); bg->addButton(m_nfmRadio); bg->addButton(m_amRadio);
     m_wfmRadio->setChecked(true);
@@ -263,7 +260,7 @@ void RadioRxPanel::buildUi()
     m_stereoLabel->setStyleSheet(Themes::dimLabelCss());
     stRow->addWidget(m_stereoLabel);
     stRow->addStretch();
-#ifndef Q_OS_ANDROID
+#if !HACKTV_COMPACT_UI
     ml->addWidget(defaultsBtn);
     ml->addLayout(stRow);
     ml->addStretch();
@@ -272,7 +269,7 @@ void RadioRxPanel::buildUi()
     // ---- Channel
     QGroupBox* chGroup = new QGroupBox(UI_TXT("Kanal", "Channel"), this);
     QVBoxLayout* cl = new QVBoxLayout(chGroup);
-#ifdef Q_OS_ANDROID
+#if HACKTV_COMPACT_UI
     cl->setSpacing(4);
     cl->setContentsMargins(8, 2, 8, 2);
 #endif
@@ -325,7 +322,7 @@ void RadioRxPanel::buildUi()
     // ---- Audio
     QGroupBox* auGroup = new QGroupBox(UI_TXT("Ses", "Audio"), this);
     QVBoxLayout* al = new QVBoxLayout(auGroup);
-#ifdef Q_OS_ANDROID
+#if HACKTV_COMPACT_UI
     al->setSpacing(4);
     al->setContentsMargins(8, 2, 8, 2);
 #endif
@@ -404,8 +401,8 @@ void RadioRxPanel::buildUi()
     fl->addWidget(m_forceMonoCheck);
     fl->addStretch();
 
-#ifdef Q_OS_ANDROID
-    // Head unit: one compact row under the spectrum = mode | squelch + level | volume | settings.
+#if HACKTV_COMPACT_UI
+    // Compact: one row under the spectrum = mode | squelch + level | volume | settings.
     // Bandwidth, audio gain, FM details and the preset reset live in the ⚙ dialog.
     QHBoxLayout* root = new QHBoxLayout(this);
     root->setSpacing(8);
@@ -427,26 +424,26 @@ void RadioRxPanel::buildUi()
     root->addWidget(auGroup, 2);
 
     // Dialog: channel width + audio gain + FM
-    QGroupBox* dlgCh = new QGroupBox(QString::fromUtf8("Kanal genişliği"), this);
+    QGroupBox* dlgCh = new QGroupBox(UI_TXT("Kanal genişliği", "Channel width"), this);
     QVBoxLayout* dcl = new QVBoxLayout(dlgCh);
     dcl->addLayout(bwRow);
     dcl->addWidget(bwHint);
-    QGroupBox* dlgAu = new QGroupBox(QString::fromUtf8("Ses kazancı"), this);
+    QGroupBox* dlgAu = new QGroupBox(UI_TXT("Ses kazancı", "Audio gain"), this);
     QVBoxLayout* dal = new QVBoxLayout(dlgAu);
     dal->addLayout(gRow);
 
     m_tabSettings = new QDialog(this);
-    m_tabSettings->setWindowTitle(QString::fromUtf8("Radyo RX ayarları"));
+    m_tabSettings->setWindowTitle(UI_TXT("Radyo RX ayarları", "Radio RX settings"));
     QVBoxLayout* dl = new QVBoxLayout(m_tabSettings);
     dl->addWidget(dlgCh);
     dl->addWidget(dlgAu);
     dl->addWidget(m_fmGroup);
     dl->addWidget(defaultsBtn);
-    QPushButton* closeBtn = new QPushButton(QString::fromUtf8("Kapat"), m_tabSettings);
+    QPushButton* closeBtn = new QPushButton(UI_TXT("Kapat", "Close"), m_tabSettings);
     connect(closeBtn, &QPushButton::clicked, m_tabSettings, &QDialog::accept);
     dl->addWidget(closeBtn);
 
-    m_tabSettingsBtn = new QPushButton(QString::fromUtf8("⚙\nRX\nayarları"), this);
+    m_tabSettingsBtn = new QPushButton(UI_TXT("⚙\nRX\nayarları", "⚙\nRX\nsettings"), this);
     m_tabSettingsBtn->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     m_tabSettingsBtn->setMinimumWidth(80);
     connect(m_tabSettingsBtn, &QPushButton::clicked, this, &RadioRxPanel::openTabSettings);

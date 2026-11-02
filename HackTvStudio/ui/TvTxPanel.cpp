@@ -1,4 +1,5 @@
 #include "TvTxPanel.h"
+#include "UiMode.h"
 #include "VideoView.h"
 #include "tv/QtAvSource.h"
 #include "tv/TeletextPages.h"
@@ -77,7 +78,7 @@ void TvTxPanel::buildUi()
     pl->setContentsMargins(6, 6, 6, 6);
     m_preview = new VideoView(prevGroup);
     m_preview->setWideAspect(false);
-#ifdef Q_OS_ANDROID
+#if HACKTV_COMPACT_UI
     m_preview->setMinimumHeight(140);     // smaller floor so the settings button fits below
 #endif
     pl->addWidget(m_preview);
@@ -198,7 +199,7 @@ void TvTxPanel::buildUi()
     updateSourceWidgets();
     rl->addWidget(srcGroup);
     rl->addStretch();
-#ifndef Q_OS_ANDROID
+#if !HACKTV_COMPACT_UI
     grid->addWidget(left, 1, 0);
 #endif
 
@@ -272,11 +273,11 @@ void TvTxPanel::buildUi()
     gl->setColumnStretch(1, 1);
     gl->setColumnStretch(3, 1);
 
-#ifdef Q_OS_ANDROID
-    // Android: the source/standard setup and the many broadcast options move into
+#if HACKTV_COMPACT_UI
+    // Compact: the source/standard setup and the many broadcast options move into
     // a dialog so the tab shows only the preview + TX monitor and fits the screen.
     m_tabSettings = new QDialog(this);
-    m_tabSettings->setWindowTitle(QString::fromUtf8("TV TX ayarları"));
+    m_tabSettings->setWindowTitle(UI_TXT("TV TX ayarları", "TV TX settings"));
     QVBoxLayout* dl = new QVBoxLayout(m_tabSettings);
     // Two columns inside a scroll area so the dialog always fits and Kapat stays visible.
     QWidget* body = new QWidget(m_tabSettings);
@@ -295,11 +296,12 @@ void TvTxPanel::buildUi()
     sc->setWidgetResizable(true);
     sc->setFrameShape(QFrame::NoFrame);
     dl->addWidget(sc, 1);
-    QPushButton* closeBtn = new QPushButton(QString::fromUtf8("Kapat"), m_tabSettings);
+    QPushButton* closeBtn = new QPushButton(UI_TXT("Kapat", "Close"), m_tabSettings);
     connect(closeBtn, &QPushButton::clicked, m_tabSettings, &QDialog::accept);
     dl->addWidget(closeBtn);
 
-    m_tabSettingsBtn = new QPushButton(QString::fromUtf8("⚙ Kaynak · TV standardı · yayın seçenekleri"), this);
+    m_tabSettingsBtn = new QPushButton(UI_TXT("⚙ Kaynak · TV standardı · yayın seçenekleri",
+                                             "⚙ Source · TV standard · broadcast options"), this);
     m_tabSettingsBtn->setMinimumHeight(34);
     connect(m_tabSettingsBtn, &QPushButton::clicked, this, &TvTxPanel::openTabSettings);
     grid->addWidget(m_tabSettingsBtn, 1, 0, 1, 2);
@@ -309,9 +311,12 @@ void TvTxPanel::buildUi()
 
     grid->setRowStretch(0, 1);          // preview and spectrum take the height
     grid->setRowStretch(1, 0);
-#ifdef Q_OS_ANDROID
+#if HACKTV_COMPACT_UI && defined(Q_OS_ANDROID)
     grid->setColumnStretch(0, 2);       // head unit: preview 40 %, TX monitor 60 %
     grid->setColumnStretch(1, 3);
+#elif HACKTV_COMPACT_UI
+    grid->setColumnStretch(0, 1);       // desktop Full HD: preview and monitor share the width
+    grid->setColumnStretch(1, 1);
 #else
     grid->setColumnStretch(0, 3);
     grid->setColumnStretch(1, 2);

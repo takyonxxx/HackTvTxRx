@@ -1,5 +1,6 @@
 #include "StudioWindow.h"
 #include "ModePanel.h"
+#include "UiMode.h"
 #include "RadioRxPanel.h"
 #include "RadioTxPanel.h"
 #include "TvRxPanel.h"
@@ -37,7 +38,7 @@ constexpr const char* kSplitterKey = "splitterA1";   // vertical (spectrum on to
 constexpr uint64_t    kDefaultFrequency  = 100000000ULL;   // radio-only app: FM broadcast
 constexpr uint32_t    kDefaultSampleRate = 2000000;
 #else
-constexpr const char* kSplitterKey = "splitterV4";   // vertical layout (spectrum on top) on the desktop too
+constexpr const char* kSplitterKey = "splitterV5";   // vertical layout (spectrum on top) on the desktop too
 constexpr uint64_t    kDefaultFrequency  = 479250000ULL;   // desktop: analogue TV channel (original)
 constexpr uint32_t    kDefaultSampleRate = 16000000;
 #endif
@@ -240,7 +241,11 @@ void StudioWindow::buildUi()
 
     // First-run size: fit the available screen (saved geometry overrides this later)
     const QRect avail = screen() ? screen()->availableGeometry() : QRect(0, 0, 1400, 900);
+#if HACKTV_COMPACT_UI
+    resize(avail.width() - 40, avail.height() - 60);   // the compact layout wants the whole (Full HD) screen
+#else
     resize(std::min(1400, avail.width() - 40), std::min(940, avail.height() - 60));
+#endif
 }
 
 QWidget* StudioWindow::buildTopStrip()
@@ -569,8 +574,10 @@ void StudioWindow::addPanel(ModePanel* panel)
     // Head unit: no scroll area — the layout compresses to fit the screen so every
     // tab is fully visible (overflow controls live in the ⚙ settings dialog).
     m_tabs->addTab(panel, panel->title());
+#elif 1
+    m_tabs->addTab(panel, panel->title());
 #else
-    // Desktop: a vertical-only scroll area: on a small window the panel scrolls
+    // Desktop (original tall panels): a vertical-only scroll area: on a small window the panel scrolls
     // instead of pushing the window's minimum height past the screen.
     QScrollArea* scroll = new QScrollArea(m_tabs);
     scroll->setWidget(panel);
@@ -608,7 +615,7 @@ void StudioWindow::dockSpectrum(ModePanel* panel)
         slot->addWidget(m_specWidget);
         m_specWidget->show();
         m_specDocked = true;
-#ifdef Q_OS_ANDROID
+#if HACKTV_COMPACT_UI
         m_tabs->setMaximumHeight(QWIDGETSIZE_MAX);   // TV tabs carry the spectrum: use the full height
 #endif
         m_plotter->setPercent2DScreen(50);
@@ -628,16 +635,24 @@ void StudioWindow::placeSpectrumOnTop(const QByteArray& state)
     m_splitter->insertWidget(0, m_specWidget);   // spectrum + waterfall full width on top
     m_splitter->insertWidget(1, m_tabs);         // mode panel below
     m_plotter->setPercent2DScreen(55);
+#if HACKTV_COMPACT_UI
 #ifdef Q_OS_ANDROID
     m_tabs->setMaximumHeight(215);               // head unit: one compact control row
+#else
+    m_tabs->setMaximumHeight(250);               // desktop fonts / spin boxes are a little taller
+#endif
 #endif
     if (!state.isEmpty()) {
         m_splitter->restoreState(state);
     } else {
-#ifdef Q_OS_ANDROID
+#if HACKTV_COMPACT_UI
         m_splitter->setStretchFactor(0, 1);      // all spare height goes to the spectrum
         m_splitter->setStretchFactor(1, 0);
+#ifdef Q_OS_ANDROID
         m_splitter->setSizes({ 400, 190 });
+#else
+        m_splitter->setSizes({ 700, 250 });
+#endif
 #else
         m_splitter->setStretchFactor(0, 3);      // desktop: the panels are taller, share the height
         m_splitter->setStretchFactor(1, 2);

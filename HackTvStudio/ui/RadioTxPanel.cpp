@@ -1,4 +1,6 @@
 #include "RadioTxPanel.h"
+#include "UiMode.h"
+#include <QGridLayout>
 
 #include <QAudioDevice>
 #include <QButtonGroup>
@@ -42,16 +44,18 @@ void RadioTxPanel::buildUi()
     QGroupBox* modGroup = new QGroupBox("Modulation", this);
 #endif
     QVBoxLayout* ml = new QVBoxLayout(modGroup);
-#ifdef Q_OS_ANDROID
+#if HACKTV_COMPACT_UI
     ml->setSpacing(2);
     ml->setContentsMargins(8, 2, 8, 2);
+#endif
+#ifdef Q_OS_ANDROID
     m_wfmRadio = new QRadioButton(QString::fromUtf8("WFM  (FM yayın)"), modGroup);
     m_nfmRadio = new QRadioButton(QString::fromUtf8("NFM  (amatör / PMR)"), modGroup);
     m_amRadio  = new QRadioButton("AM", modGroup);
 #else
     m_wfmRadio = new QRadioButton("WFM  —  broadcast FM, stereo pilot", modGroup);
-    m_nfmRadio = new QRadioButton("NFM  —  narrow FM (amateur, PMR)", modGroup);
-    m_amRadio  = new QRadioButton("AM   —  DSB amplitude modulation", modGroup);
+    m_nfmRadio = new QRadioButton("NFM  —  amateur / PMR", modGroup);
+    m_amRadio  = new QRadioButton("AM   —  amplitude modulation", modGroup);
 #endif
     QButtonGroup* bg = new QButtonGroup(modGroup);
     bg->addButton(m_wfmRadio); bg->addButton(m_nfmRadio); bg->addButton(m_amRadio);
@@ -136,11 +140,15 @@ void RadioTxPanel::buildUi()
     m_pttButton->setCheckable(true);
     m_pttButton->setMinimumHeight(36);
     m_pttButton->setToolTip("Toggle: microphone audio is sent while this is down, silence otherwise");
-#ifdef Q_OS_ANDROID
+#if HACKTV_COMPACT_UI
     connect(m_pttButton, &QPushButton::toggled, this, [this](bool on) {
         m_pttButton->setStyleSheet(on ? "QPushButton { background: #c03838; color: white; font-size: 14pt; font-weight: bold; }"
                                       : "QPushButton { font-size: 14pt; font-weight: bold; }");
+#ifdef Q_OS_ANDROID
         m_pttButton->setText(on ? QString::fromUtf8("KONUŞUYOR  (durdur)") : "PUSH TO TALK");
+#else
+        m_pttButton->setText(on ? "TALKING  (click to stop)" : "PUSH TO TALK");
+#endif
     });
     m_pttButton->setStyleSheet("QPushButton { font-size: 14pt; font-weight: bold; }");
 #else
@@ -233,22 +241,20 @@ void RadioTxPanel::buildUi()
     connect(m_tabSettingsBtn, &QPushButton::clicked, this, &RadioTxPanel::openTabSettings);
     root->addWidget(m_tabSettingsBtn, 1);
 #else
-    // ---- Desktop (original layout): Modulation group with its details on the
-    //      left, "Audio source" (microphone / file / test tone) on the right.
-    ml->addLayout(devRow);
-    ml->addLayout(depthRow);
-    ml->addLayout(preRow);
-    ml->addLayout(ampRow);
-    ml->addWidget(legal);
+    // ---- Desktop (Full HD, compact like the head unit): one row under the spectrum =
+    //      Modulation | Audio source (microphone / file / test tone) | big PTT | ⚙ settings.
     ml->addStretch();
 
     QHBoxLayout* root = new QHBoxLayout(this);
-    root->setSpacing(10);
-    root->setContentsMargins(8, 8, 8, 8);
-    root->addWidget(modGroup, 1);
+    root->setSpacing(8);
+    root->setContentsMargins(6, 4, 6, 4);
+    root->addWidget(modGroup, 2);
 
     QGroupBox* srcGroup = new QGroupBox("Audio source", this);
-    QVBoxLayout* sl = new QVBoxLayout(srcGroup);
+    QGridLayout* sl = new QGridLayout(srcGroup);
+    sl->setHorizontalSpacing(6);
+    sl->setVerticalSpacing(3);
+    sl->setContentsMargins(8, 2, 8, 2);
 
     m_micRadio  = new QRadioButton("Microphone", srcGroup);
     m_fileRadio = new QRadioButton("Audio file", srcGroup);
@@ -257,34 +263,24 @@ void RadioTxPanel::buildUi()
     sg->addButton(m_micRadio); sg->addButton(m_fileRadio); sg->addButton(m_toneRadio);
     m_micRadio->setChecked(true);
 
-    sl->addWidget(m_micRadio);
-    QHBoxLayout* micRow = new QHBoxLayout();
-    micRow->addWidget(m_micCombo, 1);
-    micRow->addWidget(m_pttButton);
-    sl->addLayout(micRow);
+    sl->addWidget(m_micRadio, 0, 0);
+    sl->addWidget(m_micCombo, 0, 1, 1, 3);
 
-    sl->addWidget(m_fileRadio);
-    QHBoxLayout* fileRow = new QHBoxLayout();
+    sl->addWidget(m_fileRadio, 1, 0);
     m_fileEdit = new QLineEdit(srcGroup);
     m_fileEdit->setPlaceholderText("mp3 / wav / flac / ogg ...");
     m_browseButton = new QPushButton("Browse", srcGroup);
     connect(m_browseButton, &QPushButton::clicked, this, &RadioTxPanel::browseFile);
     connect(m_fileEdit, &QLineEdit::editingFinished, this, [this] { decodeFile(m_fileEdit->text()); });
-    fileRow->addWidget(m_fileEdit, 1);
-    fileRow->addWidget(m_browseButton);
-    sl->addLayout(fileRow);
-    QHBoxLayout* fileRow2 = new QHBoxLayout();
     m_loopCheck = new QCheckBox("Loop", srcGroup);
     m_loopCheck->setChecked(true);
     connect(m_loopCheck, &QCheckBox::toggled, this, [this](bool on) { m_pullLoop.store(on); });
-    m_fileInfo = new QLabel("No file", srcGroup);
-    m_fileInfo->setStyleSheet("QLabel { color: #708090; font-size: 8pt; }");
-    fileRow2->addWidget(m_loopCheck);
-    fileRow2->addWidget(m_fileInfo, 1);
-    sl->addLayout(fileRow2);
+    sl->addWidget(m_fileEdit, 1, 1);
+    sl->addWidget(m_browseButton, 1, 2);
+    sl->addWidget(m_loopCheck, 1, 3);
 
+    sl->addWidget(m_toneRadio, 2, 0);
     QHBoxLayout* toneRow = new QHBoxLayout();
-    toneRow->addWidget(m_toneRadio);
     m_toneSpin = new QDoubleSpinBox(srcGroup);
     m_toneSpin->setRange(50.0, 15000.0);
     m_toneSpin->setValue(1000.0);
@@ -292,15 +288,46 @@ void RadioTxPanel::buildUi()
     connect(m_toneSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
             [this](double v) { m_toneHz.store(static_cast<float>(v)); });
     toneRow->addWidget(m_toneSpin);
-    toneRow->addStretch();
-    sl->addLayout(toneRow);
+    m_fileInfo = new QLabel("No file", srcGroup);
+    m_fileInfo->setStyleSheet("QLabel { color: #708090; font-size: 8pt; }");
+    toneRow->addWidget(m_fileInfo, 1);
+    sl->addLayout(toneRow, 2, 1, 1, 3);
 
-    sl->addLayout(gainRow);
-    sl->addWidget(m_agcCheck);
-    sl->addLayout(vuRow);
-    sl->addWidget(m_statusLabel);
-    sl->addStretch();
-    root->addWidget(srcGroup, 2);
+    sl->addLayout(vuRow, 3, 0, 1, 4);
+    sl->addWidget(m_statusLabel, 4, 0, 1, 4);
+    sl->setColumnStretch(1, 1);
+    root->addWidget(srcGroup, 5);
+
+    m_pttButton->setMinimumHeight(70);
+    m_pttButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    root->addWidget(m_pttButton, 2);
+
+    QGroupBox* advGroup = new QGroupBox("Modulation settings", this);
+    QVBoxLayout* al = new QVBoxLayout(advGroup);
+    al->addLayout(devRow);
+    al->addLayout(depthRow);
+    al->addLayout(preRow);
+    al->addLayout(ampRow);
+    al->addWidget(legal);
+    QGroupBox* audioGroup = new QGroupBox("Audio", this);
+    QVBoxLayout* agl = new QVBoxLayout(audioGroup);
+    agl->addLayout(gainRow);
+    agl->addWidget(m_agcCheck);
+
+    m_tabSettings = new QDialog(this);
+    m_tabSettings->setWindowTitle("Radio TX settings");
+    QVBoxLayout* dl = new QVBoxLayout(m_tabSettings);
+    dl->addWidget(advGroup);
+    dl->addWidget(audioGroup);
+    QPushButton* closeBtn = new QPushButton("Close", m_tabSettings);
+    connect(closeBtn, &QPushButton::clicked, m_tabSettings, &QDialog::accept);
+    dl->addWidget(closeBtn);
+
+    m_tabSettingsBtn = new QPushButton(QString::fromUtf8("⚙\nTX\nsettings"), this);
+    m_tabSettingsBtn->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    m_tabSettingsBtn->setMinimumWidth(80);
+    connect(m_tabSettingsBtn, &QPushButton::clicked, this, &RadioTxPanel::openTabSettings);
+    root->addWidget(m_tabSettingsBtn, 1);
 #endif
 }
 

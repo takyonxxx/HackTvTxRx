@@ -1,4 +1,5 @@
 #include "TvRxPanel.h"
+#include "UiMode.h"
 #include "VideoView.h"
 #include "TvRecorder.h"
 #include <algorithm>
@@ -172,7 +173,7 @@ void TvRxPanel::buildUi()
     QVBoxLayout* vl = new QVBoxLayout(m_videoGroup);
     vl->setContentsMargins(6, 6, 6, 6);
     m_video = new VideoView(m_videoGroup);
-#ifdef Q_OS_ANDROID
+#if HACKTV_COMPACT_UI
     m_video->setMinimumHeight(140);       // smaller floor so the settings button fits below
 #endif
     m_video->setToolTip("Double-click: fullscreen");
@@ -210,11 +211,11 @@ void TvRxPanel::buildUi()
     m_specSlot->setContentsMargins(6, 6, 6, 6);
     grid->addWidget(specGroup, 0, 1);
 
-#ifdef Q_OS_ANDROID
-    // Android: only the picture + spectrum fill the tab; the processing, audio,
-    // sync and recording controls move into a settings dialog so everything fits.
+#if HACKTV_COMPACT_UI
+    // Compact: only the picture + spectrum fill the tab; the processing, audio,
+    // sync, recording and scan controls move into a settings dialog so everything fits.
     m_tabSettings = new QDialog(this);
-    m_tabSettings->setWindowTitle(QString::fromUtf8("TV RX ayarları"));
+    m_tabSettings->setWindowTitle(UI_TXT("TV RX ayarları", "TV RX settings"));
     QVBoxLayout* dl = new QVBoxLayout(m_tabSettings);
     // Two columns, inside a scroll area, so the dialog always fits the screen and
     // the Kapat button stays visible no matter how tall the controls are.
@@ -237,11 +238,12 @@ void TvRxPanel::buildUi()
     sc->setWidgetResizable(true);
     sc->setFrameShape(QFrame::NoFrame);
     dl->addWidget(sc, 1);
-    QPushButton* closeBtn = new QPushButton(QString::fromUtf8("Kapat"), m_tabSettings);
+    QPushButton* closeBtn = new QPushButton(UI_TXT("Kapat", "Close"), m_tabSettings);
     connect(closeBtn, &QPushButton::clicked, m_tabSettings, &QDialog::accept);
     dl->addWidget(closeBtn);
 
-    m_tabSettingsBtn = new QPushButton(QString::fromUtf8("⚙ Görüntü · Ses · Senkron · Kayıt · Tarama"), this);
+    m_tabSettingsBtn = new QPushButton(UI_TXT("⚙ Görüntü · Ses · Senkron · Kayıt · Tarama",
+                                             "⚙ Video · Audio · Sync · Recording · Channel scan"), this);
     m_tabSettingsBtn->setMinimumHeight(34);
     connect(m_tabSettingsBtn, &QPushButton::clicked, this, &TvRxPanel::openTabSettings);
     grid->addWidget(m_tabSettingsBtn, 1, 0, 1, 2);
@@ -266,9 +268,12 @@ void TvRxPanel::buildUi()
 
     grid->setRowStretch(0, 1);          // the picture and the spectrum take the height
     grid->setRowStretch(1, 0);
-#ifdef Q_OS_ANDROID
+#if HACKTV_COMPACT_UI && defined(Q_OS_ANDROID)
     grid->setColumnStretch(0, 2);       // head unit: picture 40 %, spectrum + S-meter 60 %
     grid->setColumnStretch(1, 3);
+#elif HACKTV_COMPACT_UI
+    grid->setColumnStretch(0, 1);       // desktop Full HD: picture and spectrum share the width
+    grid->setColumnStretch(1, 1);
 #else
     grid->setColumnStretch(0, 3);
     grid->setColumnStretch(1, 2);
@@ -813,12 +818,17 @@ QWidget* TvRxPanel::buildScanGroup()
                                         "Lowest S-meter SNR (S4 = 20 dB, S9 = 40 dB)"));
     r1->addWidget(m_scanMinSnrSpin);
     l->addLayout(r1);
+    // Persist the thresholds / band immediately, not only when the app closes
+    auto persist = [](const char* key, const QVariant& v) { QSettings("MarenRobotics", "HackTvStudio").setValue(key, v); };
+    connect(m_scanMinSyncSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [persist](int v) { persist("scanMinSync", v); });
+    connect(m_scanMinSnrSpin,  QOverload<int>::of(&QSpinBox::valueChanged), this, [persist](int v) { persist("scanMinSnr", v); });
+    connect(m_scanRangeCombo,  QOverload<int>::of(&QComboBox::currentIndexChanged), this, [persist](int i) { persist("scanRange", i); });
 
     m_scanList = new QListWidget(g);
 #ifdef Q_OS_ANDROID
     m_scanList->setMinimumHeight(120);
 #else
-    m_scanList->setMaximumHeight(96);
+    m_scanList->setMinimumHeight(150);
 #endif
     m_scanList->setToolTip(UI_TXT("Kanala tıkla: ayarla", "Click a channel to tune to it"));
     connect(m_scanList, &QListWidget::itemClicked, this, [this](QListWidgetItem* it) {

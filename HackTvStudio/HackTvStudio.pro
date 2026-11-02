@@ -263,6 +263,7 @@ HEADERS += \
     core/SpscRing.h \
     core/WorkerQueue.h \
     ui/ModePanel.h \
+    ui/UiMode.h \
     ui/StudioWindow.h \
     ui/Theme.h \
     ui/RadioRxPanel.h \
