@@ -2,10 +2,8 @@
 #include "ModePanel.h"
 #include "RadioRxPanel.h"
 #include "RadioTxPanel.h"
-#ifndef Q_OS_ANDROID
 #include "TvRxPanel.h"
 #include "TvTxPanel.h"
-#endif
 #include "widgets/glplotter.h"
 #include "widgets/freqctrl.h"
 #include "widgets/meter.h"
@@ -209,11 +207,9 @@ void StudioWindow::buildUi()
     addPanel(new RadioRxPanel(this));
     m_radioRxTab = 0;
     addPanel(new RadioTxPanel(this));
-#ifndef Q_OS_ANDROID
     addPanel(new TvRxPanel(this));
     m_tvRxTab = 2;
     addPanel(new TvTxPanel(this));
-#endif
     connect(m_tabs, &QTabWidget::currentChanged, this, &StudioWindow::onTabChanged);
 
     // Spectrum column / strip and the mode tabs share one splitter whose orientation
@@ -606,6 +602,9 @@ void StudioWindow::dockSpectrum(ModePanel* panel)
         slot->addWidget(m_specWidget);
         m_specWidget->show();
         m_specDocked = true;
+#ifdef Q_OS_ANDROID
+        m_tabs->setMaximumHeight(QWIDGETSIZE_MAX);   // TV tabs carry the spectrum: use the full height
+#endif
         m_plotter->setPercent2DScreen(50);
     } else if (m_specDocked || m_splitter->indexOf(m_specWidget) < 0) {
         // Back to the right side of the controls
@@ -683,13 +682,11 @@ void StudioWindow::updateBandLabel()
 {
     const BandInfo band = BandPlan::lookup(m_frequency);
     QString name = band.name;
-#ifndef Q_OS_ANDROID
     if (band.mode == Modulation::TV) {
         const TvChannel ch = BandPlan::tvChannel(m_frequency);
         if (ch.valid)
             name += QString("  ·  Channel %1 (video %2)").arg(ch.name, BandPlan::formatFrequency(ch.videoCarrierHz));
     }
-#endif
     m_bandLabel->setText(name);
     m_modeLabel->setText(band.mode == Modulation::None ? QString() : "·  " + BandPlan::modulationName(band.mode));
 
@@ -706,11 +703,9 @@ void StudioWindow::autoSelectMode(const BandInfo& band)
 
     int target = -1;
     switch (band.mode) {
-#ifndef Q_OS_ANDROID
     case Modulation::TV:
         target = m_tvRxTab;
         break;
-#endif
     case Modulation::AM: case Modulation::NFM: case Modulation::WFM:
     case Modulation::LSB: case Modulation::USB:
         target = m_radioRxTab;

@@ -21,6 +21,12 @@
 #include <QVBoxLayout>
 #include <QScreen>
 
+#ifdef Q_OS_ANDROID
+#define UI_TXT(android, desktop) QString::fromUtf8(android)
+#else
+#define UI_TXT(android, desktop) QString::fromUtf8(desktop)
+#endif
+
 // ============================================================================
 // TvRxPipeline
 // ============================================================================
@@ -155,7 +161,7 @@ void TvRxPanel::buildUi()
     grid->setSpacing(8);
     grid->setContentsMargins(8, 8, 8, 8);
 
-    m_videoGroup = new QGroupBox("PAL Video (16:9)", this);
+    m_videoGroup = new QGroupBox(UI_TXT("PAL görüntü (16:9)", "PAL Video (16:9)"), this);
     QVBoxLayout* vl = new QVBoxLayout(m_videoGroup);
     vl->setContentsMargins(6, 6, 6, 6);
     m_video = new VideoView(m_videoGroup);
@@ -167,7 +173,7 @@ void TvRxPanel::buildUi()
     vl->addWidget(m_video);
     grid->addWidget(m_videoGroup, 0, 0);
 
-    QGroupBox* specGroup = new QGroupBox("Spectrum", this);
+    QGroupBox* specGroup = new QGroupBox(UI_TXT("Spektrum", "Spectrum"), this);
     m_specSlot = new QVBoxLayout(specGroup);
     m_specSlot->setContentsMargins(6, 6, 6, 6);
     grid->addWidget(specGroup, 0, 1);
@@ -221,8 +227,13 @@ void TvRxPanel::buildUi()
 
     grid->setRowStretch(0, 1);          // the picture and the spectrum take the height
     grid->setRowStretch(1, 0);
+#ifdef Q_OS_ANDROID
+    grid->setColumnStretch(0, 2);       // head unit: picture 40 %, spectrum + S-meter 60 %
+    grid->setColumnStretch(1, 3);
+#else
     grid->setColumnStretch(0, 3);
     grid->setColumnStretch(1, 2);
+#endif
 }
 
 void TvRxPanel::openTabSettings()

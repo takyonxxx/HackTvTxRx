@@ -6,9 +6,9 @@ transmitter, PAL-B/G television receiver and analogue television transmitter
 (PAL, SECAM, NTSC, MAC…). Everything is compiled into the executable — no MSYS2,
 no FFmpeg DLLs, no external SDR libraries.
 
-The same source also builds a **radio-only Android version for car head units**
-(1280×720 in-dash screens): big finger-sized controls, spectrum + waterfall on
-top, a needle S-meter, and the advanced settings tucked into dialogs.
+The same source also builds an **Android version for car head units**
+(1280×720 in-dash screens) with all four modes: big finger-sized controls, spectrum +
+waterfall on top, a needle S-meter, and the advanced settings tucked into ⚙ dialogs.
 
 ![HackTvStudio — TV RX on the desktop](hacktvstudio.jpg)
 
@@ -21,7 +21,7 @@ and the spectrum / frequency widgets of [gqrx](https://github.com/gqrx-sdr/gqrx)
 
 | Folder / file | What it is |
 |--------|------------|
-| [`HackTvStudio/`](HackTvStudio/) | **The main application.** Radio RX, Radio TX, TV RX, TV TX in one window (desktop); Radio RX + TX on Android. Self-contained: libusb, libhackrf and hacktv are vendored and built in. |
+| [`HackTvStudio/`](HackTvStudio/) | **The main application.** Radio RX, Radio TX, TV RX, TV TX in one window (desktop and Android). Self-contained: libusb, libhackrf and hacktv are vendored and built in. |
 | `HackTvStudio-arm64.apk`, `HackTvStudio-armv7.apk` | Ready-to-install Android builds (debug-signed). arm64 for 64-bit head units (e.g. Allwinner T527, Android 13), armv7 for older 32-bit units (e.g. RD9600, Android 8.1). |
 | [`PALBDecoder/`](PALBDecoder/) | The original standalone PAL-B/G receiver that HackTvStudio grew out of. Kept as a small, single-purpose reference app (also self-contained). |
 | [`PALBDecoderIOS/`](PALBDecoderIOS/) | Legacy iOS/macOS port of the PAL decoder (Xcode project). It expects an IQ-over-TCP server that is no longer part of this repository. |
@@ -77,7 +77,7 @@ tab per mode underneath:
   **test tone** (desktop; Android is microphone only). Audio gain with optional AGC, input VU meter.
 - Deviation (FM, default 10 kHz) / depth (AM), baseband level, TX VGA gain.
 
-### TV RX (PAL-B/G) — desktop
+### TV RX (PAL-B/G)
 
 - Real-time PAL-B/G colour decoding at 720×576 from 16 MS/s: synchronous detection, carrier AFC,
   flywheel sync with sub-sample timing, burst-locked chroma with per-line V-switch detection,
@@ -89,7 +89,7 @@ tab per mode underneath:
 - Layout: picture top-left with *Video processing* beneath it, spectrum/waterfall and S-meter to
   its right, audio / sync / recording controls in the lower right.
 
-### TV TX — desktop
+### TV TX
 
 - All 52 hacktv standards: PAL B/G/I/D/K/M/N, SECAM L/D/K/B/G, NTSC M/I/A, D/D2-MAC,
   405/819/240/30-line systems, Apollo, CBS field-sequential…
@@ -120,8 +120,8 @@ On Android the HackRF is driven through USB host / OTG (USB permission is asked 
 
 ## Android (car head unit)
 
-The Android build is **radio only** (Radio RX + Radio TX); the TV encoder/decoder is left out
-of the APK. It was laid out for a 1280×720, 160 dpi in-dash screen operated by finger:
+The Android build has the same four tabs as the desktop (Radio RX, Radio TX, TV RX, TV TX),
+laid out for a 1280×720, 160 dpi in-dash screen operated by finger:
 
 ![Android Radio RX](android_radio_rx.png)
 
@@ -144,6 +144,17 @@ of the APK. It was laid out for a 1280×720, 160 dpi in-dash screen operated by 
 ![Android TX settings](android_tx_settings.png)
 
 ![Android theme list](android_settings_theme.png)
+
+- **TV RX / TV TX** use the same simple layout: the picture (or the source preview) on the left,
+  the spectrum + waterfall + S-meter on the right, and one ⚙ button under them that opens the
+  full desktop control set (video processing, audio, sync, recording / source, TV standard,
+  broadcast options) in a scrollable dialog.
+
+![Android TV RX](android_tv_rx.png)
+
+![Android TV TX](android_tv_tx.png)
+
+![Android TV TX settings](android_tv_tx_settings.png)
 
 ### Installing
 
@@ -177,8 +188,8 @@ TX:  mic / file / tone ──► RadioModulator ──────────�
 - Each mode is a `ModePanel`; `StudioWindow` owns the device, the two engines and the display.
   A panel may offer a *spectrum slot*; the main window docks the plotter there while the panel is active.
 - Desktop and Android share one source tree. Platform differences are `#ifdef Q_OS_ANDROID` in
-  `StudioWindow`, `RadioRxPanel` and `RadioTxPanel` (layout, labels, defaults); the TV panels and
-  the hacktv/tv sources are excluded from the Android build in the `.pro` (`!android { … }`).
+  `StudioWindow`, `RadioRxPanel`, `RadioTxPanel`, `TvRxPanel` and `TvTxPanel` (layout, labels,
+  defaults, settings dialogs); the same TV sources build on both platforms.
 - The PAL decoder runs block-wise with SSE2 helpers (≈30 ms per 40 ms frame at 16 MS/s, bit-identical
   to the original per-sample implementation); the offline benchmark is in `HackTvStudio/tools/palbench/`.
 - `QtAvSource` feeds hacktv through its `av_t` callbacks from three inputs (file, camera, still
@@ -256,12 +267,12 @@ Same procedure with `PALBDecoder/PALBDecoder.pro` (Windows kits only).
 1. Plug in the HackRF, start HackTvStudio.
 2. Type a frequency into the dial, use the **+ / −** buttons, or click on the spectrum. With
    *Auto mode* on, the right tab and demodulator are chosen for you: `100.000 MHz` → Radio RX / WFM,
-   `145.500 MHz` → NFM, `119.100 MHz` → AM, `479.250 MHz` → TV RX (desktop).
+   `145.500 MHz` → NFM, `119.100 MHz` → AM, `479.250 MHz` → TV RX.
 3. Press **START**. Watch the S-meter: S7–S9 is a good signal. If the small *ADC kırpma* note under
    it grows large and the audio/picture suffers, lower LNA/VGA or switch the RF amp off.
-4. To transmit, open RADIO TX (or TV TX on the desktop), choose a source and press START.
+4. To transmit, open RADIO TX (or TV TX), choose a source and press START.
    Transmitting needs a licence for the band you use; start with a low TX VGA value and a dummy load.
-5. For a TV test (desktop), pick an unused UHF channel (look for an empty 8 MHz in the TV RX
+5. For a TV test, pick an unused UHF channel (look for an empty 8 MHz in the TV RX
    spectrum), select the test card, press START and tune the television to that channel. Press TEXT
    and enter 100 for the info page.
 

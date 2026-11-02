@@ -205,8 +205,7 @@ SOURCES += \
     widgets/meter.cpp \
     widgets/analogmeter.cpp \
 
-# TV RX / TX stay a desktop feature; the Android (head-unit) build is radio only.
-!android {
+# TV RX / TX on every platform (Android shows them in the compact head-unit layout).
 SOURCES += \
     tv/QtAvSource.cpp \
     tv/TestCard.cpp \
@@ -221,7 +220,6 @@ HEADERS += \
     tv/TeletextPages.h \
     ui/TvTxPanel.h \
     ui/TvRxPanel.h
-}
 
 SOURCES += \
     $$DRIVER_DIR/hackrfdevice.cpp

@@ -21,6 +21,12 @@
 #include <QScrollArea>
 #include <algorithm>
 
+#ifdef Q_OS_ANDROID
+#define UI_TXT(android, desktop) QString::fromUtf8(android)
+#else
+#define UI_TXT(android, desktop) QString::fromUtf8(desktop)
+#endif
+
 TvTxPanel::TvTxPanel(QWidget* parent)
     : ModePanel(parent)
     , m_enc(new TvTxEncoder(this))
@@ -66,7 +72,7 @@ void TvTxPanel::buildUi()
     grid->setContentsMargins(8, 8, 8, 8);
 
     // ---- Preview (top left)
-    QGroupBox* prevGroup = new QGroupBox("Source preview", this);
+    QGroupBox* prevGroup = new QGroupBox(UI_TXT("Kaynak önizleme", "Source preview"), this);
     QVBoxLayout* pl = new QVBoxLayout(prevGroup);
     pl->setContentsMargins(6, 6, 6, 6);
     m_preview = new VideoView(prevGroup);
@@ -102,14 +108,14 @@ void TvTxPanel::buildUi()
                                       Qt::QueuedConnection);
     });
 
-    m_statusLabel = new QLabel("Press START to transmit", prevGroup);
+    m_statusLabel = new QLabel(UI_TXT("Yayın için START'a bas", "Press START to transmit"), prevGroup);
     m_statusLabel->setStyleSheet("QLabel { color: #708090; font-size: 8pt; }");
     m_statusLabel->setWordWrap(true);
     pl->addWidget(m_statusLabel);
     grid->addWidget(prevGroup, 0, 0);
 
     // ---- Spectrum slot (top right, touching the preview)
-    QGroupBox* specGroup = new QGroupBox("TX monitor", this);
+    QGroupBox* specGroup = new QGroupBox(UI_TXT("TX monitör", "TX monitor"), this);
     m_specSlot = new QVBoxLayout(specGroup);
     m_specSlot->setContentsMargins(6, 6, 6, 6);
     grid->addWidget(specGroup, 0, 1);
@@ -303,8 +309,13 @@ void TvTxPanel::buildUi()
 
     grid->setRowStretch(0, 1);          // preview and spectrum take the height
     grid->setRowStretch(1, 0);
+#ifdef Q_OS_ANDROID
+    grid->setColumnStretch(0, 2);       // head unit: preview 40 %, TX monitor 60 %
+    grid->setColumnStretch(1, 3);
+#else
     grid->setColumnStretch(0, 3);
     grid->setColumnStretch(1, 2);
+#endif
 }
 
 void TvTxPanel::openTabSettings()
@@ -551,9 +562,10 @@ void TvTxPanel::updateStatus()
         if (QDateTime::currentMSecsSinceEpoch() < m_statusHoldUntil) return;
         if (m_enc->lastError().isEmpty())
             m_statusLabel->setText(m_fileRadio->isChecked() && m_fileEdit->text().isEmpty()
-                                       ? "Choose a video file or use the test pattern"
+                                       ? UI_TXT("Bir video dosyası seç ya da test kartını kullan", "Choose a video file or use the test pattern")
                                        : m_cameraRadio->isChecked() && !m_cameraRadio->isEnabled()
-                                             ? "No camera connected" : "Press START to transmit");
+                                             ? UI_TXT("Kamera bağlı değil", "No camera connected")
+                                             : UI_TXT("Yayın için START'a bas", "Press START to transmit"));
         else
             m_statusLabel->setText("Last error: " + m_enc->lastError());
         return;
