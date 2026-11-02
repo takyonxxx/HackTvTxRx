@@ -132,41 +132,17 @@ On Android the HackRF is driven through USB host / OTG (USB permission is asked 
 
 ## Android (car head unit)
 
-The Android build has the same four tabs as the desktop (Radio RX, Radio TX, TV RX, TV TX),
-laid out for a 1280×720, 160 dpi in-dash screen operated by finger:
+The same four tabs on a 1280×720 in-dash screen, operated by finger. Same layout as the
+desktop: compact top strip (big dial, **+ / −**, START, RF Amp, TX gain, **⚙ Ayarlar** for
+sample rate / RX gains / theme), full-width spectrum + waterfall with the S-meter, one control
+row per tab and the details in each tab's ⚙ dialog. Radio TX is microphone only; TV RX has the
+same channel scan. Default start: 100.000 MHz, 2 MS/s, *SDR# gri* theme.
 
-![Android Radio RX](android_radio_rx.png)
-
-- Top strip: big frequency dial, step buttons, the finger **+ / −** pair (step follows the channel
-  width, label shows the current step), and a compact HackRF box — big START, RF Amp, TX gain and
-  the **⚙ Ayarlar** button.
-- **⚙ Ayarlar** dialog: sample rate, LNA / VGA / RX AMP, "auto RX/TX tab from band" and the
-  **Tema** (theme) list.
-- Spectrum + waterfall fill the width; the needle S-meter sits at the right.
-- One compact control row per tab. **Radio RX**: demodulation (WFM / NFM / AM, follow band),
-  squelch + level + stereo indicator, volume, and **⚙ RX ayarları** (bandwidth, audio gain,
-  de-emphasis, mod index, noise reduction, force mono, reset presets).
-  **Radio TX**: modulation, microphone selection + input level, a big **PUSH TO TALK** and
-  **⚙ TX ayarları** (deviation, AM depth, pre-emphasis, baseband level, audio gain, AGC).
-  TX is microphone only on Android.
-- Default start: 100.000 MHz, 2 MS/s, *SDR# gri* theme.
-
-![Android Radio TX](android_radio_tx.png)
-
-![Android TX settings](android_tx_settings.png)
-
-![Android theme list](android_settings_theme.png)
-
-- **TV RX / TV TX** use the same simple layout: the picture (or the source preview) on the left,
-  the spectrum + waterfall + S-meter on the right, and one ⚙ button under them that opens the
-  full desktop control set (video processing, audio, sync, recording / source, TV standard,
-  broadcast options) in a scrollable dialog.
-
-![Android TV RX](android_tv_rx.png)
-
-![Android TV TX](android_tv_tx.png)
-
-![Android TV TX settings](android_tv_tx_settings.png)
+| Radio RX | Radio TX |
+|---|---|
+| <img src="android_radio_rx.png" width="420"> | <img src="android_radio_tx.png" width="420"> |
+| **TV RX** | **TV TX** |
+| <img src="android_tv_rx.png" width="420"> | <img src="android_tv_tx.png" width="420"> |
 
 ### Installing
 
